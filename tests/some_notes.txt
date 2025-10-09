@@ -1,0 +1,9 @@
+
+NOTES on GET function:
+What is GET '/" requests? What does this look like on the client side? Is this the url they are typing in? if it was "/test" would the url be website/test?
+A GET is the default HTTP verb a browser uses when you type a URL or click a link. Each route is just the path part of that URL:
+@app.route("/") handles GET /, i.e., https://example.com/. When a user types that into the address bar, the browser sends a GET request to /, and your root() handler responds.
+If you changed it to @app.route("/test"), then the handler would run for https://example.com/test—that’s the path the client would request. Everything before the path (scheme, host, port) depends on how the app is deployed.
+So yes, the path you register determines the trailing part of the URL clients use. On the client side they might navigate there directly, or app code (fetch, axios, etc.) could make a GET request to that URL.
+
+Correct. Importing a Python module executes its top-level code once, so any statements at module scope—like a print()—run immediately during the import. After that first import, the module is cached in sys.modules; later imports just reuse it, so the top-level code (and prints) won’t rerun unless you reload the module.
