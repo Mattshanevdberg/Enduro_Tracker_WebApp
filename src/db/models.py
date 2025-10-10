@@ -26,7 +26,7 @@ from sqlalchemy import (
     Text,
     create_engine,
 )
-from sqlalchemy.orm import declarative_base, relationship, sessionmaker
+from sqlalchemy.orm import declarative_base, relationship, sessionmaker, foreign
 
 # DATABASE_URL examples:
 # - Dev (SQLite): sqlite:///enduro_tracker.db
@@ -110,7 +110,7 @@ class Point(Base):
     # viewonly=True makes the relationship read-only. You can traverse from a Point to the matching RaceRider rows, but SQLAlchemy won’t try to manage inserts/updates through that relationship since it isn’t backed by a foreign-key constraint.
     race_riders = relationship(
         "RaceRider",
-        primaryjoin="Point.device_id == RaceRider.device_id",
+        primaryjoin=lambda: foreign(Point.device_id) == RaceRider.device_id,
         viewonly=True,
     )
 
@@ -207,7 +207,7 @@ class RaceRider(Base):
     category = relationship("Category", back_populates="race_riders")
     points = relationship(
         "Point",
-        primaryjoin="RaceRider.device_id == Point.device_id",
+        primaryjoin=lambda: RaceRider.device_id == foreign(Point.device_id),
         viewonly=True,
     )
     track_cache = relationship("TrackCache", back_populates="race_rider", uselist=False)
