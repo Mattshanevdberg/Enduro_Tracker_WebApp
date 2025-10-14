@@ -16,6 +16,20 @@ from flask import Flask, jsonify
 from flask_cors import CORS
 from src.api.ingest import bp as ingest_bp
 
+# regular imports
+import yaml
+from pathlib import Path
+
+# Load configuration from JSON file
+CONFIG_PATH = os.path.join(os.path.dirname(__file__), '../configs/config.yaml')
+with open(CONFIG_PATH, 'r') as f:
+    config = yaml.safe_load(f)
+
+#set globals
+DATABASE_URL = config['global']['database_url']
+API_HOST = config['global']['api_host']
+API_PORT = config['global']['api_port']
+
 def create_app():
     app = Flask(__name__)
     CORS(app) # enables Cross-Origin Resource Sharing on the app so browsers from other origins can call the API
@@ -39,5 +53,5 @@ def create_app():
 app = create_app()
 
 if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0", port=5000)
+    app.run(debug=True, host=API_HOST, port=API_PORT)
 

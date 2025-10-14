@@ -1,0 +1,9 @@
+{ "global": {
+    "database_url": "sqlite:///enduro_tracker.db", # still to adjust in alembic.ini
+    "debug_mode": true,
+    "api_host": "0.0.0.0",
+    "api_port": 5000,
+    "allowed_origins": ["*"]
+  },
+  "example": "example_text"
+}

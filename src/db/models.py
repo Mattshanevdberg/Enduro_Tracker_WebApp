@@ -25,21 +25,35 @@ from sqlalchemy import (
     String,
     Text,
     create_engine,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker, foreign
+
+# regular imports 
+import os
+import yaml
+from pathlib import Path
+
+# Load configuration from yaml file
+CONFIG_PATH = os.path.join(os.path.dirname(__file__), '../../configs/config.yaml')
+with open(CONFIG_PATH, 'r') as f:
+    config = yaml.safe_load(f)
+
+#set globals
+DATABASE_URL_CONFIG = config['global']['database_url']
 
 # DATABASE_URL examples:
 # - Dev (SQLite): sqlite:///enduro_tracker.db
 # - Prod (Postgres): postgresql+psycopg2://user:pass@host:5432/dbname
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///enduro_tracker.db")
+DATABASE_URL = os.getenv("DATABASE_URL", DATABASE_URL_CONFIG)
 
 # set up SQLAlchemy’s core pieces for talking to your database:
-'''
-engine (src/db/models.py:24) is the database connection factory. create_engine(DATABASE_URL, future=True, echo=False) tells SQLAlchemy which DB to use (via DATABASE_URL), opts into SQLAlchemy 2.x behaviour (future=True), and disables SQL statement logging (echo=False).
-SessionLocal (src/db/models.py:25) is a sessionmaker, i.e., a callable that hands you new Session objects pre-bound to engine. Here we configure sessions not to flush pending changes automatically (autoflush=False), to require explicit commits (autocommit=False), and to use the newer 2.x API style (future=True).
-Base (src/db/models.py:27) is the declarative base class created by declarative_base(). You subclass it to define ORM models (An ORM (Object–Relational Mapping) model is a Python class that represents a table in a relational database. The ORM layer maps your class attributes to table columns, so you can work with database rows as normal Python objects—creating, querying, updating, and deleting them without writing raw SQL.); it also keeps track of those models’ table metadata so Base.metadata.create_all(bind=engine) can create the tables later.
-When you need to interact with the DB you call SessionLocal() to get a Session that uses the shared engine, and your ORM model classes inherit from Base.
-'''
+
+# engine (src/db/models.py:24) is the database connection factory. create_engine(DATABASE_URL, future=True, echo=False) tells SQLAlchemy which DB to use (via DATABASE_URL), opts into SQLAlchemy 2.x behaviour (future=True), and disables SQL statement logging (echo=False).
+# SessionLocal (src/db/models.py:25) is a sessionmaker, i.e., a callable that hands you new Session objects pre-bound to engine. Here we configure sessions not to flush pending changes automatically (autoflush=False), to require explicit commits (autocommit=False), and to use the newer 2.x API style (future=True).
+# Base (src/db/models.py:27) is the declarative base class created by declarative_base(). You subclass it to define ORM models (An ORM (Object–Relational Mapping) model is a Python class that represents a table in a relational database. The ORM layer maps your class attributes to table columns, so you can work with database rows as normal Python objects—creating, querying, updating, and deleting them without writing raw SQL.); it also keeps track of those models’ table metadata so Base.metadata.create_all(bind=engine) can create the tables later.
+# When you need to interact with the DB you call SessionLocal() to get a Session that uses the shared engine, and your ORM model classes inherit from Base.
+
 # engine creates a DB connection, you can use echo=True to log SQL statements for debugging
 engine = create_engine(DATABASE_URL, future=True, echo=False)
 # session activates that connection
@@ -51,6 +65,14 @@ Base = declarative_base()
 class IngestRaw(Base):
     """
     Durable copy of uploaded JSON payloads.
+
+    Columns:
+      id            : PK
+      device_id     : device string from body
+      payload_json  : original JSON string (compact), e.g. {"device_id":"pi001","f":[...]}
+      received_at   : server receipt time (UTC)
+      processed_at  : when parsing to Points succeeded (UTC)  [nullable]
+      parse_error   : latest parser error message (if any)    [nullable]
     """
     # when creating a relationship, the forgien key must reference a table that is defined earlier in the file
     # a foreign key is on the many side of a one-to-many relationship
@@ -61,6 +83,10 @@ class IngestRaw(Base):
     device_id = Column(String(64), index=True, nullable=False)
     payload_json = Column(Text, nullable=False)
     received_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    # New bookkeeping fields (for parsing to points):
+    processed_at = Column(DateTime(timezone=True), nullable=True)
+    parse_error = Column(Text, nullable=True)
 
 
     #device = relationship("Device", back_populates="ingest_records")
@@ -84,14 +110,31 @@ class Device(Base):
 
 class Point(Base):
     """
-    Parsed position fixes linked to a specific device.
+    Parsed GNSS points table (per fix).
+
+    units:
+      - t_epoch: int (seconds since epoch, UTC)
+      - lat, lon: degrees (float)
+      - ele: meters (float)
+      - sog: knots (float)    [convert to km/h in queries if needed]
+      - cog: degrees (float)
+      - hdop: dimensionless (float)
+      - fx: fix quality (int)
+      - nsat: satellites used (int)
+      - received_at: server time when we inserted the parsed row
+
+    Idempotency:
+      - We expect (device_id, t_epoch) to be unique for a given device.
+      - If your device can emit multiple fixes with the same t_epoch, adjust the UniqueConstraint.
     """
 
     __tablename__ = "points"
 
     id = Column(Integer, primary_key=True)
+
     device_id = Column(String(64), index=True, nullable=False)
     t_epoch = Column(Integer, index=True, nullable=False)  # epoch seconds (UTC)
+
     lat = Column(Float, nullable=False)
     lon = Column(Float, nullable=False)
     ele = Column(Float, nullable=True)
@@ -102,6 +145,12 @@ class Point(Base):
     nsat = Column(Integer, nullable=True)
     received_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
 
+    # The following creates a Idempotency constraint on device_id and t_epoch
+    # This will prevent duplicates (no two entries can have the same device_id and epoch_t)
+    __table_args__ = (
+        UniqueConstraint("device_id", "t_epoch", name="ux_points_device_time"),
+    )
+    
     #device = relationship("Device", back_populates="points")
     # HOW you do a many to many relationship without a direct foreign key constraint
     # A Point can be linked to multiple RaceRiders (if multiple riders share the same device_id), and a RaceRider can have multiple Points (over time).

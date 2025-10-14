@@ -20,6 +20,19 @@ from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify
 from sqlalchemy.exc import SQLAlchemyError
 
+# regular imports
+import os
+import yaml
+from pathlib import Path
+
+# Load configuration from yaml file
+CONFIG_PATH = os.path.join(os.path.dirname(__file__), '../../configs/config.yaml')
+with open(CONFIG_PATH, 'r') as f:
+    config = yaml.safe_load(f)
+
+#set globals
+DATABASE_URL = config['global']['database_url']
+
 # this is for ingesting GNSS data
 from src.db.models import SessionLocal, init_db, IngestRaw
 # this is for parsing the points and saving to a db table in a usable format
