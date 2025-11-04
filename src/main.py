@@ -14,7 +14,11 @@ if VSCODE_TEST:
 
 from flask import Flask, jsonify
 from flask_cors import CORS
+
+# blueprint imports
 from src.api.ingest import bp as ingest_bp
+from src.web.home import bp_home
+from src.web.riders import bp_riders
 
 # regular imports
 import yaml
@@ -31,13 +35,17 @@ API_HOST = config['global']['api_host']
 API_PORT = config['global']['api_port']
 
 def create_app():
-    app = Flask(__name__)
+    app = Flask(
+        __name__, 
+        template_folder="../templates" # point Flask to your templates folder (repo root/templates)
+        )
     CORS(app) # enables Cross-Origin Resource Sharing on the app so browsers from other origins can call the API
 
     # Root endpoint - decorates the following function, telling Flask to invoke it for GET requests to the root path
-    @app.route("/")
-    def root():
-        return jsonify({"message": "Enduro Tracker WebApp API"})
+    # @app.route("/")
+    # def root():
+    #     return jsonify({"message": "Enduro Tracker WebApp API"})
+    # I have replaced this with the home blueprint
 
     # Health (liveness)
     @app.route("/api/v1/health") # registers a health-check route so monitoring systems can verify the service is alive
@@ -46,7 +54,9 @@ def create_app():
 
     # Register upload routes
     # attaches the ingest blueprint (with its /api/v1/upload route) to the app; this happens during factory execution so the upload endpoint becomes active.
-    app.register_blueprint(ingest_bp)
+    app.register_blueprint(ingest_bp) # "/api/v1/upload" endpoint for data ingestion from trackers
+    app.register_blueprint(bp_home) # "/" home page
+    app.register_blueprint(bp_riders) # "/riders/new" rider management pages
     return app
 
 # For `flask run`

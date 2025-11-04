@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Enduro Tracker — Home</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 2rem; }
+      .btn { display:inline-block; padding:.6rem 1rem; border:1px solid #333; border-radius:6px; text-decoration:none; }
+      .btn:hover { background:#f3f3f3; }
+      .stack { display:flex; gap:1rem; flex-wrap:wrap; }
+      header { margin-bottom:1.5rem; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Enduro Tracker</h1>
+      <p>Choose an action:</p>
+    </header>
+    <div class="stack">
+      <a class="btn" href="{{ url_for('riders.rider_form') }}">Input Rider Details</a>
+      <!-- Add more navigation buttons here later -->
+    </div>
+  </body>
+</html>

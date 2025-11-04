@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Input Rider Details</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 2rem; max-width: 720px; }
+      form { display:grid; grid-template-columns: 1fr 2fr; gap:.6rem .8rem; align-items:center; }
+      label { font-weight:600; }
+      input, select, textarea { padding:.5rem; border:1px solid #ccc; border-radius:6px; width:100%; }
+      .actions { grid-column: 1 / -1; display:flex; gap:.6rem; margin-top:.8rem; }
+      .btn { padding:.5rem 1rem; border:1px solid #333; border-radius:6px; text-decoration:none; background:white; cursor:pointer; }
+      .btn:hover { background:#f3f3f3; }
+      .msg { margin-bottom:1rem; padding:.6rem .8rem; border-radius:6px; }
+      .msg.ok { border:1px solid #28a745; background:#e8f5ea; }
+      .msg.err { border:1px solid #dc3545; background:#fdecee; }
+    </style>
+  </head>
+  <body>
+    <h1>Input Rider Details</h1>
+
+    {% if message %}
+      <div class="msg {{ 'ok' if success else 'err' }}">{{ message }}</div>
+    {% endif %}
+
+    <form method="post" action="{{ url_for('riders.rider_form') }}">
+      <label for="name">Full name *</label>
+      <input id="name" name="name" placeholder="Name Surname" required />
+
+      <label for="category">Category *</label>
+      <select id="category" name="category" required>
+        <option value="">-- select --</option>
+        {% for opt in categories %}
+          <option value="{{ opt }}" {{ 'selected' if form.category==opt else '' }}>{{ opt }}</option>
+        {% endfor %}
+      </select>
+
+      <label for="team">Team</label>
+      <input id="team" name="team" placeholder="Optional" />
+
+      <label for="bike">Bike</label>
+      <input id="bike" name="bike" placeholder="Optional" />
+
+      <label for="bio">Bio</label>
+      <textarea id="bio" name="bio" rows="4" placeholder="Optional"></textarea>
+
+      <div class="actions">
+        <button class="btn" type="submit">Save</button>
+        <a class="btn" href="{{ url_for('home.home_page') }}">Back to Home</a>
+      </div>
+    </form>
+  </body>
+</html>
