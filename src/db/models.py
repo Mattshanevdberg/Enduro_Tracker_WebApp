@@ -226,8 +226,14 @@ class Category(Base):
 
     __tablename__ = "categories"
 
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, primary_key=True) 
     route_id = Column(Integer, ForeignKey("route.id"), nullable=False, index=True)
+    name = Column(String(64), nullable=False) # store the label (e.g., "Professional", "Open", "Junior")
+
+    # make sure that each category name is unique within a given route
+    __table_args__ = (
+        UniqueConstraint("route_id", "name", name="ux_route_category_name"),
+    )
 
     route = relationship("Route", back_populates="categories")
     race_riders = relationship("RaceRider", back_populates="category")

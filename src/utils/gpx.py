@@ -4,6 +4,8 @@ GPX builder utilities.
 This module converts rows from the `points` table into a GPX 1.1 file and
 saves it to the `logs/` directory.
 
+Also Simple helpers to convert a GPX (XML text) into a GeoJSON string.
+
 Jargon:
 - GPX 1.1: an XML schema for GPS tracks. A minimal file has <gpx>, <trk>, <trkseg>, <trkpt>.
 - trk: "track", trkseg: "track segment", trkpt: "track point".
@@ -24,7 +26,6 @@ if VSCODE_TEST:
     sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 ####
 
-import os
 import xml.etree.ElementTree as ET # the stdlib XML parser/builder (converts XML elements into something Python can work with)
 from datetime import datetime, timezone
 from typing import Tuple
@@ -32,6 +33,10 @@ from typing import Tuple
 from sqlalchemy import select, asc
 from src.db.models import Point, SessionLocal, init_db # init_db is only for testing here
 from sqlalchemy.orm import Session
+
+# imports for converting GPX to GeoJSON
+import json
+import gpxpy
 
 # GPX namespace constants
 # GPX_NS and XSI_NS are namespace URIs that uniquely identify the vocabularies used in the GPX XML schema (http://www.topografix.com/GPX/1/1) and the XML Schema Instance spec (http://www.w3.org/2001/XMLSchema-instance), respectively.
@@ -147,11 +152,50 @@ def build_gpx_for_device(device_id: str, session: Session = SessionLocal, out_di
     except Exception as e:
         return False, f"build_gpx_for_device error: {e}"
     
+# potentially need to add elevation data here too.
+def gpx_to_geojson(gpx_text: str) -> Tuple[bool, str]:
+    """
+    Convert raw GPX text into a compact GeoJSON string.
+
+    Returns
+    -------
+    (ok, result) : (bool, str)
+      ok=True  -> result is a JSON string (GeoJSON FeatureCollection)
+      ok=False -> result is an error message
+    """
+    try:
+        gpx = gpxpy.parse(gpx_text)
+        coords = []
+
+        # Walk all tracks → segments → points and collect lon/lat (and ignore missing)
+        for trk in gpx.tracks:
+            for seg in trk.segments:
+                for p in seg.points:
+                    if p.longitude is not None and p.latitude is not None:
+                        coords.append([float(p.longitude), float(p.latitude)])
+
+        if not coords:
+            return False, "No track points found in GPX."
+
+        geojson = {
+            "type": "FeatureCollection",
+            "features": [{
+                "type": "Feature",
+                "properties": {"src": "gpx"},
+                "geometry": {"type": "LineString", "coordinates": coords}
+            }]
+        }
+        # compact separators to make the JSON string small
+        return True, json.dumps(geojson, separators=(",", ":"))
+    except Exception as e:
+        return False, f"gpx_to_geojson error: {e}"
+
+    
 # test the function
-if __name__ == "__main__":
-    init_db()
-    session = SessionLocal()
-    ok, path_or_err = build_gpx_for_device(device_id="pi003", session=session, out_dir="logs")
-    if ok:
-        print(f"GPX file created at: {path_or_err}")  
+# if __name__ == "__main__":
+#     init_db()
+#     session = SessionLocal()
+#     ok, path_or_err = build_gpx_for_device(device_id="pi003", session=session, out_dir="logs")
+#     if ok:
+#         print(f"GPX file created at: {path_or_err}")  
 

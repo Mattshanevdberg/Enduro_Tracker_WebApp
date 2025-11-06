@@ -20,6 +20,7 @@ from src.api.ingest import bp as ingest_bp
 from src.web.home import bp_home
 from src.web.riders import bp_riders
 from src.web.devices import bp_devices
+from src.web.races import bp_races
 
 # regular imports
 import yaml
@@ -59,6 +60,7 @@ def create_app():
     app.register_blueprint(bp_home) # "/" home page
     app.register_blueprint(bp_riders) # "/riders/new" rider management pages
     app.register_blueprint(bp_devices)  # /devices device management pages
+    app.register_blueprint(bp_races)  # /races/* race management pages
     return app
 
 # For `flask run`

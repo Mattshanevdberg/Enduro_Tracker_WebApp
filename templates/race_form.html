@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>{{ 'Edit Race' if race else 'New Race' }}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 1.5rem; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    .full { grid-column: 1 / -1; }
+    label { font-weight: 600; }
+    input, textarea, select { width: 100%; padding: .5rem; border: 1px solid #ccc; border-radius: 6px; }
+    .row { display: flex; gap: .6rem; align-items: center; }
+    .btn { padding: .5rem 1rem; border:1px solid #333; border-radius:6px; background:#fff; cursor:pointer; text-decoration:none; }
+    .btn:hover { background:#f3f3f3; }
+    #map { height: 360px; border:1px dashed #999; border-radius: 6px; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border:1px solid #ddd; padding: .45rem .6rem; }
+    th { background: #f7f7f7; text-align: left; }
+    .topnav { margin-bottom: .8rem; }
+  </style>
+
+  <!-- Leaflet for map preview (small, reliable) -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+</head>
+<body>
+
+<div class="topnav">
+  <a class="btn" href="{{ url_for('home.home_page') }}">Back</a>
+</div>
+
+<h1>{{ 'Edit Race' if race else 'New Race' }}</h1>
+
+<div class="grid">
+
+  <!-- Left: Race fields -->
+  <div>
+    <form method="post" action="{{ url_for('races.save_race') }}">
+      {% if race %}<input type="hidden" name="race_id" value="{{ race.id }}"/>{% endif %}
+
+      <label for="name">Race Name *</label>
+      <input id="name" name="name" required value="{{ race.name if race else '' }}"/>
+
+      <label for="website">Event Website</label>
+      <input id="website" name="website" placeholder="https://..." value="{{ race.website if race else '' }}"/>
+
+      <div class="row">
+        <div style="flex:1">
+          <label for="start_date">Start Date</label>
+          <input id="start_date" name="start_date" type="date"
+                 value="{{ (race.starts_at.date() if race and race.starts_at else '') }}"/>
+        </div>
+        <div style="flex:1">
+          <label for="start_time">Start Time</label>
+          <input id="start_time" name="start_time" type="time"
+                 value="{{ (race.starts_at.strftime('%H:%M') if race and race.starts_at else '') }}"/>
+        </div>
+      </div>
+
+      <label for="description">Description</label>
+      <textarea id="description" name="description" rows="4">{{ race.description if race else '' }}</textarea>
+
+      <div class="row">
+        <label><input type="checkbox" name="active" {% if race and race.active %}checked{% endif %}/> Make Active</label>
+        <button class="btn" type="submit">Save Changes</button>
+        {% if race and race.website %}
+          <a class="btn" href="{{ race.website }}" target="_blank" rel="noopener">Open Website</a>
+        {% endif %}
+      </div>
+    </form>
+  </div>
+
+  <!-- Right: Category + GPX upload + map preview -->
+  <div>
+    <form method="get" action="{{ url_for('races.edit_race', race_id=race.id if race else 0) }}" class="row">
+      <!-- If a user switches category, reload the page with the chosen one -->
+      <label for="category">Category</label>
+      <select id="category" name="category" onchange="this.form.submit()">
+        {% for c in categories %}
+          <option value="{{ c }}" {{ 'selected' if c == selected_category else '' }}>{{ c }}</option>
+        {% endfor %}
+      </select>
+      {% if race %}
+        <input type="hidden" name="race_id" value="{{ race.id }}"/>
+      {% endif %}
+    </form>
+
+    {% if race %}
+      <!-- Upload GPX for current category -->
+      <form method="post" action="{{ url_for('races.upload_gpx', race_id=race.id) }}" enctype="multipart/form-data" class="row" style="margin:.6rem 0;">
+        <input type="hidden" name="category" value="{{ selected_category }}"/>
+        <input type="file" name="gpx_file" accept=".gpx" />
+        <button class="btn" type="submit">Upload GPX</button>
+        <form method="post" action="{{ url_for('races.remove_gpx', race_id=race.id) }}">
+          <input type="hidden" name="category" value="{{ selected_category }}"/>
+        </form>
+      </form>
+
+      <!-- Remove GPX -->
+      <form method="post" action="{{ url_for('races.remove_gpx', race_id=race.id) }}" class="row" style="margin:.2rem 0 1rem 0;">
+        <input type="hidden" name="category" value="{{ selected_category }}"/>
+        <button class="btn" type="submit">Remove GPX</button>
+      </form>
+
+      <!-- Map preview -->
+      <div
+        id="map"
+        data-race-id="{{ race.id }}"
+        data-category="{{ selected_category | default('', true) }}"
+      ></div>
+      <script type="application/json" id="last-device-by-rider-data">
+        {{ (last_device_by_rider or {}) | tojson }}
+      </script>
+    {% else %}
+      <p style="margin:.8rem 0;">Save race first to enable GPX upload and rider management.</p>
+    {% endif %}
+  </div>
+
+  <!-- Riders table (bottom, full width) -->
+  <div class="full">
+    <h2>Riders (Category: {{ selected_category }})</h2>
+
+    {% if race %}
+      <!-- Add new rider to this race/category -->
+      <form method="post" action="{{ url_for('races.add_race_rider', race_id=race.id) }}" class="row" style="margin:.4rem 0;">
+        <input type="hidden" name="category" value="{{ selected_category }}"/>
+
+        <!-- Rider selection with datalist auto-complete -->
+        <div style="flex:2">
+          <label for="rider_id">Rider</label>
+          <input list="rider_list" id="rider_id_input" placeholder="Type rider name..." />
+          <datalist id="rider_list">
+            {% for r in riders %}
+              <option value="{{ r.id }} - {{ r.name }}"></option>
+            {% endfor %}
+          </datalist>
+          <input type="hidden" name="rider_id" id="rider_id_hidden"/>
+        </div>
+
+        <!-- Device selection with datalist, auto-filled when you choose a rider -->
+        <div style="flex:2">
+          <label for="device_id">Device</label>
+          <input list="device_list" id="device_id_input" placeholder="Type device id..." />
+          <datalist id="device_list">
+            {% for d in devices %}
+              <option value="{{ d.id }}"></option>
+            {% endfor %}
+          </datalist>
+          <input type="hidden" name="device_id" id="device_id_hidden"/>
+        </div>
+
+        <div style="flex:1; align-self:end;">
+          <button class="btn" type="submit">Save</button>
+        </div>
+      </form>
+
+      <!-- Existing entries -->
+      <table>
+        <thead>
+          <tr>
+            <th>Rider</th>
+            <th>Device</th>
+            <th>Active</th>
+            <th>Recording</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in race_riders %}
+            <tr>
+              <form method="post" action="{{ url_for('races.edit_race_rider', race_id=race.id, entry_id=row.id) }}">
+                <td>{{ row.rider.name }}</td>
+                <td>
+                  <input name="device_id" value="{{ row.device_id }}" list="device_list"/>
+                </td>
+                <td><input type="checkbox" name="active" {{ 'checked' if row.active else '' }} /></td>
+                <td><input type="checkbox" name="recording" {{ 'checked' if row.recording else '' }} /></td>
+                <td>
+                  <input type="hidden" name="category" value="{{ selected_category }}"/>
+                  <button class="btn" type="submit">Edit</button>
+                </td>
+              </form>
+              <td>
+                <form method="post" action="{{ url_for('races.remove_race_rider', race_id=race.id, entry_id=row.id) }}" onsubmit="return confirm('Remove rider from race?');">
+                  <input type="hidden" name="category" value="{{ selected_category }}"/>
+                  <button class="btn" type="submit">Remove</button>
+                </form>
+              </td>
+            </tr>
+          {% else %}
+            <tr><td colspan="5">No riders yet for this category.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+  </div>
+</div>
+
+{% if race %}
+<script>
+  // --- Map preview logic -----------------------------------------------------
+  // This loads the GeoJSON for the selected category and draws it on a Leaflet map.
+
+  // Grab race metadata directly from the map container to keep JS free of templating syntax.
+  const mapElement = document.getElementById('map');
+  const raceId = mapElement?.dataset?.raceId || '';
+  const category = encodeURIComponent(mapElement?.dataset?.category || '');
+  if (!mapElement || !raceId) {
+    console.warn('Missing map metadata; skipping map preview setup.');
+  } else {
+    const map = L.map('map').setView([0, 0], 2);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OSM'
+    }).addTo(map);
+
+    fetch(`/races/${raceId}/route/geojson?category=${category}`)
+      .then(r => r.json())
+      .then(gj => {
+        const layer = L.geoJSON(gj);
+        layer.addTo(map);
+        try { map.fitBounds(layer.getBounds(), {padding:[10,10]}); } catch(e) {}
+      });
+  }
+
+  // --- Rider add row: make the "device" auto-fill when a rider is chosen -----
+  // The server passed us a mapping from rider_id -> last device used via a JSON payload node.
+  let lastDeviceByRider = {};
+  const lastDeviceDataNode = document.getElementById('last-device-by-rider-data');
+  if (lastDeviceDataNode && lastDeviceDataNode.textContent) {
+    try {
+      lastDeviceByRider = JSON.parse(lastDeviceDataNode.textContent);
+    } catch (err) {
+      console.error('Failed to parse last-device mapping:', err);
+    }
+  }
+  const riderInput = document.getElementById('rider_id_input');
+  const riderHidden = document.getElementById('rider_id_hidden');
+  const deviceInput = document.getElementById('device_id_input');
+  const deviceHidden = document.getElementById('device_id_hidden');
+
+  // When the user finishes typing a rider (expects "id - name"), extract the id
+  riderInput.addEventListener('change', () => {
+    const val = riderInput.value.trim();
+    const idPart = val.split('-')[0].trim();
+    riderHidden.value = idPart;
+
+    // If we know a last device for this rider, pre-fill device field
+    if (lastDeviceByRider[idPart]) {
+      deviceInput.value = lastDeviceByRider[idPart];
+      deviceHidden.value = lastDeviceByRider[idPart];
+    } else {
+      // When no stored device is found, wipe any stale selection from previous riders.
+      deviceInput.value = '';
+      deviceHidden.value = '';
+    }
+  });
+
+  // Keep hidden device_id in sync with visible device input
+  deviceInput.addEventListener('change', () => {
+    deviceHidden.value = deviceInput.value.trim();
+  });
+</script>
+{% endif %}
+</body>
+</html>
