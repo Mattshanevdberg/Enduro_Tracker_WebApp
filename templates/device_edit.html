@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Edit Device</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 2rem; max-width: 720px; }
+      .msg { margin: .5rem 0 1rem; padding: .6rem .8rem; border-radius: 6px; }
+      .ok { border:1px solid #28a745; background:#e8f5ea; }
+      .err{ border:1px solid #dc3545; background:#fdecee; }
+      form { display:grid; grid-template-columns: 1fr 2fr; gap:.6rem .8rem; align-items:center; }
+      label { font-weight:600; }
+      input, textarea { padding:.5rem; border:1px solid #ccc; border-radius:6px; width:100%; }
+      .actions { grid-column:1/-1; display:flex; gap:.6rem; }
+      .btn { padding:.5rem 1rem; border:1px solid #333; border-radius:6px; background:#fff; text-decoration:none; cursor:pointer; }
+      .btn:hover { background:#f3f3f3; }
+    </style>
+  </head>
+  <body>
+    <a class="btn" href="{{ url_for('devices.devices_index') }}">&larr; Back to Devices</a>
+    <h1>Edit Device</h1>
+
+    {% if message is not none %}
+      <div class="msg {{ 'ok' if success else 'err' }}">{{ message }}</div>
+    {% endif %}
+
+    {% if device %}
+      <form method="post" action="{{ url_for('devices.device_edit', device_id=device.id) }}">
+        <label>Device ID</label>
+        <input value="{{ device.id }}" readonly />
+
+        <label for="device_info">Device Info</label>
+        <textarea id="device_info" name="device_info" rows="4" placeholder="Optional (e.g., module type, notes)">{{ device.device_info or '' }}</textarea>
+
+        <div class="actions">
+          <button class="btn" type="submit">Save</button>
+          <a class="btn" href="{{ url_for('home.home_page') }}">Home</a>
+        </div>
+      </form>
+    {% endif %}
+  </body>
+</html>

@@ -40,7 +40,8 @@ from src.db.models import SessionLocal, init_db, IngestRaw
 # from src.db.models import Point   # enable when parsing points now
 
 
-# bp instantiates a Flask Blueprint, which is a reusable bundle of routes, error handlers, etc. for modular apps. The variable bp holds that blueprint so you can register routes on it and later attach it to the main app. 
+# bp instantiates a Flask Blueprint, which is a reusable bundle of routes, error handlers, etc. for modular apps. 
+# The variable bp holds that blueprint so you can register routes on it and later attach it to the main app. 
 # "ingest" is the blueprint’s name—used internally (e.g., for endpoint names or URL building).
 # __name__ tells Flask where this blueprint comes from so it can locate templates/static files relative to the module if needed.
 # url_prefix="/api/v1" makes every route defined on the blueprint automatically live under /api/v1 when the blueprint is registered.
@@ -50,7 +51,8 @@ bp = Blueprint("ingest", __name__, url_prefix="/api/v1")
 # Initialize DB at import/load time (safe if called multiple times)
 init_db()
 
-# @bp.route("/upload", methods=["POST"]) decorator registers the upload function as the handler for the POST /api/v1/upload route (the bp blueprint supplies the /api/v1 prefix). Without that decorator, Flask wouldn’t know to call upload() for incoming requests.
+# @bp.route("/upload", methods=["POST"]) decorator registers the upload function as the handler for the POST /api/v1/upload route 
+# (the bp blueprint supplies the /api/v1 prefix). Without that decorator, Flask wouldn’t know to call upload() for incoming requests.
 @bp.route("/upload", methods=["POST"])
 def upload():
     """

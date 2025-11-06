@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Devices</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 2rem; }
+      h1 { margin-bottom: .5rem; }
+      .msg { margin: .5rem 0 1rem; padding: .6rem .8rem; border-radius: 6px; }
+      .ok { border:1px solid #28a745; background:#e8f5ea; }
+      .err{ border:1px solid #dc3545; background:#fdecee; }
+      form .grid { display:grid; grid-template-columns: 1fr 2fr; gap:.6rem .8rem; align-items:center; max-width:700px;}
+      label { font-weight:600; }
+      input, textarea { padding:.5rem; border:1px solid #ccc; border-radius:6px; width:100%; }
+      .actions { grid-column:1/-1; display:flex; gap:.6rem; }
+      .btn { padding:.5rem 1rem; border:1px solid #333; border-radius:6px; background:#fff; text-decoration:none; cursor:pointer; }
+      .btn:hover { background:#f3f3f3; }
+      table { margin-top:2rem; border-collapse: collapse; width:100%; max-width:900px; }
+      th, td { border:1px solid #ddd; padding:.5rem .6rem; text-align:left; }
+      th { background:#fafafa; }
+      .topnav { margin-bottom: 1rem; }
+    </style>
+  </head>
+  <body>
+    <div class="topnav">
+      <a class="btn" href="{{ url_for('home.home_page') }}">Back to Home</a>
+    </div>
+
+    <h1>Devices</h1>
+
+    {% if message is not none %}
+      <div class="msg {{ 'ok' if success else 'err' }}">{{ message }}</div>
+    {% endif %}
+
+    <h2>Add a new device</h2>
+    <form method="post" action="{{ url_for('devices.devices_index') }}">
+      <div class="grid">
+        <label for="id">Device ID *</label>
+        <input id="id" name="id" maxlength="64" value="{{ form.id }}"/>
+
+        <label for="device_info">Device Info</label>
+        <textarea id="device_info" name="device_info" rows="3" placeholder="Optional (e.g., module type, notes)">{{ form.device_info }}</textarea>
+
+        <div class="actions">
+          <button class="btn" type="submit">Save</button>
+        </div>
+      </div>
+    </form>
+
+    <h2>Existing devices</h2>
+    <table>
+      <thead>
+        <tr><th>Device ID</th><th>Info</th><th>Actions</th></tr>
+      </thead>
+      <tbody>
+        {% for d in devices %}
+          <tr>
+            <td><code>{{ d.id }}</code></td>
+            <td style="white-space:pre-wrap">{{ d.device_info or '' }}</td>
+            <td><a class="btn" href="{{ url_for('devices.device_edit', device_id=d.id) }}">Edit</a></td>
+          </tr>
+        {% else %}
+          <tr><td colspan="3">No devices yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </body>
+</html>

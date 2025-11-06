@@ -19,6 +19,7 @@ from flask_cors import CORS
 from src.api.ingest import bp as ingest_bp
 from src.web.home import bp_home
 from src.web.riders import bp_riders
+from src.web.devices import bp_devices
 
 # regular imports
 import yaml
@@ -57,6 +58,7 @@ def create_app():
     app.register_blueprint(ingest_bp) # "/api/v1/upload" endpoint for data ingestion from trackers
     app.register_blueprint(bp_home) # "/" home page
     app.register_blueprint(bp_riders) # "/riders/new" rider management pages
+    app.register_blueprint(bp_devices)  # /devices device management pages
     return app
 
 # For `flask run`
