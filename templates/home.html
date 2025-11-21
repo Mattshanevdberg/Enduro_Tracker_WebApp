@@ -5,11 +5,16 @@
     <title>Enduro Tracker — Home</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
-      body { font-family: system-ui, sans-serif; margin: 2rem; }
-      .btn { display:inline-block; padding:.6rem 1rem; border:1px solid #333; border-radius:6px; text-decoration:none; }
+      body { font-family: system-ui, sans-serif; margin: 2rem; max-width: 1000px; }
+      .btn { display:inline-block; padding:.6rem 1rem; border:1px solid #333; border-radius:6px; text-decoration:none; background:#fff; cursor:pointer; }
       .btn:hover { background:#f3f3f3; }
       .stack { display:flex; gap:1rem; flex-wrap:wrap; }
       header { margin-bottom:1.5rem; }
+      table { border-collapse: collapse; width: 100%; margin-top: 1.5rem; }
+      th, td { border:1px solid #ddd; padding:.5rem .7rem; text-align:left; }
+      th { background:#f7f7f7; }
+      .muted { color:#555; font-size:.9rem; }
+      .actions { white-space: nowrap; }
     </style>
   </head>
   <body>
@@ -23,5 +28,48 @@
       <a class="btn" href="{{ url_for('races.new_race') }}">Add New Race</a>
       <!-- Add more navigation buttons here later -->
     </div>
+
+    <h2 style="margin-top:1.5rem;">Races</h2>
+    {% if races %}
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Start</th>
+            <th>Website</th>
+            <th>Active</th>
+            <th class="actions">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for race in races %}
+            <tr>
+              <td>{{ race.name }}</td>
+              <td>
+                {% if race.starts_at %}
+                  {{ race.starts_at.strftime('%Y-%m-%d %H:%M') }}
+                {% else %}
+                  <span class="muted">Not set</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if race.website %}
+                  <a href="{{ race.website }}" target="_blank" rel="noopener">{{ race.website }}</a>
+                {% else %}
+                  <span class="muted">—</span>
+                {% endif %}
+              </td>
+              <td>{{ 'Yes' if race.active else 'No' }}</td>
+              <td class="actions">
+                <a class="btn" href="{{ url_for('races.edit_race', race_id=race.id, category=default_category) }}">Edit</a>
+                <a class="btn" href="{{ url_for('races.post_race', race_id=race.id) }}">Post Race</a>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="muted">No races have been created yet.</p>
+    {% endif %}
   </body>
 </html>

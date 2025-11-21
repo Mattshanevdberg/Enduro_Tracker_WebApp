@@ -151,6 +151,61 @@ def build_gpx_for_device(device_id: str, session: Session = SessionLocal, out_di
 
     except Exception as e:
         return False, f"build_gpx_for_device error: {e}"
+
+def build_geojson_for_device(device_id: str, session: Session = SessionLocal, out_dir: str = "logs") -> Tuple[bool, str]:
+    """
+    Build (or rebuild) a GeoJSON LineString file for a given device_id from the points table.
+
+    Mirrors build_gpx_for_device but outputs <device_id>.geojson.
+    """
+    try:
+        os.makedirs(out_dir, exist_ok=True)
+
+        rows = (
+            session.execute(
+                select(Point).where(Point.device_id == device_id).order_by(asc(Point.t_epoch))
+            )
+            .scalars()
+            .all()
+        )
+
+        if not rows:
+            return False, f"No points found for device_id={device_id}"
+
+        coords = []
+        for p in rows:
+            if p.lat is None or p.lon is None:
+                continue
+            coords.append([round(p.lon, 6), round(p.lat, 6)])
+
+        if not coords:
+            return False, f"No valid coordinates for device_id={device_id}"
+
+        geojson = {
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "properties": {
+                        "device_id": device_id,
+                        "start_time": _iso8601_utc(rows[0].t_epoch) if rows[0].t_epoch is not None else None,
+                    },
+                    "geometry": {
+                        "type": "LineString",
+                        "coordinates": coords,
+                    },
+                }
+            ],
+        }
+
+        out_path = os.path.join(out_dir, f"{device_id}.geojson")
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(geojson, f, separators=(",", ":"))
+
+        return True, out_path
+
+    except Exception as e:
+        return False, f"build_geojson_for_device error: {e}"
     
 # potentially need to add elevation data here too.
 def gpx_to_geojson(gpx_text: str) -> Tuple[bool, str]:
@@ -198,4 +253,3 @@ def gpx_to_geojson(gpx_text: str) -> Tuple[bool, str]:
 #     ok, path_or_err = build_gpx_for_device(device_id="pi003", session=session, out_dir="logs")
 #     if ok:
 #         print(f"GPX file created at: {path_or_err}")  
-

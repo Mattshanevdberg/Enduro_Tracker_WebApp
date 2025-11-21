@@ -104,6 +104,84 @@ def new_race():
     finally:
         session.close()
 
+@bp_races.route("/<int:race_id>/post", methods=["GET"])
+def post_race(race_id: int):
+    """
+    Post-race view: render race info plus an optional route preview for a chosen category.
+
+    GET parameters
+    --------------
+    category : str (optional)
+        The category whose route should be shown. Defaults to the first available category
+        for this race if none is provided or if the provided one is invalid.
+    """
+    session = SessionLocal()
+    try:
+        # -- Load the race upfront; fail fast if it does not exist.
+        race = session.query(Race).get(race_id)
+        if not race:
+            return Response("Race not found.", status=404)
+
+        # -- Gather category names actually attached to this race (via Category -> Route).
+        categories = [
+            row[0]
+            for row in (
+                session.query(Category.name)
+                .join(Route, Category.route_id == Route.id)
+                .filter(Route.race_id == race_id)
+                .order_by(Category.name.asc())
+                .all()
+            )
+        ]
+
+        # -- Pick the selected category: respect the query param if valid; otherwise fall back.
+        selected_category = request.args.get("category") or None
+        if selected_category not in categories:
+            selected_category = categories[0] if categories else None
+
+        # -- Fetch GeoJSON for the selected category (if any exists).
+        geojson = None
+        category_row = None
+        if selected_category:
+            category_row = (
+                session.query(Category)
+                .join(Route, Category.route_id == Route.id)
+                .filter(Route.race_id == race_id, Category.name == selected_category)
+                .one_or_none()
+            )
+            if category_row:
+                geojson_row = (
+                    session.query(Route.geojson)
+                    .filter(Route.id == category_row.route_id)
+                    .one_or_none()
+                )
+                geojson = geojson_row[0] if geojson_row else None
+
+        # -- Riders linked to this race+category (name/team/device) ordered for quick scanning.
+        riders_for_category = []
+        if category_row:
+            rider_rows = (
+                session.query(Rider.name, Rider.team, RaceRider.device_id)
+                .join(RaceRider, RaceRider.rider_id == Rider.id)
+                .filter(RaceRider.category_id == category_row.id)
+                .order_by(Rider.name.asc())
+                .all()
+            )
+            riders_for_category = [
+                {"name": n, "team": t, "device_id": d} for (n, t, d) in rider_rows
+            ]
+
+        return render_template(
+            "post_race.html",
+            race=race,
+            categories=categories,
+            selected_category=selected_category,
+            geojson=geojson,
+            riders=riders_for_category,
+        )
+    finally:
+        session.close()
+
 
 @bp_races.route("/save", methods=["POST"])
 def save_race():

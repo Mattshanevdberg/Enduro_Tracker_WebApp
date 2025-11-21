@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Post Race - {{ race.name }}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- Leaflet: lightweight map renderer for the route preview -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 1.8rem; max-width: 1000px; }
+    .btn { display:inline-block; padding:.55rem 1rem; border:1px solid #333; border-radius:6px; text-decoration:none; background:#fff; }
+    .btn:hover { background:#f3f3f3; }
+    .muted { color:#555; font-size:.95rem; }
+    dl { display:grid; grid-template-columns: 140px 1fr; gap:.3rem .8rem; margin-top:1rem; }
+    dt { font-weight:600; }
+    .layout { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; align-items:start; }
+    @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+    #map { height: 360px; border:1px dashed #999; border-radius: 6px; margin-top:.8rem; }
+    form.inline { display:flex; gap:.5rem; align-items:center; margin:.4rem 0; }
+    select { padding:.45rem; border:1px solid #ccc; border-radius:6px; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border:1px solid #ddd; padding:.4rem .6rem; text-align:left; }
+    th { background:#f7f7f7; }
+  </style>
+</head>
+<body>
+  <div style="margin-bottom:1rem;">
+    <a class="btn" href="{{ url_for('home.home_page') }}">Back to Home</a>
+  </div>
+
+  <h1>{{ race.name }}</h1>
+  <p class="muted">Post Race</p>
+
+  <div class="layout">
+    <!-- Left column: basic race facts + map -->
+    <div>
+      <dl>
+        <dt>Website</dt>
+        <dd>{% if race.website %}<a href="{{ race.website }}" target="_blank" rel="noopener">{{ race.website }}</a>{% else %}—{% endif %}</dd>
+
+        <dt>Start</dt>
+        <dd>{% if race.starts_at %}{{ race.starts_at.strftime('%Y-%m-%d %H:%M') }}{% else %}Not set{% endif %}</dd>
+
+        <dt>Active</dt>
+        <dd>{{ 'Yes' if race.active else 'No' }}</dd>
+
+        <dt>Description</dt>
+        <dd>{{ race.description or 'No description provided.' }}</dd>
+      </dl>
+
+      {% if categories %}
+        <!-- Category picker: drives which route we show below. -->
+        <form class="inline" method="get" action="{{ url_for('races.post_race', race_id=race.id) }}">
+          <label for="category">Category</label>
+          <select id="category" name="category" onchange="this.form.submit()">
+            {% for cat in categories %}
+              <option value="{{ cat }}" {{ 'selected' if cat == selected_category else '' }}>{{ cat }}</option>
+            {% endfor %}
+          </select>
+        </form>
+
+        <div id="map" data-race-id="{{ race.id }}" data-category="{{ selected_category or '' }}"></div>
+        <p class="muted" id="map-status" style="margin:.3rem 0 0 0;"></p>
+      {% else %}
+        <p class="muted">No categories/routes available for this race.</p>
+      {% endif %}
+    </div>
+
+    <!-- Right column: riders linked to this race/category -->
+    <div>
+      <h3 style="margin-top:0;">Riders for {{ selected_category or 'category' }}</h3>
+      {% if riders %}
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Team</th>
+              <th>Device</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in riders %}
+              <tr>
+                <td>{{ r.name }}</td>
+                <td>{{ r.team or '—' }}</td>
+                <td>{{ r.device_id or '—' }}</td>
+                <td><button class="btn rider-popup" data-name="{{ r.name }}" data-team="{{ r.team or 'No team' }}" data-device="{{ r.device_id or 'No device' }}">Details</button></td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p class="muted">No riders for this category.</p>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if categories and selected_category %}
+  <script>
+    // Map preview: fetch GeoJSON for the selected category and plot with Leaflet.
+    const mapNode = document.getElementById('map');
+    const statusNode = document.getElementById('map-status');
+    const raceId = mapNode?.dataset?.raceId;
+    const category = encodeURIComponent(mapNode?.dataset?.category || "");
+
+    // Early exit if metadata is missing.
+    if (!mapNode || !raceId) {
+      if (statusNode) statusNode.textContent = "Map cannot load (missing race metadata).";
+    } else {
+      // Initialize the map view with a safe default.
+      const map = L.map('map').setView([0, 0], 2);
+      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OSM'
+      }).addTo(map);
+
+      fetch(`/races/${raceId}/route/geojson?category=${category}`)
+        .then(r => r.json())
+        .then(gj => {
+          const layer = L.geoJSON(gj);
+          layer.addTo(map);
+          // Fit the map to the route if it exists.
+          try {
+            const bounds = layer.getBounds();
+            if (bounds.isValid()) {
+              map.fitBounds(bounds, { padding: [10, 10] });
+              if (statusNode) statusNode.textContent = `Showing route for category "${decodeURIComponent(category)}".`;
+              return;
+            }
+          } catch (e) {}
+          if (statusNode) statusNode.textContent = "No route data for this category.";
+        })
+        .catch(() => {
+          if (statusNode) statusNode.textContent = "Failed to load route data.";
+        });
+    }
+
+    // Rider popups: simple, fast inline dialog using alert (no external libs).
+    document.querySelectorAll('.rider-popup').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const name = btn.dataset.name || 'Unknown';
+        const team = btn.dataset.team || 'No team';
+        const device = btn.dataset.device || 'No device';
+        alert(`Rider: ${name}\nTeam: ${team}\nDevice: ${device}`);
+      });
+    });
+  </script>
+  {% endif %}
+</body>
+</html>
