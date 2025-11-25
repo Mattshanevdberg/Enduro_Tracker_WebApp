@@ -152,15 +152,35 @@ def build_gpx_for_device(device_id: str, session: Session = SessionLocal, out_di
     except Exception as e:
         return False, f"build_gpx_for_device error: {e}"
 
-def build_geojson_for_device(device_id: str, session: Session = SessionLocal, out_dir: str = "logs") -> Tuple[bool, str]:
+def build_geojson_for_device(
+    device_id: str,
+    session: Session = SessionLocal,
+    out_dir: str = "logs",
+    save: bool = True,
+) -> Tuple[bool, str]:
     """
-    Build (or rebuild) a GeoJSON LineString file for a given device_id from the points table.
+    Build (or rebuild) a GeoJSON LineString for a given device_id from the points table.
 
-    Mirrors build_gpx_for_device but outputs <device_id>.geojson.
+    Parameters
+    ----------
+    device_id : str
+        Device identifier to query in the `points` table.
+    session : Session
+        Active SQLAlchemy session (reused for efficiency in callers).
+    out_dir : str
+        Directory to write the .geojson file when save=True.
+    save : bool
+        When True (default), write <device_id>.geojson to disk and return its path.
+        When False, skip writing and return the GeoJSON string directly.
+
+    Returns
+    -------
+    (ok, result) : (bool, str)
+        ok=True  -> path (if saved) or JSON string (if not saved)
+        ok=False -> error message
     """
     try:
-        os.makedirs(out_dir, exist_ok=True)
-
+        # Fetch ordered points once; avoids multiple round-trips.
         rows = (
             session.execute(
                 select(Point).where(Point.device_id == device_id).order_by(asc(Point.t_epoch))
@@ -197,7 +217,12 @@ def build_geojson_for_device(device_id: str, session: Session = SessionLocal, ou
                 }
             ],
         }
+        
+        # Skip disk write when caller only needs the payload.
+        if not save:
+            return True, json.dumps(geojson, separators=(",", ":"))
 
+        os.makedirs(out_dir, exist_ok=True)
         out_path = os.path.join(out_dir, f"{device_id}.geojson")
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump(geojson, f, separators=(",", ":"))

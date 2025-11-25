@@ -140,3 +140,52 @@ def upload():
     #         session.close()
 
     return "", 200
+
+
+@bp.route("/upload-text", methods=["POST"])
+def upload_text():
+    """
+    Ingest a raw text log payload from a device.
+
+    Use case:
+      Devices that cannot easily send JSON can instead POST a text file payload
+      (content similar to logs/gnss_log_with invalid chars (\00).txt). We keep
+      the content in-memory for downstream parsing and later persistence.
+
+    Accepted shapes:
+      - multipart/form-data with a file field named "file"
+      - text/plain or application/octet-stream raw body
+
+    Response:
+      200 with {"accepted_bytes": N, "preview": "..."} for quick confirmation
+      400 if no payload was provided
+    """
+
+        # 1) Parse JSON body
+    data = request.get_json(silent=True) # request gives access to things client sent, get_json() parses JSON body, silent=True prevents raising error on bad JSON
+    if not data:
+        print("error: No JSON body")
+        return "", 400
+
+    device_id = data.get("pid")
+    fixes = data.get("log")
+
+    print(device_id)
+    print(fixes)
+    # # 1) Read bytes once, preferring a multipart file if provided.
+    # incoming_file = request.files.get("file")
+    # raw_bytes = incoming_file.read() if incoming_file else (request.get_data() or b"")
+
+    # if not raw_bytes:
+    #     return jsonify({"error": "No text payload received"}), 400
+
+    # # 2) Decode safely: replace invalid/null bytes so we always get a usable string.
+    # #    This is the string we can later manipulate/parse before saving to DB.
+    # raw_text = raw_bytes.decode("utf-8", errors="replace")
+
+    # # 3) Placeholder: keep the content in-memory for now. At a later stage, we can
+    # #    persist raw_text to a dedicated table or queue for parsing.
+    # preview = raw_text[:200]  # short preview to confirm receipt without heavy payloads
+
+    # return jsonify({"accepted_bytes": len(raw_bytes), "preview": preview}), 200
+    return "", 200

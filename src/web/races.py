@@ -28,7 +28,7 @@ from src.db.models import (
     Race, Route, Category, Rider, Device, RaceRider
 )
 from src.db.models import config as app_config  # already loaded from config.yaml
-from src.utils.gpx import gpx_to_geojson
+from src.utils.gpx import gpx_to_geojson, build_geojson_for_device
 
 bp_races = Blueprint("races", __name__, url_prefix="/races")
 
@@ -179,6 +179,22 @@ def post_race(race_id: int):
             geojson=geojson,
             riders=riders_for_category,
         )
+    finally:
+        session.close()
+
+
+@bp_races.route("/<int:race_id>/device/<device_id>/geojson", methods=["GET"])
+def device_geojson(race_id: int, device_id: str):
+    """
+    Generate (without saving) GeoJSON for a device's track and return it as JSON.
+    Useful for quick previews in the post-race page.
+    """
+    session = SessionLocal()
+    try:
+        ok, result = build_geojson_for_device(device_id=device_id, session=session, save=False)
+        if not ok:
+            return Response(result, status=404)
+        return Response(result, mimetype="application/json")
     finally:
         session.close()
 

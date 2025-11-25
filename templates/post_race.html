@@ -86,7 +86,14 @@
                 <td>{{ r.name }}</td>
                 <td>{{ r.team or '—' }}</td>
                 <td>{{ r.device_id or '—' }}</td>
-                <td><button class="btn rider-popup" data-name="{{ r.name }}" data-team="{{ r.team or 'No team' }}" data-device="{{ r.device_id or 'No device' }}">Details</button></td>
+               <td>
+                  <button class="btn device-track-btn"
+                          data-name="{{ r.name }}"
+                          data-team="{{ r.team or 'No team' }}"
+                          data-device="{{ r.device_id or '' }}">
+                    Show Track
+                  </button>
+                </td>
               </tr>
             {% endfor %}
           </tbody>
@@ -99,50 +106,97 @@
 
   {% if categories and selected_category %}
   <script>
-    // Map preview: fetch GeoJSON for the selected category and plot with Leaflet.
+    // Lightweight map + track display:
+    // - On load: draw the route GeoJSON for the selected category.
+    // - On rider click: fetch per-device GeoJSON (computed on-demand) and draw it in red.
     const mapNode = document.getElementById('map');
     const statusNode = document.getElementById('map-status');
     const raceId = mapNode?.dataset?.raceId;
     const category = encodeURIComponent(mapNode?.dataset?.category || "");
 
-    // Early exit if metadata is missing.
-    if (!mapNode || !raceId) {
-      if (statusNode) statusNode.textContent = "Map cannot load (missing race metadata).";
-    } else {
-      // Initialize the map view with a safe default.
-      const map = L.map('map').setView([0, 0], 2);
+    let map;          // Leaflet map instance
+    let routeLayer;   // Base category route
+    let deviceLayer;  // Rider device track overlay
+
+    function ensureMap() {
+      if (map) return map;
+      map = L.map('map').setView([0, 0], 2);
       L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '&copy; OSM'
       }).addTo(map);
+      return map;
+    }
 
+    // Draw the category route (base layer).
+    function drawRoute(geojson) {
+      ensureMap();
+      if (routeLayer) {
+        map.removeLayer(routeLayer);
+        routeLayer = null;
+      }
+      routeLayer = L.geoJSON(geojson, {style: {color: '#1f78b4', weight: 3}});
+      routeLayer.addTo(map);
+      try {
+        const b = routeLayer.getBounds();
+        if (b.isValid()) map.fitBounds(b, { padding: [10, 10] });
+      } catch (e) {}
+    }
+
+    // Draw a device track (overlay) and optionally refocus bounds.
+    function drawDeviceTrack(geojson) {
+      ensureMap();
+      if (deviceLayer) {
+        map.removeLayer(deviceLayer);
+        deviceLayer = null;
+      }
+      deviceLayer = L.geoJSON(geojson, {style: {color: '#e31a1c', weight: 3}});
+      deviceLayer.addTo(map);
+      try {
+        const b = deviceLayer.getBounds();
+        if (b.isValid()) map.fitBounds(b, { padding: [10, 10] });
+      } catch (e) {}
+    }
+
+    // Kick off initial route fetch for the selected category.
+    if (!mapNode || !raceId) {
+      if (statusNode) statusNode.textContent = "Map cannot load (missing race metadata).";
+    } else {
       fetch(`/races/${raceId}/route/geojson?category=${category}`)
         .then(r => r.json())
         .then(gj => {
-          const layer = L.geoJSON(gj);
-          layer.addTo(map);
-          // Fit the map to the route if it exists.
-          try {
-            const bounds = layer.getBounds();
-            if (bounds.isValid()) {
-              map.fitBounds(bounds, { padding: [10, 10] });
-              if (statusNode) statusNode.textContent = `Showing route for category "${decodeURIComponent(category)}".`;
-              return;
-            }
-          } catch (e) {}
-          if (statusNode) statusNode.textContent = "No route data for this category.";
+          drawRoute(gj);
+          if (statusNode) statusNode.textContent = `Showing route for category "${decodeURIComponent(category)}".`;
         })
         .catch(() => {
           if (statusNode) statusNode.textContent = "Failed to load route data.";
         });
     }
 
-    // Rider popups: simple, fast inline dialog using alert (no external libs).
-    document.querySelectorAll('.rider-popup').forEach(btn => {
+    // When clicking "Show Track", fetch per-device GeoJSON and render it on the same map.
+    document.querySelectorAll('.device-track-btn').forEach(btn => {
       btn.addEventListener('click', () => {
-        const name = btn.dataset.name || 'Unknown';
-        const team = btn.dataset.team || 'No team';
-        const device = btn.dataset.device || 'No device';
-        alert(`Rider: ${name}\nTeam: ${team}\nDevice: ${device}`);
+        const deviceId = (btn.dataset.device || "").trim();
+        const riderName = btn.dataset.name || 'Unknown rider';
+
+        if (!deviceId) {
+          if (statusNode) statusNode.textContent = "No device linked for this rider.";
+          return;
+        }
+
+        if (statusNode) statusNode.textContent = `Loading track for ${riderName} (${deviceId})...`;
+
+        fetch(`/races/${raceId}/device/${encodeURIComponent(deviceId)}/geojson`)
+          .then(resp => {
+            if (!resp.ok) throw new Error("Not found");
+            return resp.json();
+          })
+          .then(gj => {
+            drawDeviceTrack(gj);
+            if (statusNode) statusNode.textContent = `Showing track for ${riderName} (${deviceId}).`;
+          })
+          .catch(() => {
+            if (statusNode) statusNode.textContent = "No track available for this device.";
+          });
       });
     });
   </script>
