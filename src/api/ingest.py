@@ -16,14 +16,14 @@ Notes:
 """
 
 import json
-from datetime import datetime, timezone
-from flask import Blueprint, request, jsonify
-from sqlalchemy.exc import SQLAlchemyError
-
-# regular imports
 import os
 import yaml
+import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
 from pathlib import Path
+from flask import Blueprint, request, jsonify
+from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 
 # Load configuration from yaml file
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), '../../configs/config.yaml')
@@ -34,10 +34,128 @@ with open(CONFIG_PATH, 'r') as f:
 DATABASE_URL = config['global']['database_url']
 
 # this is for ingesting GNSS data
-from src.db.models import SessionLocal, init_db, IngestRaw
+from src.db.models import SessionLocal, init_db, IngestRaw, RaceRider, TrackHist
 # this is for parsing the points and saving to a db table in a usable format
 # parsing will be handled in a background job later
 # from src.db.models import Point   # enable when parsing points now
+
+from src.utils.gpx import _iso8601_utc  # reuse time formatter for GPX output
+
+# ---------------------------------------------------------------------------
+# Helpers to parse text logs and build GPX/GeoJSON strings
+# ---------------------------------------------------------------------------
+
+def _parse_text_fixes(raw_text: str):
+    """
+    Parse line-delimited JSON fixes from raw text.
+
+    Keeps rows that decode to JSON objects and contain non-null utc/lat/lon.
+    Drops malformed or incomplete rows.
+
+    Args:
+        raw_text (str): Raw text payload containing one JSON object per line.
+
+    Returns:
+        list[dict]: Cleaned fixes with utc/lat/lon and optional fields; bad rows removed.
+    """
+    fixes = []
+    for line in raw_text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+            utc = obj.get("utc")
+            lat = obj.get("lat")
+            lon = obj.get("lon")
+            if utc is None or lat is None or lon is None:
+                continue
+            fixes.append({
+                "utc": utc,
+                "lat": lat,
+                "lon": lon,
+                "alt": obj.get("alt"),
+                "sog": obj.get("sog"),
+                "cog": obj.get("cog"),
+                "fx": obj.get("fx"),
+                "hdop": obj.get("hdop"),
+                "nsat": obj.get("nsat"),
+            })
+        except Exception:
+            # bad line: skip
+            continue
+    return fixes
+
+
+def _build_gpx_string(fixes, creator: str = "EnduroTracker") -> str:
+    """
+    Build a GPX 1.1 XML string from cleaned fixes (list of dicts).
+
+    Args:
+        fixes (list[dict]): Cleaned fixes containing at least utc/lat/lon.
+        creator (str): Creator metadata for the GPX file.
+
+    Returns:
+        str: GPX XML string.
+    """
+    gpx_ns = "http://www.topografix.com/GPX/1/1"
+    xsi_ns = "http://www.w3.org/2001/XMLSchema-instance"
+    schema_loc = "http://www.topografix.com/GPX/1/1/gpx.xsd"
+    ET.register_namespace("", gpx_ns)
+    ET.register_namespace("xsi", xsi_ns)
+
+    gpx = ET.Element(
+        ET.QName(gpx_ns, "gpx"),
+        {
+            ET.QName(xsi_ns, "schemaLocation"): f"{gpx_ns} {schema_loc}",
+            "version": "1.1",
+            "creator": creator,
+        },
+    )
+
+    meta = ET.SubElement(gpx, ET.QName(gpx_ns, "metadata"))
+    ET.SubElement(meta, ET.QName(gpx_ns, "time")).text = _iso8601_utc(int(fixes[0]["utc"]))
+
+    trk = ET.SubElement(gpx, ET.QName(gpx_ns, "trk"))
+    ET.SubElement(trk, ET.QName(gpx_ns, "name")).text = "Log Track"
+    trkseg = ET.SubElement(trk, ET.QName(gpx_ns, "trkseg"))
+
+    for p in fixes:
+        pt = ET.SubElement(
+            trkseg,
+            ET.QName(gpx_ns, "trkpt"),
+            {"lat": f"{float(p['lat']):.6f}", "lon": f"{float(p['lon']):.6f}"}
+        )
+        if p.get("alt") is not None:
+            ET.SubElement(pt, ET.QName(gpx_ns, "ele")).text = f"{float(p['alt']):.1f}"
+        if p.get("utc") is not None:
+            ET.SubElement(pt, ET.QName(gpx_ns, "time")).text = _iso8601_utc(int(p["utc"]))
+
+    return ET.tostring(gpx, encoding="utf-8", xml_declaration=True).decode("utf-8")
+
+
+def _build_geojson_string(fixes) -> str:
+    """
+    Build a GeoJSON LineString string from cleaned fixes.
+
+    Args:
+        fixes (list[dict]): Cleaned fixes containing at least lat/lon.
+
+    Returns:
+        str: Compact GeoJSON FeatureCollection as a string.
+    """
+    coords = [[float(p["lon"]), float(p["lat"])] for p in fixes]
+    gj = {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "properties": {"src": "text_log"},
+                "geometry": {"type": "LineString", "coordinates": coords},
+            }
+        ],
+    }
+    return json.dumps(gj, separators=(",", ":"))
 
 
 # bp instantiates a Flask Blueprint, which is a reusable bundle of routes, error handlers, etc. for modular apps. 
@@ -71,6 +189,14 @@ def upload():
       200: {"accepted": N} where N = number of fixes received
       400: bad/missing JSON
       422: schema invalid (missing keys or wrong types)
+
+    Input Args (HTTP):
+      JSON body with keys:
+        - device_id: str (pid in payload)
+        - f: list of compact fixes
+
+    Output:
+      Flask response with status code and minimal JSON/empty body as noted above.
     """
     # 1) Parse JSON body
     data = request.get_json(silent=True) # request gives access to things client sent, get_json() parses JSON body, silent=True prevents raising error on bad JSON
@@ -157,35 +283,59 @@ def upload_text():
       - text/plain or application/octet-stream raw body
 
     Response:
-      200 with {"accepted_bytes": N, "preview": "..."} for quick confirmation
+      200 with {"accepted_bytes": N, "valid_fixes": M, "fixes_gpx": "...", "fixes_geojson": "..."}
       400 if no payload was provided
-    """
+      422 if no valid fixes were found
 
+    Input Args (HTTP):
+      - device_id: optional (form or query)
+      - Body: multipart/form-data file field "file", or raw text/plain/octet-stream body.
+
+    Output:
+      JSON containing counts and in-memory GPX/GeoJSON strings.
+    """
         # 1) Parse JSON body
     data = request.get_json(silent=True) # request gives access to things client sent, get_json() parses JSON body, silent=True prevents raising error on bad JSON
     if not data:
         print("error: No JSON body")
         return "", 400
-
+        
+        # 2) Extract device_id and log content
     device_id = data.get("pid")
-    fixes = data.get("log")
+    raw_fixes = data.get("log")
 
-    print(device_id)
-    print(fixes)
-    # # 1) Read bytes once, preferring a multipart file if provided.
-    # incoming_file = request.files.get("file")
-    # raw_bytes = incoming_file.read() if incoming_file else (request.get_data() or b"")
+    # 3) Decode safely to survive null/invalid characters, then parse fixes.
+    fixes = _parse_text_fixes(raw_fixes) # TODO test that the parsing works for nulls and invalid chars
+    if not fixes:
+        return jsonify({"error": "No valid fixes found"}), 422
 
-    # if not raw_bytes:
-    #     return jsonify({"error": "No text payload received"}), 400
+    # 4) Build GPX/GeoJSON strings in-memory (no disk writes).
+    fixes_gpx = _build_gpx_string(fixes, creator=f"EnduroTracker {device_id}")
+    fixes_geojson = _build_geojson_string(fixes)
 
-    # # 2) Decode safely: replace invalid/null bytes so we always get a usable string.
-    # #    This is the string we can later manipulate/parse before saving to DB.
-    # raw_text = raw_bytes.decode("utf-8", errors="replace")
+    # 5) find the last race_rider id to associated with the device_id, this involves filter the race_riders table by device_id and finding the last one
+    race_rider_id = None
+    if device_id:
+        session = SessionLocal()
+        try:
+            race_rider_id = session.execute(
+                select(RaceRider.id)
+                .where(RaceRider.device_id == device_id)
+                .order_by(RaceRider.id.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+        finally:
+            session.close()
 
-    # # 3) Placeholder: keep the content in-memory for now. At a later stage, we can
-    # #    persist raw_text to a dedicated table or queue for parsing.
-    # preview = raw_text[:200]  # short preview to confirm receipt without heavy payloads
+    # 6) save fixes_gpx and fixes_geojson to the track_hist table. Use the found race_rider_id when logging it
+    if race_rider_id:
+        session = SessionLocal()
+        try:
+            session.add(TrackHist(race_rider_id=race_rider_id, geojson=fixes_geojson, gpx=fixes_gpx))
+            session.commit()
+        except SQLAlchemyError:
+            session.rollback()
+        finally:
+            session.close()
 
-    # return jsonify({"accepted_bytes": len(raw_bytes), "preview": preview}), 200
     return "", 200

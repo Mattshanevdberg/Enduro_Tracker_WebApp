@@ -256,6 +256,9 @@ class RaceRider(Base):
     comm_setting = Column(String(32), nullable=True)
     active = Column(Boolean, nullable=False, default=True)
     recording = Column(Boolean, nullable=False, default=True)
+    start_time = Column(DateTime(timezone=True), nullable=True) # when the rider starts the race - set by the RFID on the start line
+    finish_time = Column(DateTime(timezone=True), nullable=True)# when the rider finishes the race - set by the RFID on the start line
+    pi_offset_time = Column(Integer, nullable=True) # offset in seconds to apply to the pi's clock to sync with official 
 
     rider = relationship("Rider", back_populates="race_entries")
     device = relationship("Device", back_populates="race_riders")
