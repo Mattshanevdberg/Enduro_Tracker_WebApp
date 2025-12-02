@@ -4,16 +4,20 @@ and manage the RaceRider assignments for a selected category.
 
 Paths (main ones)
 -----------------
-GET  /races/new                 -> Create new race page (empty form)
-POST /races/save                -> Save new or existing race
-GET  /races/<race_id>/edit      -> Edit page; choose category via ?category=Professional
-POST /races/<race_id>/route/upload   -> Upload GPX for selected category
-POST /races/<race_id>/route/remove   -> Remove GPX for selected category
-GET  /races/<race_id>/route/geojson  -> Return GeoJSON for selected category (map uses this)
+GET  /races/new                               -> Create new race page (empty form)
+GET  /races/<race_id>/post                    -> Post-race view for a selected category
+POST /races/save                              -> Save new or existing race
+GET  /races/<race_id>/edit                    -> Edit page; choose category via ?category=Professional
+POST /races/<race_id>/route/upload            -> Upload GPX for selected category
+POST /races/<race_id>/route/remove            -> Remove GPX for selected category
+GET  /races/<race_id>/route/geojson           -> Return GeoJSON for selected category (map uses this)
+GET  /races/<race_id>/device/<device_id>/geojson      -> Build GeoJSON on the fly for a device (dynamic)
+GET  /races/<race_id>/race-rider/<race_rider_id>/track -> Return stored GeoJSON from track_hist for a race rider
+POST /races/<race_id>/race-rider/<race_rider_id>/manual-times -> Manually overwrite start/finish times
 
-POST /races/<race_id>/riders/add              -> Add a RaceRider row for this category
-POST /races/<race_id>/riders/<entry_id>/edit  -> Update an existing RaceRider row
-POST /races/<race_id>/riders/<entry_id>/remove-> Delete an existing RaceRider row
+POST /races/<race_id>/riders/add                     -> Add a RaceRider row for this category
+POST /races/<race_id>/riders/<entry_id>/edit         -> Update an existing RaceRider row
+POST /races/<race_id>/riders/<entry_id>/remove       -> Delete an existing RaceRider row
 """
 
 from datetime import datetime, timezone
@@ -25,10 +29,17 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from src.db.models import (
     SessionLocal, init_db,
-    Race, Route, Category, Rider, Device, RaceRider
+    Race, Route, Category, Rider, Device, RaceRider, TrackHist
 )
 from src.db.models import config as app_config  # already loaded from config.yaml
-from src.utils.gpx import gpx_to_geojson, build_geojson_for_device
+from src.utils.gpx import (
+    gpx_to_geojson,
+    build_geojson_for_device,
+    _parse_text_fixes,
+    _build_gpx_string,
+    _build_geojson_string,
+    filter_fixes_by_window,
+)
 
 bp_races = Blueprint("races", __name__, url_prefix="/races")
 
@@ -161,14 +172,30 @@ def post_race(race_id: int):
         riders_for_category = []
         if category_row:
             rider_rows = (
-                session.query(Rider.name, Rider.team, RaceRider.device_id)
+                # Pull everything needed in one query to avoid per-row lookups.
+                session.query(
+                    Rider.name,
+                    Rider.team,
+                    RaceRider.device_id,
+                    RaceRider.id,
+                    RaceRider.start_time_rfid,
+                    RaceRider.finish_time_rfid,
+                )
                 .join(RaceRider, RaceRider.rider_id == Rider.id)
                 .filter(RaceRider.category_id == category_row.id)
                 .order_by(Rider.name.asc())
                 .all()
             )
             riders_for_category = [
-                {"name": n, "team": t, "device_id": d} for (n, t, d) in rider_rows
+                {
+                    "name": n,
+                    "team": t,
+                    "device_id": d,
+                    "race_rider_id": rr_id,
+                    "start_time_rfid": start,
+                    "finish_time_rfid": finish,
+                }
+                for (n, t, d, rr_id, start, finish) in rider_rows
             ]
 
         return render_template(
@@ -195,6 +222,117 @@ def device_geojson(race_id: int, device_id: str):
         if not ok:
             return Response(result, status=404)
         return Response(result, mimetype="application/json")
+    finally:
+        session.close()
+
+
+@bp_races.route("/<int:race_id>/race-rider/<int:race_rider_id>/track", methods=["GET"])
+def race_rider_track(race_id: int, race_rider_id: int):
+    """
+    Return the stored GeoJSON for a specific race_rider (from track_hist).
+
+    This is optimized for the post-race view: it pulls a single column in one query,
+    joining just enough tables to ensure the race_rider belongs to the requested race.
+    """
+    session = SessionLocal()
+    try:
+        geojson_row = (
+            session.query(TrackHist.geojson)
+            .join(RaceRider, TrackHist.race_rider_id == RaceRider.id)
+            .join(Category, Category.id == RaceRider.category_id)
+            .join(Route, Route.id == Category.route_id)
+            .filter(Route.race_id == race_id, RaceRider.id == race_rider_id)
+            .order_by(TrackHist.id.desc())  # grab latest snapshot for this race_rider
+            .first()
+        )
+
+        if not geojson_row or not geojson_row[0]:
+            return Response("Track not found for this race rider.", status=404)
+
+        return Response(geojson_row[0], mimetype="application/json")
+    finally:
+        session.close()
+
+
+@bp_races.route("/<int:race_id>/race-rider/<int:race_rider_id>/manual-times", methods=["POST"])
+def manual_times(race_id: int, race_rider_id: int):
+    """
+    Manually overwrite start/finish RFID times for a race rider.
+
+    Expects JSON body:
+      {
+        "start_time": "<ISO8601 or empty>",   # optional; empty/None clears
+        "end_time": "<ISO8601 or empty>"      # optional; empty/None clears
+      }
+    """
+    data = request.get_json(silent=True) or {}
+    start_raw = (data.get("start_time") or "").strip()
+    end_raw = (data.get("end_time") or "").strip()
+
+    def _parse_iso(dt_str: str):
+        if not dt_str:
+            return None
+        try:
+            # Accept both Z and offset forms; default to naive if none given.
+            return datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+        except Exception:
+            return None
+
+    start_dt = _parse_iso(start_raw)
+    end_dt = _parse_iso(end_raw)
+
+    if start_raw and not start_dt:
+        return jsonify({"error": "Invalid start_time format"}), 400
+    if end_raw and not end_dt:
+        return jsonify({"error": "Invalid end_time format"}), 400
+
+    session = SessionLocal()
+    try:
+        rr = (
+            session.query(RaceRider)
+            .join(Category, RaceRider.category_id == Category.id)
+            .join(Route, Category.route_id == Route.id)
+            .filter(Route.race_id == race_id, RaceRider.id == race_rider_id)
+            .one_or_none()
+        )
+        if not rr:
+            return jsonify({"error": "Race rider not found"}), 404
+
+        # Update stored times
+        rr.start_time_rfid = start_dt
+        rr.finish_time_rfid = end_dt
+
+        # Rebuild trimmed track from the latest raw text (if available) and store as a new track_hist entry.
+        latest_track = (
+            session.query(TrackHist)
+            .filter(TrackHist.race_rider_id == rr.id)
+            .order_by(TrackHist.id.desc())
+            .first()
+        )
+
+        if latest_track and latest_track.raw_txt:
+            start_epoch = int(start_dt.timestamp()) if start_dt else None
+            finish_epoch = int(end_dt.timestamp()) if end_dt else None
+
+            fixes = _parse_text_fixes(latest_track.raw_txt)
+            trimmed = filter_fixes_by_window(fixes, start_epoch=start_epoch, finish_epoch=finish_epoch)
+            if trimmed:
+                gpx_text = _build_gpx_string(trimmed, creator=f"EnduroTracker {rr.device_id}")
+                geojson_text = _build_geojson_string(trimmed)
+                session.add(
+                    TrackHist(
+                        race_rider_id=rr.id,
+                        geojson=geojson_text,
+                        gpx=gpx_text,
+                        raw_txt=latest_track.raw_txt,
+                    )
+                )
+
+        session.commit()
+        return jsonify({"ok": True}), 200
+    except SQLAlchemyError as e:
+        session.rollback()
+        return jsonify({"error": f"DB error: {e}"}), 500
     finally:
         session.close()
 

@@ -1,19 +1,18 @@
 """
-GPX builder utilities.
+GPX/GeoJSON utilities.
 
-This module converts rows from the `points` table into a GPX 1.1 file and
-saves it to the `logs/` directory.
-
-Also Simple helpers to convert a GPX (XML text) into a GeoJSON string.
+Contains:
+- _iso8601_utc: epoch -> ISO8601 UTC helper.
+- _parse_text_fixes: clean line-delimited JSON fixes.
+- _build_gpx_string: construct GPX XML string from fixes.
+- _build_geojson_string: construct GeoJSON string from fixes.
+- build_gpx_for_device: build GPX file from points table.
+- build_geojson_for_device: build GeoJSON from points table (optionally save).
+- gpx_to_geojson: convert GPX text to GeoJSON string.
 
 Jargon:
 - GPX 1.1: an XML schema for GPS tracks. A minimal file has <gpx>, <trk>, <trkseg>, <trkpt>.
 - trk: "track", trkseg: "track segment", trkpt: "track point".
-
-Usage:
-    from src.utils.gpx import build_gpx_for_device
-
-    success, path_or_err = build_gpx_for_device(session, device_id="pi-001", out_dir="logs")
 """
 
 #### for running in vscode (comment out when on Raspberry Pi)
@@ -28,7 +27,7 @@ if VSCODE_TEST:
 
 import xml.etree.ElementTree as ET # the stdlib XML parser/builder (converts XML elements into something Python can work with)
 from datetime import datetime, timezone
-from typing import Tuple
+from typing import Tuple, List, Optional, Any
 
 from sqlalchemy import select, asc
 from src.db.models import Point, SessionLocal, init_db # init_db is only for testing here
@@ -60,6 +59,153 @@ def _iso8601_utc(epoch: int) -> str:
     Convert epoch seconds (UTC) to ISO 8601 format used in GPX, e.g. 2025-10-14T12:34:56Z
     """
     return datetime.fromtimestamp(epoch, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+# ---------------------------------------------------------------------------
+# Helpers to parse text logs and build GPX/GeoJSON strings
+# ---------------------------------------------------------------------------
+
+def _parse_text_fixes(raw_text: str):
+    """
+    Parse line-delimited JSON fixes from raw text.
+
+    Keeps rows that decode to JSON objects and contain non-null utc/lat/lon.
+    Drops malformed or incomplete rows.
+
+    Args:
+        raw_text (str): Raw text payload containing one JSON object per line.
+
+    Returns:
+        list[dict]: Cleaned fixes with utc/lat/lon and optional fields; bad rows removed.
+    """
+    fixes = []
+    for line in raw_text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+            utc = obj.get("utc")
+            lat = obj.get("lat")
+            lon = obj.get("lon")
+            # Skip rows missing required fields or containing zeroed values (treated as invalid)
+            if utc in (None, 0, 0.0) or lat in (None, 0, 0.0) or lon in (None, 0, 0.0):
+                continue
+            fixes.append({
+                "utc": utc,
+                "lat": lat,
+                "lon": lon,
+                "alt": obj.get("alt"),
+                "sog": obj.get("sog"),
+                "cog": obj.get("cog"),
+                "fx": obj.get("fx"),
+                "hdop": obj.get("hdop"),
+                "nsat": obj.get("nsat"),
+            })
+        except Exception:
+            # bad line: skip
+            continue
+    return fixes
+
+
+def _build_gpx_string(fixes, creator: str = "EnduroTracker") -> str:
+    """
+    Build a GPX 1.1 XML string from cleaned fixes (list of dicts).
+
+    Args:
+        fixes (list[dict]): Cleaned fixes containing at least utc/lat/lon.
+        creator (str): Creator metadata for the GPX file.
+
+    Returns:
+        str: GPX XML string.
+    """
+    gpx_ns = "http://www.topografix.com/GPX/1/1"
+    xsi_ns = "http://www.w3.org/2001/XMLSchema-instance"
+    schema_loc = "http://www.topografix.com/GPX/1/1/gpx.xsd"
+    ET.register_namespace("", gpx_ns)
+    ET.register_namespace("xsi", xsi_ns)
+
+    gpx = ET.Element(
+        ET.QName(gpx_ns, "gpx"),
+        {
+            ET.QName(xsi_ns, "schemaLocation"): f"{gpx_ns} {schema_loc}",
+            "version": "1.1",
+            "creator": creator,
+        },
+    )
+
+    meta = ET.SubElement(gpx, ET.QName(gpx_ns, "metadata"))
+    ET.SubElement(meta, ET.QName(gpx_ns, "time")).text = _iso8601_utc(int(fixes[0]["utc"]))
+
+    trk = ET.SubElement(gpx, ET.QName(gpx_ns, "trk"))
+    ET.SubElement(trk, ET.QName(gpx_ns, "name")).text = "Log Track"
+    trkseg = ET.SubElement(trk, ET.QName(gpx_ns, "trkseg"))
+
+    for p in fixes:
+        pt = ET.SubElement(
+            trkseg,
+            ET.QName(gpx_ns, "trkpt"),
+            {"lat": f"{float(p['lat']):.6f}", "lon": f"{float(p['lon']):.6f}"}
+        )
+        if p.get("alt") is not None:
+            ET.SubElement(pt, ET.QName(gpx_ns, "ele")).text = f"{float(p['alt']):.1f}"
+        if p.get("utc") is not None:
+            ET.SubElement(pt, ET.QName(gpx_ns, "time")).text = _iso8601_utc(int(p["utc"]))
+
+    return ET.tostring(gpx, encoding="utf-8", xml_declaration=True).decode("utf-8")
+
+
+def _build_geojson_string(fixes) -> str:
+    """
+    Build a GeoJSON LineString string from cleaned fixes.
+
+    Args:
+        fixes (list[dict]): Cleaned fixes containing at least lat/lon.
+
+    Returns:
+        str: Compact GeoJSON FeatureCollection as a string.
+    """
+    coords = [[float(p["lon"]), float(p["lat"])] for p in fixes]
+    gj = {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "properties": {"src": "text_log"},
+                "geometry": {"type": "LineString", "coordinates": coords},
+            }
+        ],
+    }
+    return json.dumps(gj, separators=(",", ":"))
+
+
+def filter_fixes_by_window(
+    fixes: List[dict],
+    start_epoch: Optional[int] = None,
+    finish_epoch: Optional[int] = None,
+) -> List[dict]:
+    """
+    Trim fixes to an optional [start_epoch, finish_epoch] window.
+
+    - Safely coerces "utc" to int; drops rows without a usable timestamp.
+    - Applies start and/or finish bounds independently (one-sided windows allowed).
+    """
+    if start_epoch is None and finish_epoch is None:
+        return fixes
+
+    trimmed = []
+    for p in fixes:
+        utc_val: Any = p.get("utc")
+        try:
+            t_epoch = int(utc_val)
+        except Exception:
+            continue
+        if start_epoch is not None and t_epoch < start_epoch:
+            continue
+        if finish_epoch is not None and t_epoch > finish_epoch:
+            continue
+        trimmed.append(p)
+    return trimmed
+
 
 def build_gpx_for_device(device_id: str, session: Session = SessionLocal, out_dir: str = "logs") -> Tuple[bool, str]:
     """

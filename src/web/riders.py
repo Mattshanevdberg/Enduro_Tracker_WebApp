@@ -7,6 +7,11 @@ Notes
 - Category is constrained in code to three allowed values.
 - On success, shows a confirmation message on the same page.
 - Now also lists existing riders and supports editing them on the same form.
+
+Paths
+-----
+GET/POST /riders/new              -> create a rider (also serves the form+table)
+GET/POST /riders/<rider_id>/edit  -> edit an existing rider
 """
 
 from flask import Blueprint, request, render_template, abort

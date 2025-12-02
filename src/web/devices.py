@@ -1,10 +1,8 @@
 """
 Devices management: create and edit Device rows.
 
-- GET  /devices/           -> list devices + create form
-- POST /devices/           -> create new device (custom primary key 'id')
-- GET  /devices/<id>/edit  -> edit page for device_info
-- POST /devices/<id>/edit  -> save edits
+- GET/POST /devices/           -> list devices + create form / create new device (custom primary key 'id')
+- GET/POST /devices/<id>/edit  -> edit page for device_info / save edits
 
 Notes
 -----

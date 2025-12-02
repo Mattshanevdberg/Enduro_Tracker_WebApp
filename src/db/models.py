@@ -256,9 +256,11 @@ class RaceRider(Base):
     comm_setting = Column(String(32), nullable=True)
     active = Column(Boolean, nullable=False, default=True)
     recording = Column(Boolean, nullable=False, default=True)
-    start_time = Column(DateTime(timezone=True), nullable=True) # when the rider starts the race - set by the RFID on the start line
-    finish_time = Column(DateTime(timezone=True), nullable=True)# when the rider finishes the race - set by the RFID on the start line
-    pi_offset_time = Column(Integer, nullable=True) # offset in seconds to apply to the pi's clock to sync with official 
+    start_time_rfid = Column(DateTime(timezone=True), nullable=True) # when the rider starts the race - set by the RFID on the start line
+    start_time_pi = Column(DateTime(timezone=True), nullable=True) # when the rider starts the race - set by the PI on the start line
+    finish_time_rfid = Column(DateTime(timezone=True), nullable=True)# when the rider finishes the race - set by the RFID on the start line
+    finish_time_pi = Column(DateTime(timezone=True), nullable=True)# when the rider finishes the race - set by the PI on the start line
+    #pi_offset_time = Column(Integer, nullable=True) # offset in seconds to apply to the pi's clock to sync with official - removed as can just calculate it
 
     rider = relationship("Rider", back_populates="race_entries")
     device = relationship("Device", back_populates="race_riders")
@@ -329,6 +331,7 @@ class TrackHist(Base):
     race_rider_id = Column(Integer, ForeignKey("race_riders.id"), nullable=False, index=True)
     geojson = Column(Text, nullable=True)
     gpx = Column(Text, nullable=True)
+    raw_txt = Column(Text, nullable=True)
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
 
     race_rider = relationship("RaceRider", back_populates="track_history")

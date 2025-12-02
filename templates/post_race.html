@@ -77,6 +77,9 @@
               <th>Name</th>
               <th>Team</th>
               <th>Device</th>
+              <th>Start Time</th>
+              <th>End Time</th>
+              <th>Race Rider ID</th>
               <th>Action</th>
             </tr>
           </thead>
@@ -86,12 +89,23 @@
                 <td>{{ r.name }}</td>
                 <td>{{ r.team or '—' }}</td>
                 <td>{{ r.device_id or '—' }}</td>
+                <td>{{ r.start_time_rfid or 'waiting...' }}</td>
+                <td>{{ r.finish_time_rfid or 'waiting...' }}</td>
+                <td>{{ r.race_rider_id }}</td>
                <td>
                   <button class="btn device-track-btn"
                           data-name="{{ r.name }}"
                           data-team="{{ r.team or 'No team' }}"
-                          data-device="{{ r.device_id or '' }}">
+                          data-device="{{ r.device_id or '' }}"
+                          data-race-rider-id="{{ r.race_rider_id }}">
                     Show Track
+                  </button>
+                  <button class="btn manual-edit-btn"
+                          data-name="{{ r.name }}"
+                          data-race-rider-id="{{ r.race_rider_id }}"
+                          data-start="{{ r.start_time_rfid or '' }}"
+                          data-end="{{ r.finish_time_rfid or '' }}">
+                    Manual Edit
                   </button>
                 </td>
               </tr>
@@ -105,6 +119,26 @@
   </div>
 
   {% if categories and selected_category %}
+  <!-- Lightweight modal for manual start/end edit -->
+  <div id="manual-modal" class="modal-backdrop" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.4); align-items:center; justify-content:center; z-index:9999;">
+    <div class="modal-card" style="background:#fff; padding:1rem; border-radius:6px; max-width:420px; width:90%; box-shadow:0 6px 18px rgba(0,0,0,0.2);">
+      <h4 id="manual-title" style="margin:0 0 .5rem 0;">Manual timing</h4>
+      <p style="margin:.25rem 0 .75rem 0; color:#555;">Enter start/end times (local) for this rider.</p>
+      <label style="display:block; margin-bottom:.5rem;">
+        <span style="display:block; font-weight:600; margin-bottom:.25rem;">Start time</span>
+        <input id="manual-start" type="datetime-local" style="width:100%; padding:.4rem;" />
+      </label>
+      <label style="display:block; margin-bottom:.75rem;">
+        <span style="display:block; font-weight:600; margin-bottom:.25rem;">End time</span>
+        <input id="manual-end" type="datetime-local" style="width:100%; padding:.4rem;" />
+      </label>
+      <div style="display:flex; justify-content:flex-end; gap:.5rem;">
+        <button id="manual-cancel" class="btn" type="button">Cancel</button>
+        <button id="manual-save" class="btn" type="button" style="background:#d9534f; color:#fff;">Save</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     // Lightweight map + track display:
     // - On load: draw the route GeoJSON for the selected category.
@@ -175,30 +209,94 @@
     // When clicking "Show Track", fetch per-device GeoJSON and render it on the same map.
     document.querySelectorAll('.device-track-btn').forEach(btn => {
       btn.addEventListener('click', () => {
-        const deviceId = (btn.dataset.device || "").trim();
+        const deviceId = (btn.dataset.device || "").trim(); // still shown in UI/status for clarity
+        const raceRiderId = (btn.dataset.raceRiderId || "").trim();
         const riderName = btn.dataset.name || 'Unknown rider';
 
-        if (!deviceId) {
-          if (statusNode) statusNode.textContent = "No device linked for this rider.";
+        if (!raceRiderId) {
+          if (statusNode) statusNode.textContent = "No race rider id linked for this rider.";
           return;
         }
 
-        if (statusNode) statusNode.textContent = `Loading track for ${riderName} (${deviceId})...`;
+        if (statusNode) statusNode.textContent = `Loading stored track for ${riderName} (race rider ${raceRiderId}${deviceId ? `, device ${deviceId}` : ""})...`;
 
-        fetch(`/races/${raceId}/device/${encodeURIComponent(deviceId)}/geojson`)
+        fetch(`/races/${raceId}/race-rider/${encodeURIComponent(raceRiderId)}/track`)
           .then(resp => {
             if (!resp.ok) throw new Error("Not found");
             return resp.json();
           })
           .then(gj => {
             drawDeviceTrack(gj);
-            if (statusNode) statusNode.textContent = `Showing track for ${riderName} (${deviceId}).`;
+            if (statusNode) statusNode.textContent = `Showing stored track for ${riderName} (race rider ${raceRiderId}${deviceId ? `, device ${deviceId}` : ""}).`;
           })
           .catch(() => {
-            if (statusNode) statusNode.textContent = "No track available for this device.";
+            if (statusNode) statusNode.textContent = "No stored track available for this race rider.";
           });
       });
     });
+
+    // Manual edit: modal with datetime-local inputs for a friendlier UX.
+    (function setupManualModal() {
+      const modal = document.getElementById('manual-modal');
+      if (!modal) return;
+      const startInput = document.getElementById('manual-start');
+      const endInput = document.getElementById('manual-end');
+      const title = document.getElementById('manual-title');
+      const cancelBtn = document.getElementById('manual-cancel');
+      const saveBtn = document.getElementById('manual-save');
+
+      let currentRaceRiderId = null;
+
+      function openModal(raceRiderId, riderName, startVal, endVal) {
+        currentRaceRiderId = raceRiderId;
+        title.textContent = `Manual timing for ${riderName}`;
+        startInput.value = startVal || "";
+        endInput.value = endVal || "";
+        modal.style.display = "flex";
+      }
+
+      function closeModal() {
+        modal.style.display = "none";
+        currentRaceRiderId = null;
+      }
+
+      cancelBtn.addEventListener('click', closeModal);
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) closeModal();
+      });
+
+      saveBtn.addEventListener('click', () => {
+        if (!currentRaceRiderId) return;
+        const confirmed = window.confirm("Are you sure? This is a permanent change. Original times will be lost.");
+        if (!confirmed) return;
+
+        fetch(`/races/${raceId}/race-rider/${encodeURIComponent(currentRaceRiderId)}/manual-times`, {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({
+            start_time: startInput.value,
+            end_time: endInput.value,
+          }),
+        })
+          .then(resp => {
+            if (!resp.ok) throw new Error("update failed");
+            return resp.json();
+          })
+          .then(() => window.location.reload())
+          .catch(() => alert("Failed to update times. Please check format and try again."));
+      });
+
+      document.querySelectorAll('.manual-edit-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const raceRiderId = (btn.dataset.raceRiderId || "").trim();
+          const riderName = btn.dataset.name || 'Unknown rider';
+          const startVal = (btn.dataset.start || "").replace(" ", "T");
+          const endVal = (btn.dataset.end || "").replace(" ", "T");
+          if (!raceRiderId) return;
+          openModal(raceRiderId, riderName, startVal, endVal);
+        });
+      });
+    })();
   </script>
   {% endif %}
 </body>
