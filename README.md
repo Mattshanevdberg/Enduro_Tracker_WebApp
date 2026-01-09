@@ -101,8 +101,8 @@ which templates call each endpoint and the UI action that triggers it.
   - No current template usage; available for external preview calls.
 
 ### race_rider_track (GET `/races/<race_id>/race-rider/<race_rider_id>/track`)
-- Purpose: Return stored GeoJSON track for a race rider from `track_hist`.
-- Reads: `TrackHist`, `RaceRider`, `Category`, `Route`.
+- Purpose: Return stored GeoJSON track for a race rider, preferring `track_hist` and falling back to `track_cache`.
+- Reads: `TrackHist`, `TrackCache`, `RaceRider`, `Category`, `Route`.
 - Writes: None.
 - Returns: GeoJSON payload (JSON).
 - Called from:
@@ -264,7 +264,7 @@ which templates call each endpoint and the UI action that triggers it.
 
 ### build_geojson_for_device
 - Purpose: Query `Point` rows for a device and build a GeoJSON LineString.
-- Reads: `Point` (ordered by `t_epoch`).
+- Reads: `Point` (ordered by `t_epoch`), optionally filtered by `start_epoch`/`finish_epoch`.
 - Writes: optional GeoJSON file to `out_dir` when `save=True`.
 - Returns: `(ok, path_or_json)` tuple.
 - Called from:
@@ -314,18 +314,18 @@ which templates call each endpoint and the UI action that triggers it.
 - Called from:
   - `main` only (internal helper).
 
-### _latest_race_rider_id
-- Purpose: Find the newest `race_rider.id` associated with a device.
-- Reads: `RaceRider`.
+### _latest_race_rider_window
+- Purpose: Find the newest `race_rider.id` and its start/finish timing window for a device.
+- Reads: `RaceRider.start_time_rfid`, `RaceRider.finish_time_rfid`.
 - Writes: None.
-- Returns: `race_rider_id` or `None`.
+- Returns: `(race_rider_id, start_epoch, finish_epoch)` with `None` values when missing.
 - Called from:
   - `main` only (internal helper).
 
 ### main
 - Purpose: Live GeoJSON cache worker for the race_day display.
-- Reads: `Point` (latest `t_epoch`), `RaceRider` (latest rider for device).
+- Reads: `Point` (latest `t_epoch`), `RaceRider` (latest rider for device + timing window).
 - Writes: `TrackCache.geojson` (upsert per `race_rider_id`), `TrackCache.updated_at`.
-- Behavior: polls every `SLEEP_SEC = 5.0` and only rebuilds when new points arrive.
+- Behavior: polls every `SLEEP_SEC = 5.0`, only rebuilds when new points arrive, and trims tracks to the rider’s start/end times when present.
 - Called from:
   - CLI: `python -m src.workers.gpx_worker` (background process).

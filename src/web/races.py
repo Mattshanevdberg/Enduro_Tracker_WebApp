@@ -29,7 +29,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from src.db.models import (
     SessionLocal, init_db,
-    Race, Route, Category, Rider, Device, RaceRider, TrackHist
+    Race, Route, Category, Rider, Device, RaceRider, TrackCache, TrackHist
 )
 from src.db.models import config as app_config  # already loaded from config.yaml
 from src.utils.gpx import (
@@ -247,7 +247,17 @@ def race_rider_track(race_id: int, race_rider_id: int):
         )
 
         if not geojson_row or not geojson_row[0]:
-            return Response("Track not found for this race rider.", status=404)
+            cache_row = (
+                session.query(TrackCache.geojson)
+                .join(RaceRider, TrackCache.race_rider_id == RaceRider.id)
+                .join(Category, Category.id == RaceRider.category_id)
+                .join(Route, Route.id == Category.route_id)
+                .filter(Route.race_id == race_id, RaceRider.id == race_rider_id)
+                .first()
+            )
+            if not cache_row or not cache_row[0]:
+                return Response("Track not found for this race rider.", status=404)
+            return Response(cache_row[0], mimetype="application/json")
 
         return Response(geojson_row[0], mimetype="application/json")
     finally:

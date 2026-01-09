@@ -303,6 +303,8 @@ def build_geojson_for_device(
     session: Session = SessionLocal,
     out_dir: str = "logs",
     save: bool = True,
+    start_epoch: Optional[int] = None,
+    finish_epoch: Optional[int] = None,
 ) -> Tuple[bool, str]:
     """
     Build (or rebuild) a GeoJSON LineString for a given device_id from the points table.
@@ -318,6 +320,10 @@ def build_geojson_for_device(
     save : bool
         When True (default), write <device_id>.geojson to disk and return its path.
         When False, skip writing and return the GeoJSON string directly.
+    start_epoch : int | None
+        Optional lower bound (inclusive) for Point.t_epoch filtering.
+    finish_epoch : int | None
+        Optional upper bound (inclusive) for Point.t_epoch filtering.
 
     Returns
     -------
@@ -327,15 +333,16 @@ def build_geojson_for_device(
     """
     try:
         # Fetch ordered points once; avoids multiple round-trips.
-        rows = (
-            session.execute(
-                select(Point).where(Point.device_id == device_id).order_by(asc(Point.t_epoch))
-            )
-            .scalars()
-            .all()
-        )
+        stmt = select(Point).where(Point.device_id == device_id)
+        if start_epoch is not None:
+            stmt = stmt.where(Point.t_epoch >= start_epoch)
+        if finish_epoch is not None:
+            stmt = stmt.where(Point.t_epoch <= finish_epoch)
+        rows = session.execute(stmt.order_by(asc(Point.t_epoch))).scalars().all()
 
         if not rows:
+            if start_epoch is not None or finish_epoch is not None:
+                return False, f"No points found for device_id={device_id} in requested window"
             return False, f"No points found for device_id={device_id}"
 
         coords = []
