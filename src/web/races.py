@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from flask import Blueprint, request, render_template, redirect, url_for, Response, jsonify
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
 from src.db.models import (
@@ -40,30 +40,12 @@ from src.utils.gpx import (
     _build_geojson_string,
     filter_fixes_by_window,
 )
+from src.utils.time import datetime_to_epoch, epoch_to_datetime, iso_to_epoch
 
 bp_races = Blueprint("races", __name__, url_prefix="/races")
 
 # Helper: read allowed categories from config.yaml
 ALLOWED_CATEGORIES = app_config.get("categories", ["Professional", "Open", "Junior"])
-
-
-def _parse_datetime(date_str: str, time_str: str) -> Optional[datetime]:
-    """
-    Build a timezone-aware UTC datetime from separate date and time strings.
-    Empty strings return None.
-
-    Expected formats:
-      date: YYYY-MM-DD
-      time: HH:MM  (24h)
-    """
-    if not date_str or not time_str:
-        return None
-    try:
-        dt = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
-        # Store as UTC; if you want local timezone, adjust here
-        return dt.replace(tzinfo=timezone.utc)
-    except Exception:
-        return None
 
 
 def _find_or_create_route_for_category(session, race_id: int, category_name: str) -> tuple[Route, Category]:
@@ -133,6 +115,18 @@ def post_race(race_id: int):
         if not race:
             return Response("Race not found.", status=404)
 
+        # Convert epoch to datetime for template display (date/time inputs).
+        if race.starts_at_epoch is not None:
+            race.starts_at = epoch_to_datetime(race.starts_at_epoch)
+        else:
+            race.starts_at = None
+
+        # Convert epoch to datetime for display without mutating stored values.
+        if race.starts_at_epoch is not None:
+            race.starts_at = epoch_to_datetime(race.starts_at_epoch)
+        else:
+            race.starts_at = None
+
         # -- Gather category names actually attached to this race (via Category -> Route).
         categories = [
             row[0]
@@ -178,25 +172,35 @@ def post_race(race_id: int):
                     Rider.team,
                     RaceRider.device_id,
                     RaceRider.id,
-                    RaceRider.start_time_rfid,
-                    RaceRider.finish_time_rfid,
+                    RaceRider.start_time_rfid_epoch,
+                    RaceRider.finish_time_rfid_epoch,
                 )
                 .join(RaceRider, RaceRider.rider_id == Rider.id)
                 .filter(RaceRider.category_id == category_row.id)
                 .order_by(Rider.name.asc())
                 .all()
             )
-            riders_for_category = [
-                {
-                    "name": n,
-                    "team": t,
-                    "device_id": d,
-                    "race_rider_id": rr_id,
-                    "start_time_rfid": start,
-                    "finish_time_rfid": finish,
-                }
-                for (n, t, d, rr_id, start, finish) in rider_rows
-            ]
+            riders_for_category = []
+            for (n, t, d, rr_id, start_epoch, finish_epoch) in rider_rows:
+                riders_for_category.append(
+                    {
+                        "name": n,
+                        "team": t,
+                        "device_id": d,
+                        "race_rider_id": rr_id,
+                        # Use naive local-time strings for UI (datetime-local inputs expect no offset).
+                        "start_time_rfid": (
+                            epoch_to_datetime(start_epoch).replace(tzinfo=None)
+                            if start_epoch is not None
+                            else None
+                        ),
+                        "finish_time_rfid": (
+                            epoch_to_datetime(finish_epoch).replace(tzinfo=None)
+                            if finish_epoch is not None
+                            else None
+                        ),
+                    }
+                )
 
         return render_template(
             "post_race.html",
@@ -274,26 +278,28 @@ def manual_times(race_id: int, race_rider_id: int):
         "start_time": "<ISO8601 or empty>",   # optional; empty/None clears
         "end_time": "<ISO8601 or empty>"      # optional; empty/None clears
       }
+
+    Timezone handling:
+      - Inputs must be timezone-naive (e.g., from a datetime-local input).
+      - Naive values are interpreted in the configured local timezone and
+        converted to UTC epoch seconds for storage.
     """
     data = request.get_json(silent=True) or {}
     start_raw = (data.get("start_time") or "").strip()
     end_raw = (data.get("end_time") or "").strip()
 
-    def _parse_iso(dt_str: str):
-        if not dt_str:
-            return None
-        try:
-            # Accept both Z and offset forms; default to naive if none given.
-            return datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
-        except Exception:
-            return None
+    try:
+        start_epoch = iso_to_epoch(start_raw, allow_tz=False)
+    except ValueError:
+        start_epoch = None
+    try:
+        end_epoch = iso_to_epoch(end_raw, allow_tz=False)
+    except ValueError:
+        end_epoch = None
 
-    start_dt = _parse_iso(start_raw)
-    end_dt = _parse_iso(end_raw)
-
-    if start_raw and not start_dt:
+    if start_raw and start_epoch is None:
         return jsonify({"error": "Invalid start_time format"}), 400
-    if end_raw and not end_dt:
+    if end_raw and end_epoch is None:
         return jsonify({"error": "Invalid end_time format"}), 400
 
     session = SessionLocal()
@@ -308,9 +314,9 @@ def manual_times(race_id: int, race_rider_id: int):
         if not rr:
             return jsonify({"error": "Race rider not found"}), 404
 
-        # Update stored times
-        rr.start_time_rfid = start_dt
-        rr.finish_time_rfid = end_dt
+        # Update stored times (epoch seconds, UTC).
+        rr.start_time_rfid_epoch = start_epoch
+        rr.finish_time_rfid_epoch = end_epoch
 
         # Rebuild trimmed track from the latest raw text (if available) and store as a new track_hist entry.
         latest_track = (
@@ -321,9 +327,6 @@ def manual_times(race_id: int, race_rider_id: int):
         )
 
         if latest_track and latest_track.raw_txt:
-            start_epoch = int(start_dt.timestamp()) if start_dt else None
-            finish_epoch = int(end_dt.timestamp()) if end_dt else None
-
             fixes = _parse_text_fixes(latest_track.raw_txt)
             trimmed = filter_fixes_by_window(fixes, start_epoch=start_epoch, finish_epoch=finish_epoch)
             if trimmed:
@@ -335,6 +338,7 @@ def manual_times(race_id: int, race_rider_id: int):
                         geojson=geojson_text,
                         gpx=gpx_text,
                         raw_txt=latest_track.raw_txt,
+                        updated_at_epoch=datetime_to_epoch(datetime.now(timezone.utc)),
                     )
                 )
 
@@ -367,7 +371,14 @@ def save_race():
         if not name:
             return Response("Race name is required.", status=400)
 
-        starts_at = _parse_datetime(start_date, start_time)
+        # Convert date/time input into epoch seconds (UTC), using local tz for naive input.
+        starts_at_epoch: Optional[int] = None
+        if start_date and start_time:
+            try:
+                dt = datetime.strptime(f"{start_date} {start_time}", "%Y-%m-%d %H:%M")
+                starts_at_epoch = datetime_to_epoch(dt)
+            except Exception:
+                starts_at_epoch = None
 
         if race_id:
             race = session.query(Race).get(int(race_id))
@@ -376,14 +387,14 @@ def save_race():
             race.name = name
             race.website = website
             race.description = description
-            race.starts_at = starts_at
+            race.starts_at_epoch = starts_at_epoch
             race.active = active
         else:
             race = Race(
                 name=name,
                 website=website,
                 description=description,
-                starts_at=starts_at,
+                starts_at_epoch=starts_at_epoch,
                 active=active,
             )
             session.add(race)

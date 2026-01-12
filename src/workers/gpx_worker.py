@@ -34,6 +34,7 @@ from typing import Optional, Tuple
 from sqlalchemy import select, func
 from src.db.models import SessionLocal, Point, RaceRider, TrackCache, init_db
 from src.utils.gpx import build_geojson_for_device
+from src.utils.time import datetime_to_epoch
 
 SLEEP_SEC = 5.0  # poll frequency; adjust as needed
 
@@ -49,16 +50,16 @@ def _latest_race_rider_window(session, device_id: str) -> Tuple[Optional[int], O
     """
     Return the latest race_rider_id for a device plus its timing window.
 
-    We use RFID times to match how track_hist trimming works elsewhere:
-      - start_time_rfid -> start_epoch
-      - finish_time_rfid -> finish_epoch
+    We use RFID epoch columns to match how track_hist trimming works elsewhere:
+      - start_time_rfid_epoch -> start_epoch
+      - finish_time_rfid_epoch -> finish_epoch
     """
     row = (
         session.execute(
             select(
                 RaceRider.id,
-                RaceRider.start_time_rfid,
-                RaceRider.finish_time_rfid,
+                RaceRider.start_time_rfid_epoch,
+                RaceRider.finish_time_rfid_epoch,
             )
             .where(RaceRider.device_id == device_id)
             .order_by(RaceRider.id.desc())
@@ -69,11 +70,8 @@ def _latest_race_rider_window(session, device_id: str) -> Tuple[Optional[int], O
     if not row:
         return None, None, None
 
-    race_rider_id, start_dt, finish_dt = row
-    # Convert to epoch seconds so the Point query can filter directly on t_epoch.
+    race_rider_id, start_epoch, finish_epoch = row
     # Either bound can be None (one-sided window), which keeps the query flexible.
-    start_epoch = int(start_dt.timestamp()) if start_dt else None
-    finish_epoch = int(finish_dt.timestamp()) if finish_dt else None
     return race_rider_id, start_epoch, finish_epoch
 
 def main():
@@ -132,19 +130,19 @@ def main():
                     continue
 
                 geojson_str = geojson_or_err
-                now = datetime.now(timezone.utc)
+                now_epoch = datetime_to_epoch(datetime.now(timezone.utc))
 
                 # Upsert: replace existing cache for this race_rider_id or create a new row.
                 cache_row = session.get(TrackCache, race_rider_id)
                 if cache_row:
                     cache_row.geojson = geojson_str
-                    cache_row.updated_at = now
+                    cache_row.updated_at_epoch = now_epoch
                 else:
                     session.add(
                         TrackCache(
                             race_rider_id=race_rider_id,
                             geojson=geojson_str,
-                            updated_at=now,
+                            updated_at_epoch=now_epoch,
                         )
                     )
 

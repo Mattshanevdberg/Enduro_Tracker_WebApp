@@ -5,6 +5,7 @@ Home page routes (simple navigation hub).
 from flask import Blueprint, render_template
 
 from src.db.models import SessionLocal, Race, config as app_config
+from src.utils.time import epoch_to_datetime
 
 bp_home = Blueprint("home", __name__)
 
@@ -15,9 +16,16 @@ def home_page():
     """
     session = SessionLocal()
     try:
-        races = session.query(Race).order_by(Race.starts_at.asc()).all()
+        races = session.query(Race).order_by(Race.starts_at_epoch.asc()).all()
     finally:
         session.close()
+
+    # Convert epochs to datetimes for display in the template.
+    for race in races:
+        if race.starts_at_epoch is not None:
+            race.starts_at = epoch_to_datetime(race.starts_at_epoch)
+        else:
+            race.starts_at = None
 
     categories = app_config.get("categories") or ["Professional", "Open", "Junior"]
     default_category = categories[0] if categories else ""

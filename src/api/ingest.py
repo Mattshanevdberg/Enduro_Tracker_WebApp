@@ -19,7 +19,7 @@ Notes:
 import json
 import os
 import yaml
-from datetime import datetime
+from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
@@ -39,6 +39,7 @@ from src.db.models import SessionLocal, init_db, IngestRaw, RaceRider, TrackHist
 # from src.db.models import Point   # enable when parsing points now
 
 from src.utils.gpx import _parse_text_fixes, _build_gpx_string, _build_geojson_string, filter_fixes_by_window  # reuse time formatter for GPX output
+from src.utils.time import datetime_to_epoch
 
 # bp instantiates a Flask Blueprint, which is a reusable bundle of routes, error handlers, etc. for modular apps. 
 # The variable bp holds that blueprint so you can register routes on it and later attach it to the main app. 
@@ -105,7 +106,14 @@ def upload():
 
     session = SessionLocal()
     try:
-        session.add(IngestRaw(device_id=device_id, payload_json=compact_json))
+        # Store epoch mirror immediately so we can rely on it in Phase C.
+        session.add(
+            IngestRaw(
+                device_id=device_id,
+                payload_json=compact_json,
+                received_at_epoch=datetime_to_epoch(datetime.now(timezone.utc)),
+            )
+        )
         session.commit()
     except SQLAlchemyError as e:
         session.rollback()
@@ -243,16 +251,13 @@ def upload_text():
         session = SessionLocal()
         try:
             row = session.execute(
-                select(RaceRider.id, RaceRider.start_time_rfid, RaceRider.finish_time_rfid)
+                select(RaceRider.id, RaceRider.start_time_rfid_epoch, RaceRider.finish_time_rfid_epoch)
                 .where(RaceRider.device_id == device_id)
                 .order_by(RaceRider.id.desc())
                 .limit(1)
             ).first()
             if row:
-                race_rider_id, start_dt, finish_dt = row
-                # Convert stored timezone-aware datetimes to epoch seconds for fast comparisons.
-                start_epoch = int(start_dt.timestamp()) if start_dt else None
-                finish_epoch = int(finish_dt.timestamp()) if finish_dt else None
+                race_rider_id, start_epoch, finish_epoch = row
         finally:
             session.close()
 
@@ -269,7 +274,15 @@ def upload_text():
     if race_rider_id:
         session = SessionLocal()
         try:
-            session.add(TrackHist(race_rider_id=race_rider_id, geojson=fixes_geojson, gpx=fixes_gpx, raw_txt=raw_fixes))
+            session.add(
+                TrackHist(
+                    race_rider_id=race_rider_id,
+                    geojson=fixes_geojson,
+                    gpx=fixes_gpx,
+                    raw_txt=raw_fixes,
+                    updated_at_epoch=datetime_to_epoch(datetime.now(timezone.utc)),
+                )
+            )
             session.commit()
         except SQLAlchemyError:
             session.rollback()

@@ -4,6 +4,7 @@
     "api_host": "0.0.0.0",
     "api_port": 5000,
     "allowed_origins": ["*"],
+    "timezone": "Africa/Johannesburg", #"UTC", # this is the default timezone for the application
     "category": ["Professional", "Open", "Junior"]
   },
   "example": "example_text"

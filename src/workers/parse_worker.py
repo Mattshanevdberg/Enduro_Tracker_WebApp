@@ -1,5 +1,5 @@
 """
-Background parser: reads unprocessed rows from IngestRaw, parses 'f' list into Point, marks processed.
+Background parser: reads unprocessed rows from IngestRaw, parses 'f' list into Point, marks processed (epoch).
 
 Run (dev):
   source .venv/bin/activate
@@ -28,13 +28,18 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import select
 
 from src.db.models import SessionLocal, init_db, IngestRaw, Point
+from src.utils.time import datetime_to_epoch
 
 # ---- Configuration ----
 BATCH_SIZE = 200          # number of IngestRaw rows to process per loop
 SLEEP_SEC  = 1.0          # idle sleep when no work
 SCALE_INPUT = True        # True: de-scale into human floats; False: store exact raw scalars
 
-def _convert_fix(row: List[Optional[int]], device_id: str) -> Optional[Point]:
+def _convert_fix(
+    row: List[Optional[int]],
+    device_id: str,
+    received_at_epoch: Optional[int] = None,
+) -> Optional[Point]:
     """
     Convert one compact fix array to a Point instance.
 
@@ -71,7 +76,8 @@ def _convert_fix(row: List[Optional[int]], device_id: str) -> Optional[Point]:
             sog=sog, cog=cog, hdop=hdop,
             fx=int(fx) if fx is not None else None,
             nsat=int(nsat) if nsat is not None else None,
-            # received_at auto-populates with server time
+            # received_at auto-populates with server time; received_at_epoch is set explicitly.
+            received_at_epoch=received_at_epoch,
         )
     except Exception:
         # Any parse error: drop this fix
@@ -80,10 +86,10 @@ def _convert_fix(row: List[Optional[int]], device_id: str) -> Optional[Point]:
 def _process_batch_once() -> int:
     """
     Parse one batch of unprocessed IngestRaw rows:
-      - fetch rows where processed_at IS NULL
+      - fetch rows where processed_at_epoch IS NULL
       - for each row: parse payload_json -> Point[]
       - bulk insert Point
-      - mark IngestRaw.processed_at (and parse_error if needed)
+      - mark IngestRaw.processed_at_epoch (and parse_error if needed)
     Returns:
       number of IngestRaw rows processed this call (0 if none)
     """
@@ -92,7 +98,7 @@ def _process_batch_once() -> int:
         rows: List[IngestRaw] = (
             session.execute(
                 select(IngestRaw)
-                .where(IngestRaw.processed_at.is_(None))
+                .where(IngestRaw.processed_at_epoch.is_(None))
                 .order_by(IngestRaw.id.asc())
                 .limit(BATCH_SIZE)
             )
@@ -103,7 +109,8 @@ def _process_batch_once() -> int:
         if not rows:
             return 0
 
-        now = datetime.now(timezone.utc)
+        # Use epoch seconds (UTC) for the new processed_at_epoch column.
+        now_epoch = datetime_to_epoch(datetime.now(timezone.utc))
 
         # Gather Point to insert
         to_insert: List[Point] = []
@@ -113,16 +120,17 @@ def _process_batch_once() -> int:
                 device_id = data.get("device_id")
                 fixes = data.get("f", [])
                 for fix in fixes:
-                    pt = _convert_fix(fix, device_id)
+                    # Stamp a shared "received_at_epoch" for this batch to reduce overhead.
+                    pt = _convert_fix(fix, device_id, received_at_epoch=now_epoch)
                     if pt:
                         to_insert.append(pt)
                 # mark success (even if a few fixes were dropped)
-                r.processed_at = now
+                r.processed_at_epoch = now_epoch
                 r.parse_error = None
             except Exception as e:
                 # Keep row marked processed to avoid infinite retries,
                 # but record the error so you can inspect later.
-                r.processed_at = now
+                r.processed_at_epoch = now_epoch
                 r.parse_error = str(e)[:500]
 
         # Bulk insert Point; ignore duplicates by catching IntegrityError
@@ -143,7 +151,7 @@ def _process_batch_once() -> int:
                         # likely a duplicate; skip
                         continue
 
-        # Persist processed_at / parse_error updates
+        # Persist processed_at_epoch / parse_error updates
         session.commit()
         return len(rows)
 

@@ -1,15 +1,18 @@
 # Enduro Tracker Web Documentation
 
-This document covers all routes and helper functions in `src/web`, including
-which templates call each endpoint and the UI action that triggers it.
+This document maps the Flask routes, background workers, and utility helpers to
+their responsibilities, data sources, and UI triggers. It also includes a
+per-table summary of the database schema so you can trace how data flows from
+ingest to display.
 
 ## src/web/home.py
 
 ### home_page (GET `/`)
 - Purpose: Render the home page with navigation and a quick races table.
-- Reads: `Race` (ordered by `starts_at`), config categories from `config.yaml`.
+- Reads: `Race` (ordered by `starts_at_epoch`), config categories from `config.yaml`.
 - Writes: None.
 - Renders: `templates/home.html`.
+- Display: converts `starts_at_epoch` to a datetime for the template table.
 - Called from:
   - `templates/home.html`: direct page load at `/`.
   - `templates/devices.html`: "Back to Home" link.
@@ -64,11 +67,6 @@ which templates call each endpoint and the UI action that triggers it.
 
 ## src/web/races.py
 
-### _parse_datetime
-- Purpose: Helper to combine date/time strings into a UTC `datetime`.
-- Reads/Writes: None.
-- Called from: `save_race` only (internal helper).
-
 ### _find_or_create_route_for_category
 - Purpose: Helper to ensure a `(Route, Category)` pair exists for a race/category.
 - Reads: `Route`, `Category`.
@@ -85,9 +83,10 @@ which templates call each endpoint and the UI action that triggers it.
 
 ### post_race (GET `/races/<race_id>/post`)
 - Purpose: Post-race view with route preview and rider list for a category.
-- Reads: `Race`, `Route`, `Category`, `Rider`, `RaceRider`.
+- Reads: `Race`, `Route`, `Category`, `Rider`, `RaceRider` (epoch timing columns for display).
 - Writes: None.
 - Renders: `templates/post_race.html`.
+- Display: converts rider timing epochs to naive local datetimes for UI controls.
 - Called from:
   - `templates/home.html`: "Post Race" button in races table.
   - `templates/post_race.html`: category `<select>` `onchange` (GET with `?category=`).
@@ -111,8 +110,9 @@ which templates call each endpoint and the UI action that triggers it.
 ### manual_times (POST `/races/<race_id>/race-rider/<race_rider_id>/manual-times`)
 - Purpose: Overwrite start/finish times and rebuild a trimmed track snapshot.
 - Reads: `RaceRider`, latest `TrackHist` (for raw text).
-- Writes: `RaceRider.start_time_rfid`, `RaceRider.finish_time_rfid`, new `TrackHist` row.
+- Writes: `RaceRider.start_time_rfid_epoch`, `RaceRider.finish_time_rfid_epoch`, new `TrackHist` row with `updated_at_epoch`.
 - Returns: JSON status.
+- Timezone: inputs must be timezone-naive; values are assumed to be in the configured local timezone (`config.yaml` → `global.timezone`) and converted to UTC before saving.
 - Called from:
   - `templates/post_race.html`: "Manual Edit" button opens modal, modal "Save" triggers JS `fetch`.
 
@@ -120,6 +120,7 @@ which templates call each endpoint and the UI action that triggers it.
 - Purpose: Create or update a `Race`.
 - Reads: `Race` (when updating).
 - Writes: `Race` (insert/update).
+- Behavior: parses date/time inputs and converts them to epoch seconds using the configured timezone for naive input.
 - Redirects: to edit page for the saved race.
 - Called from:
   - `templates/race_form.html`: "Save Changes" button.
@@ -188,7 +189,7 @@ which templates call each endpoint and the UI action that triggers it.
 ### upload (POST `/api/v1/upload`)
 - Purpose: Ingest compact GNSS JSON and store a durable raw copy for background parsing.
 - Reads: request JSON (`pid` and `f` array).
-- Writes: `IngestRaw` (new row with `payload_json`).
+- Writes: `IngestRaw` (new row with `payload_json`, `received_at_epoch`).
 - Returns: empty 200 on success; 400/422 on bad input; 500 on DB error.
 - Called from:
   - External device/ingest clients (no template references).
@@ -203,8 +204,8 @@ which templates call each endpoint and the UI action that triggers it.
 
 ### upload_text (POST `/api/v1/upload-text`)
 - Purpose: Ingest a raw text log, parse fixes, trim to RFID window (if available), and persist to track history.
-- Reads: request JSON (`pid`, `log`); `RaceRider` for latest timing window.
-- Writes: `TrackHist` (new row with `geojson`, `gpx`, `raw_txt`).
+- Reads: request JSON (`pid`, `log`); `RaceRider` for latest epoch timing window.
+- Writes: `TrackHist` (new row with `geojson`, `gpx`, `raw_txt`, `updated_at_epoch`).
 - Returns: empty 200 on success; JSON error on invalid input.
 - Called from:
   - Text-log upload clients (no template references).
@@ -279,6 +280,39 @@ which templates call each endpoint and the UI action that triggers it.
 - Called from:
   - `src/web/races.py:upload_gpx`
 
+## src/utils/time.py
+
+### datetime_to_epoch
+- Purpose: Convert a datetime to UTC epoch seconds, honoring the configured local timezone for naive datetimes.
+- Reads: `configs/config.yaml` (`global.timezone`) when `tz_name` is not provided.
+- Writes: None.
+- Returns: epoch seconds (int).
+- Called from:
+  - `src/api/ingest.py:upload`
+  - `src/api/ingest.py:upload_text`
+  - `src/web/races.py:save_race`
+  - `src/web/races.py:manual_times` (via `iso_to_epoch`)
+  - `src/workers/parse_worker.py:_process_batch_once`
+  - `src/workers/gpx_worker.py:main`
+
+### epoch_to_datetime
+- Purpose: Convert epoch seconds to a timezone-aware datetime in the configured local timezone.
+- Reads: `configs/config.yaml` (`global.timezone`) when `tz_name` is not provided.
+- Writes: None.
+- Returns: timezone-aware `datetime`.
+- Called from:
+  - `src/web/home.py:home_page`
+  - `src/web/races.py:post_race`
+  - `src/web/races.py:edit_race`
+
+### iso_to_epoch
+- Purpose: Parse an ISO8601 datetime string and convert it to UTC epoch seconds.
+- Reads: `configs/config.yaml` (`global.timezone`) when `tz_name` is not provided.
+- Writes: None.
+- Returns: epoch seconds (int) or None for empty input; rejects timezone-aware inputs when `allow_tz=False`.
+- Called from:
+  - `src/web/races.py:manual_times`
+
 ## src/workers/parse_worker.py
 
 ### _convert_fix
@@ -291,8 +325,8 @@ which templates call each endpoint and the UI action that triggers it.
 
 ### _process_batch_once
 - Purpose: Background batch step to move raw ingest data into `points`.
-- Reads: `IngestRaw` rows where `processed_at IS NULL` (limit `BATCH_SIZE = 200`).
-- Writes: `Point` inserts; updates `IngestRaw.processed_at` and `parse_error`.
+- Reads: `IngestRaw` rows where `processed_at_epoch IS NULL` (limit `BATCH_SIZE = 200`).
+- Writes: `Point` inserts (including `received_at_epoch`); updates `IngestRaw.processed_at_epoch` and `parse_error`.
 - Returns: number of `IngestRaw` rows processed.
 - Called from:
   - `main` loop (internal helper).
@@ -316,7 +350,7 @@ which templates call each endpoint and the UI action that triggers it.
 
 ### _latest_race_rider_window
 - Purpose: Find the newest `race_rider.id` and its start/finish timing window for a device.
-- Reads: `RaceRider.start_time_rfid`, `RaceRider.finish_time_rfid`.
+- Reads: `RaceRider.start_time_rfid_epoch`, `RaceRider.finish_time_rfid_epoch`.
 - Writes: None.
 - Returns: `(race_rider_id, start_epoch, finish_epoch)` with `None` values when missing.
 - Called from:
@@ -325,7 +359,22 @@ which templates call each endpoint and the UI action that triggers it.
 ### main
 - Purpose: Live GeoJSON cache worker for the race_day display.
 - Reads: `Point` (latest `t_epoch`), `RaceRider` (latest rider for device + timing window).
-- Writes: `TrackCache.geojson` (upsert per `race_rider_id`), `TrackCache.updated_at`.
+- Writes: `TrackCache.geojson` (upsert per `race_rider_id`), `TrackCache.updated_at_epoch`.
 - Behavior: polls every `SLEEP_SEC = 5.0`, only rebuilds when new points arrive, and trims tracks to the rider’s start/end times when present.
 - Called from:
   - CLI: `python -m src.workers.gpx_worker` (background process).
+
+## Database Tables (src/db/models.py)
+
+- `ingest_raw`: raw device uploads (payload JSON, received/processed timestamps, parse error). Columns: `id`, `device_id`, `payload_json`, `received_at`, `received_at_epoch`, `processed_at`, `processed_at_epoch`, `parse_error`.
+- `devices`: registered hardware devices; referenced by race_riders. Columns: `id`, `device_info`.
+- `points`: parsed GNSS fixes per device (t_epoch, lat/lon, optional metrics). Columns: `id`, `device_id`, `t_epoch`, `lat`, `lon`, `ele`, `sog`, `cog`, `fx`, `hdop`, `nsat`, `received_at`, `received_at_epoch`.
+- `riders`: core athlete details (name, team, bike, bio). Columns: `id`, `name`, `bike`, `bio`, `team`, `category`.
+- `races`: event metadata (name, description, website, starts/ends, active flag). Columns: `id`, `name`, `description`, `website`, `starts_at`, `starts_at_epoch`, `ends_at`, `ends_at_epoch`, `active`.
+- `route`: per-race route geometry storage (gpx/geojson). Columns: `id`, `race_id`, `geojson`, `gpx`.
+- `categories`: category labels tied to a route; unique per route. Columns: `id`, `route_id`, `name`.
+- `race_riders`: joins rider, device, and category for a race; stores timing and status flags. Columns: `id`, `rider_id`, `device_id`, `category_id`, `comm_setting`, `active`, `recording`, `start_time_rfid`, `start_time_rfid_epoch`, `finish_time_rfid`, `finish_time_rfid_epoch`, `start_time_pi`, `start_time_pi_epoch`, `finish_time_pi`, `finish_time_pi_epoch`.
+- `leaderboard_cache`: live leaderboard snapshot per category. Columns: `category_id`, `payload_json`, `etag`, `updated_at`, `updated_at_epoch`.
+- `track_cache`: live track geojson per race_rider. Columns: `race_rider_id`, `geojson`, `etag`, `updated_at`, `updated_at_epoch`.
+- `leaderboard_hist`: archived leaderboard snapshots per category. Columns: `id`, `category_id`, `payload_json`, `official_pdf`, `updated_at`, `updated_at_epoch`.
+- `track_hist`: archived track snapshots per race_rider (geojson/gpx/raw text). Columns: `id`, `race_rider_id`, `geojson`, `gpx`, `raw_txt`, `updated_at`, `updated_at_epoch`.

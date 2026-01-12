@@ -83,9 +83,15 @@ class IngestRaw(Base):
     device_id = Column(String(64), index=True, nullable=False)
     payload_json = Column(Text, nullable=False)
     received_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    # Phase A: epoch mirror (UTC seconds) for future migration away from DateTime.
+    received_at_epoch = Column(Integer, nullable=True)
+    # Phase A: epoch mirror (UTC seconds) for future migration away from DateTime.
+    received_at_epoch = Column(Integer, nullable=True)
 
     # New bookkeeping fields (for parsing to points):
     processed_at = Column(DateTime(timezone=True), nullable=True)
+    # Phase A: epoch mirror (UTC seconds) for future migration away from DateTime.
+    processed_at_epoch = Column(Integer, nullable=True)
     parse_error = Column(Text, nullable=True)
 
 
@@ -193,7 +199,11 @@ class Race(Base):
     description = Column(Text, nullable=True)
     website = Column(String(256), nullable=True)
     starts_at = Column(DateTime(timezone=True), nullable=True)
+    # Phase A: epoch mirror (UTC seconds) for future migration away from DateTime.
+    starts_at_epoch = Column(Integer, nullable=True)
     ends_at = Column(DateTime(timezone=True), nullable=True)
+    # Phase A: epoch mirror (UTC seconds) for future migration away from DateTime.
+    ends_at_epoch = Column(Integer, nullable=True)
     active = Column(Boolean, nullable=False, default=True)
 
     routes = relationship("Route", back_populates="race")
@@ -257,9 +267,17 @@ class RaceRider(Base):
     active = Column(Boolean, nullable=False, default=True)
     recording = Column(Boolean, nullable=False, default=True)
     start_time_rfid = Column(DateTime(timezone=True), nullable=True) # when the rider starts the race - set by the RFID on the start line
+    # Phase A: epoch mirror (UTC seconds) for future migration away from DateTime.
+    start_time_rfid_epoch = Column(Integer, nullable=True)
     start_time_pi = Column(DateTime(timezone=True), nullable=True) # when the rider starts the race - set by the PI on the start line
+    # Phase A: epoch mirror (UTC seconds) for future migration away from DateTime.
+    start_time_pi_epoch = Column(Integer, nullable=True)
     finish_time_rfid = Column(DateTime(timezone=True), nullable=True)# when the rider finishes the race - set by the RFID on the start line
+    # Phase A: epoch mirror (UTC seconds) for future migration away from DateTime.
+    finish_time_rfid_epoch = Column(Integer, nullable=True)
     finish_time_pi = Column(DateTime(timezone=True), nullable=True)# when the rider finishes the race - set by the PI on the start line
+    # Phase A: epoch mirror (UTC seconds) for future migration away from DateTime.
+    finish_time_pi_epoch = Column(Integer, nullable=True)
     #pi_offset_time = Column(Integer, nullable=True) # offset in seconds to apply to the pi's clock to sync with official - removed as can just calculate it
 
     rider = relationship("Rider", back_populates="race_entries")
@@ -285,6 +303,8 @@ class LeaderboardCache(Base):
     payload_json = Column(Text, nullable=False)
     etag = Column(String(64), nullable=True)
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    # Phase A: epoch mirror (UTC seconds) for future migration away from DateTime.
+    updated_at_epoch = Column(Integer, nullable=True)
 
     category = relationship("Category", back_populates="leaderboard_cache")
 
@@ -300,6 +320,8 @@ class TrackCache(Base):
     geojson = Column(Text, nullable=True)
     etag = Column(String(64), nullable=True)
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    # Phase A: epoch mirror (UTC seconds) for future migration away from DateTime.
+    updated_at_epoch = Column(Integer, nullable=True)
 
     race_rider = relationship("RaceRider", back_populates="track_cache")
 
@@ -316,6 +338,8 @@ class LeaderboardHist(Base):
     payload_json = Column(Text, nullable=False)
     official_pdf = Column(LargeBinary, nullable=True)
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    # Phase A: epoch mirror (UTC seconds) for future migration away from DateTime.
+    updated_at_epoch = Column(Integer, nullable=True)
 
     category = relationship("Category", back_populates="leaderboard_history")
 
@@ -333,6 +357,8 @@ class TrackHist(Base):
     gpx = Column(Text, nullable=True)
     raw_txt = Column(Text, nullable=True)
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    # Phase A: epoch mirror (UTC seconds) for future migration away from DateTime.
+    updated_at_epoch = Column(Integer, nullable=True)
 
     race_rider = relationship("RaceRider", back_populates="track_history")
 
