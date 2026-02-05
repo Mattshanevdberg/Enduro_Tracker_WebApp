@@ -23,6 +23,12 @@ from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
+import sys
+
+VSCODE_TEST = True  # set to False when running on Raspberry Pi
+
+if VSCODE_TEST:
+    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
 # Load configuration from yaml file
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), '../../configs/config.yaml')
@@ -227,6 +233,11 @@ def upload_text():
 
     Output:
       JSON containing counts and in-memory GPX/GeoJSON strings.
+
+    Behavior:
+      - Always build GPX/GeoJSON for the latest RaceRider for this device (by id desc).
+      - Also build GPX/GeoJSON for any other RaceRider for this device that does NOT yet have a TrackHist row.
+      - Each RaceRider uses its own start/finish window to filter fixes before serialization.
     """
         # 1) Parse JSON body
     data = request.get_json(silent=True) # request gives access to things client sent, get_json() parses JSON body, silent=True prevents raising error on bad JSON
@@ -243,50 +254,84 @@ def upload_text():
     if not fixes:
         return jsonify({"error": "No valid fixes found"}), 422
 
-    # 4) Find the latest race_rider (to link to timing + storage) and pull its RFID timing window.
-    race_rider_id = None
-    start_epoch = None
-    finish_epoch = None
+    # 4) Pull ALL race_riders for this device (id + rfid start/finish) so we can build a track per rider.
+    #    We will always include the latest race_rider_id, plus any others that do not yet have TrackHist.
+    race_rider_rows = []
     if device_id:
         session = SessionLocal()
         try:
-            row = session.execute(
-                select(RaceRider.id, RaceRider.start_time_rfid_epoch, RaceRider.finish_time_rfid_epoch)
-                .where(RaceRider.device_id == device_id)
-                .order_by(RaceRider.id.desc())
-                .limit(1)
-            ).first()
-            if row:
-                race_rider_id, start_epoch, finish_epoch = row
+            race_rider_rows = (
+                session.execute(
+                    select(RaceRider.id, RaceRider.start_time_rfid_epoch, RaceRider.finish_time_rfid_epoch)
+                    .where(RaceRider.device_id == device_id)
+                    .order_by(RaceRider.id.asc())
+                )
+                .all()
+            )
         finally:
             session.close()
 
-    # 5) If both RFID times exist, trim the fixes to that interval before building GPX/GeoJSON.
-    fixes = filter_fixes_by_window(fixes, start_epoch=start_epoch, finish_epoch=finish_epoch)
-    if not fixes:
-        return jsonify({"error": "No valid fixes found"}), 422
+    # 5) If we have no race_riders, we cannot link to TrackHist, but we can still return 200.
+    if not race_rider_rows:
+        return "", 200
 
-    # 6) Build GPX/GeoJSON strings in-memory (no disk writes).
-    fixes_gpx = _build_gpx_string(fixes, creator=f"EnduroTracker {device_id}")
-    fixes_geojson = _build_geojson_string(fixes)
+    # 6) Identify the latest race_rider_id (by highest id).
+    latest_race_rider_id = race_rider_rows[-1][0]
 
-    # 6) save fixes_gpx and fixes_geojson to the track_hist table. Use the found race_rider_id when logging it
-    if race_rider_id:
-        session = SessionLocal()
-        try:
+    # 7) Build a set of race_rider_ids that already exist in TrackHist.
+    #    These will be skipped EXCEPT for the latest_race_rider_id which is always included.
+    existing_track_hist_ids = set()
+    session = SessionLocal()
+    try:
+        existing_track_hist_ids = set(
+            session.execute(
+                select(TrackHist.race_rider_id)
+                .where(TrackHist.race_rider_id.in_([r[0] for r in race_rider_rows]))
+            )
+            .scalars()
+            .all()
+        )
+    finally:
+        session.close()
+
+    # 8) Build a list of target race_rider rows to process:
+    #    - Always include latest_race_rider_id
+    #    - Include any other race_rider_id not already in TrackHist
+    target_rows = []
+    for r in race_rider_rows:
+        rr_id = r[0]
+        if rr_id == latest_race_rider_id or rr_id not in existing_track_hist_ids:
+            target_rows.append(r)
+
+    # 9) For each target, filter fixes by that rider's window, build GPX/GeoJSON, and save to TrackHist.
+    session = SessionLocal()
+    try:
+        for rr_id, start_epoch, finish_epoch in target_rows:
+            # Apply the per-rider timing window to the same raw fixes.
+            filtered = filter_fixes_by_window(fixes, start_epoch=start_epoch, finish_epoch=finish_epoch)
+            if not filtered:
+                # Skip if nothing remains after trimming (e.g., no timing or no overlap).
+                continue
+
+            # Build GPX/GeoJSON strings in-memory (no disk writes).
+            fixes_gpx = _build_gpx_string(filtered, creator=f"EnduroTracker {device_id}")
+            fixes_geojson = _build_geojson_string(filtered)
+
+            # Save to TrackHist for this race_rider_id.
             session.add(
                 TrackHist(
-                    race_rider_id=race_rider_id,
+                    race_rider_id=rr_id,
                     geojson=fixes_geojson,
                     gpx=fixes_gpx,
                     raw_txt=raw_fixes,
                     updated_at_epoch=datetime_to_epoch(datetime.now(timezone.utc)),
                 )
             )
-            session.commit()
-        except SQLAlchemyError:
-            session.rollback()
-        finally:
-            session.close()
+
+        session.commit()
+    except SQLAlchemyError:
+        session.rollback()
+    finally:
+        session.close()
 
     return "", 200

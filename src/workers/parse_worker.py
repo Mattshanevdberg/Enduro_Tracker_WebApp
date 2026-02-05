@@ -26,6 +26,7 @@ from typing import List, Optional
 
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import select
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from src.db.models import SessionLocal, init_db, IngestRaw, Point
 from src.utils.time import datetime_to_epoch
@@ -65,10 +66,17 @@ def _convert_fix(
             lat, lon, ele, sog, cog, hdop = lat1e6, lon1e6, alt10, sog100, cog10, hdop10
             t_epoch = int(utc)
 
-        # Defensive checks (drop malformed)
+        # Defensive checks (drop malformed or zeroed)
         if lat is None or lon is None or t_epoch is None:
-            return None
+            return None, 'Missing required fields'
+        if (lat == 0 and lon == 0) or t_epoch == 0:
+            return None, 'Zeroed required fields'
 
+        received_at = (
+            datetime.fromtimestamp(received_at_epoch, tz=timezone.utc)
+            if received_at_epoch is not None
+            else datetime.now(timezone.utc)
+        )
         return Point(
             device_id=device_id,
             t_epoch=t_epoch,
@@ -77,11 +85,13 @@ def _convert_fix(
             fx=int(fx) if fx is not None else None,
             nsat=int(nsat) if nsat is not None else None,
             # received_at auto-populates with server time; received_at_epoch is set explicitly.
+            received_at=received_at,
             received_at_epoch=received_at_epoch,
-        )
-    except Exception:
+        ), None
+    except Exception as e:
         # Any parse error: drop this fix
-        return None
+        print(f"[parse_worker] _convert_fix error: {e} -- row: {row}")
+        return None, e
 
 def _process_batch_once() -> int:
     """
@@ -114,6 +124,7 @@ def _process_batch_once() -> int:
 
         # Gather Point to insert
         to_insert: List[Point] = []
+        parse_error_catch = [] # for catching when all points are 0 or parse fails
         for r in rows:
             try:
                 data = json.loads(r.payload_json)
@@ -121,35 +132,50 @@ def _process_batch_once() -> int:
                 fixes = data.get("f", [])
                 for fix in fixes:
                     # Stamp a shared "received_at_epoch" for this batch to reduce overhead.
-                    pt = _convert_fix(fix, device_id, received_at_epoch=now_epoch)
+                    pt, parse_error = _convert_fix(fix, device_id, received_at_epoch=now_epoch)
                     if pt:
                         to_insert.append(pt)
+                        parse_error_catch.append(1) 
+                
                 # mark success (even if a few fixes were dropped)
                 r.processed_at_epoch = now_epoch
-                r.parse_error = None
+                if not parse_error_catch: # mark as error only if all points are 0 or parse fails
+                    r.parse_error = parse_error
+                else:
+                    r.parse_error = None
+                    parse_error_catch = [] # reset for next row
+
             except Exception as e:
                 # Keep row marked processed to avoid infinite retries,
                 # but record the error so you can inspect later.
                 r.processed_at_epoch = now_epoch
                 r.parse_error = str(e)[:500]
 
-        # Bulk insert Point; ignore duplicates by catching IntegrityError
+        # Bulk insert Points with ON CONFLICT DO NOTHING to avoid duplicate errors.
         if to_insert:
-            try:
-                session.add_all(to_insert)
-                session.commit()
-            except SQLAlchemyError as e:
-                # If unique constraint triggers or any error appears, rollback and try inserting one-by-one
-                session.rollback()
-                # Fallback slow path: insert per row, ignore duplicates
-                for p in to_insert:
-                    try:
-                        session.add(p)
-                        session.commit()
-                    except SQLAlchemyError:
-                        session.rollback()
-                        # likely a duplicate; skip
-                        continue
+            rows = [
+                {
+                    "device_id": p.device_id,
+                    "t_epoch": p.t_epoch,
+                    "lat": p.lat,
+                    "lon": p.lon,
+                    "ele": p.ele,
+                    "sog": p.sog,
+                    "cog": p.cog,
+                    "fx": p.fx,
+                    "hdop": p.hdop,
+                    "nsat": p.nsat,
+                    "received_at": p.received_at,
+                    "received_at_epoch": p.received_at_epoch,
+                }
+                for p in to_insert
+            ]
+            stmt = (
+                sqlite_insert(Point)
+                .values(rows)
+                .on_conflict_do_nothing(index_elements=["device_id", "t_epoch"])
+            )
+            session.execute(stmt)
 
         # Persist processed_at_epoch / parse_error updates
         session.commit()

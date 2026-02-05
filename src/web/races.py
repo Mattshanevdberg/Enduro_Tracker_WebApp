@@ -328,7 +328,7 @@ def manual_times(race_id: int, race_rider_id: int):
 
         if latest_track and latest_track.raw_txt:
             fixes = _parse_text_fixes(latest_track.raw_txt)
-            trimmed = filter_fixes_by_window(fixes, start_epoch=start_epoch, finish_epoch=finish_epoch)
+            trimmed = filter_fixes_by_window(fixes, start_epoch=start_epoch, finish_epoch=end_epoch)
             if trimmed:
                 gpx_text = _build_gpx_string(trimmed, creator=f"EnduroTracker {rr.device_id}")
                 geojson_text = _build_geojson_string(trimmed)

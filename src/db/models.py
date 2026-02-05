@@ -85,8 +85,6 @@ class IngestRaw(Base):
     received_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
     # Phase A: epoch mirror (UTC seconds) for future migration away from DateTime.
     received_at_epoch = Column(Integer, nullable=True)
-    # Phase A: epoch mirror (UTC seconds) for future migration away from DateTime.
-    received_at_epoch = Column(Integer, nullable=True)
 
     # New bookkeeping fields (for parsing to points):
     processed_at = Column(DateTime(timezone=True), nullable=True)
@@ -150,6 +148,8 @@ class Point(Base):
     hdop = Column(Float, nullable=True)
     nsat = Column(Integer, nullable=True)
     received_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    # Phase A: epoch mirror (UTC seconds) for future migration away from DateTime.
+    received_at_epoch = Column(Integer, nullable=True)
 
     # The following creates a Idempotency constraint on device_id and t_epoch
     # This will prevent duplicates (no two entries can have the same device_id and epoch_t)

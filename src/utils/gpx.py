@@ -88,7 +88,7 @@ def _parse_text_fixes(raw_text: str):
             lat = obj.get("lat")
             lon = obj.get("lon")
             # Skip rows missing required fields or containing zeroed values (treated as invalid)
-            if utc in (None, 0, 0.0) or lat in (None, 0, 0.0) or lon in (None, 0, 0.0):
+            if utc in (None, 0, 0.0) or lat is None or lon is None or (lat == 0 and lon == 0):
                 continue
             fixes.append({
                 "utc": utc,
