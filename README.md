@@ -5,6 +5,12 @@ their responsibilities, data sources, and UI triggers. It also includes a
 per-table summary of the database schema so you can trace how data flows from
 ingest to display.
 
+## Agent Instructions
+
+- Keep comments extensive and in the format currently used.
+- Always update function descriptions and keep them in the format currently used.
+- Update `README.md` whenever any changes are made, maintaining the current README format.
+
 ## src/web/home.py
 
 ### home_page (GET `/`)
@@ -204,8 +210,10 @@ ingest to display.
 
 ### upload_text (POST `/api/v1/upload-text`)
 - Purpose: Ingest a raw text log, parse fixes, trim to RFID window (if available), and persist to track history.
-- Reads: request JSON (`pid`, `log`); `RaceRider` for latest epoch timing window.
-- Writes: `TrackHist` (new row with `geojson`, `gpx`, `raw_txt`, `updated_at_epoch`).
+- Reads: request JSON (`pid`, `log`); all `RaceRider` rows for the device and their epoch timing windows.
+- Writes: `TrackHist` (new row with `geojson`, `gpx`, `raw_txt`, `updated_at_epoch`) for:
+  - the latest `race_rider_id` (always),
+  - any earlier `race_rider_id` that does not yet have a `TrackHist`.
 - Returns: empty 200 on success; JSON error on invalid input.
 - Called from:
   - Text-log upload clients (no template references).
@@ -223,7 +231,7 @@ ingest to display.
 - Purpose: Parse line-delimited JSON fixes; drop malformed or missing utc/lat/lon.
 - Reads: raw text log lines.
 - Writes: None.
-- Returns: list of cleaned fix dicts.
+- Returns: list of cleaned fix dicts (drops rows with missing lat/lon or zeroed lat/lon pair).
 - Called from:
   - `src/api/ingest.py:upload_text`
   - `src/web/races.py:manual_times`
@@ -319,14 +327,14 @@ ingest to display.
 - Purpose: Convert a compact fix array into a `Point` ORM object.
 - Reads: fix array values (scaled ints) and `device_id`.
 - Writes: None (returns an object for later insert).
-- Returns: `Point` instance or `None` if invalid.
+- Returns: `(Point | None, parse_error | None)`; drops missing/zeroed fixes and surfaces a reason when invalid.
 - Called from:
   - `_process_batch_once` only (internal helper).
 
 ### _process_batch_once
 - Purpose: Background batch step to move raw ingest data into `points`.
 - Reads: `IngestRaw` rows where `processed_at_epoch IS NULL` (limit `BATCH_SIZE = 200`).
-- Writes: `Point` inserts (including `received_at_epoch`); updates `IngestRaw.processed_at_epoch` and `parse_error`.
+- Writes: `Point` inserts (including `received_at_epoch`) using ON CONFLICT DO NOTHING; updates `IngestRaw.processed_at_epoch` and `parse_error` (only set if all fixes are invalid).
 - Returns: number of `IngestRaw` rows processed.
 - Called from:
   - `main` loop (internal helper).
@@ -378,3 +386,84 @@ ingest to display.
 - `track_cache`: live track geojson per race_rider. Columns: `race_rider_id`, `geojson`, `etag`, `updated_at`, `updated_at_epoch`.
 - `leaderboard_hist`: archived leaderboard snapshots per category. Columns: `id`, `category_id`, `payload_json`, `official_pdf`, `updated_at`, `updated_at_epoch`.
 - `track_hist`: archived track snapshots per race_rider (geojson/gpx/raw text). Columns: `id`, `race_rider_id`, `geojson`, `gpx`, `raw_txt`, `updated_at`, `updated_at_epoch`.
+
+## Templates (templates/*.html)
+
+### home.html
+- General: Home/landing page and navigation hub.
+- Displays: Races table (name, start, website, active).
+- UI actions: "Input Rider Details", "Manage Devices", "Add New Race", "Edit", "Post Race".
+- Linked pages (buttons):
+  - "Input Rider Details" → `/riders/new` (riders form page).
+  - "Manage Devices" → `/devices/` (devices list page).
+  - "Add New Race" → `/races/new` (new race form).
+  - "Edit" → `/races/<id>/edit` (race edit page).
+  - "Post Race" → `/races/<id>/post` (post-race page).
+- Pulls: `races`, `default_category`.
+- Pushes: none (links only).
+- Routes called: `/`, `/riders/new`, `/devices/`, `/races/new`, `/races/<id>/edit`, `/races/<id>/post`.
+- Embedded scripts: none.
+
+### devices.html
+- General: Device list and create form.
+- Displays: Device ID, Device Info.
+- UI actions: "Save" (create), "Edit", "Back to Home".
+- Linked pages (buttons):
+  - "Back to Home" → `/` (home page).
+  - "Edit" → `/devices/<id>/edit` (device edit page).
+- Pulls: `devices`, `message`, `success`, `form`.
+- Pushes: POST create device.
+- Routes called: `/devices/` (GET/POST), `/devices/<id>/edit`, `/`.
+- Embedded scripts: none.
+
+### device_edit.html
+- General: Edit a single device's info.
+- Displays: Device ID (read-only), Device Info.
+- UI actions: "Save", "Back to Devices", "Home".
+- Linked pages (buttons):
+  - "Back to Devices" → `/devices/` (devices list page).
+  - "Home" → `/` (home page).
+- Pulls: `device`, `message`, `success`.
+- Pushes: POST update device info.
+- Routes called: `/devices/<id>/edit`, `/devices/`, `/`.
+- Embedded scripts: none.
+
+### riders_form.html
+- General: Create/edit rider form with riders list.
+- Displays: Rider fields and riders table.
+- UI actions: "Save", "Edit", "Back to Home".
+- Linked pages (buttons/links):
+  - "Back to Home" → `/` (home page).
+  - "Edit" → `/riders/<id>/edit` (loads rider into form).
+- Pulls: `categories`, `riders`, `form`, `editing_rider`, `message`, `success`.
+- Pushes: POST create/update rider.
+- Routes called: `/riders/new`, `/riders/<id>/edit`, `/`.
+- Embedded scripts: none.
+
+### race_form.html
+- General: Create/edit race, upload route GPX, manage category riders.
+- Displays: Race fields, category selector, route map preview, rider/device tables.
+- UI actions: "Save Changes", category dropdown (reload), "Upload GPX", "Remove GPX", "Save" (add rider), "Edit" (update rider entry), "Remove" (delete entry), "Back".
+- Linked pages (buttons/links):
+  - "Back" → `/` (home page).
+  - "Open Website" → external race website URL (if set).
+- Pulls: `race`, `categories`, `selected_category`, `route`, `geojson`, `riders`, `devices`, `race_riders`, `last_device_by_rider`.
+- Pushes: POST save race, upload/remove GPX, add/edit/remove riders.
+- Routes called: `/races/save`, `/races/<id>/edit?category=...`, `/races/<id>/route/upload`, `/races/<id>/route/remove`, `/races/<id>/route/geojson`, `/races/<id>/riders/add`, `/races/<id>/riders/<entry_id>/edit`, `/races/<id>/riders/<entry_id>/remove`.
+- Embedded scripts:
+  - Map preview: fetches route GeoJSON and renders via Leaflet.
+  - Rider add helper: auto-fills device based on `last_device_by_rider` mapping.
+
+### post_race.html
+- General: Post-race review with route map and rider tracks.
+- Displays: Race metadata, category route map, riders list with timing.
+- UI actions: Category dropdown (reload), "Show Track", "Manual Edit", modal "Save/Cancel".
+- Linked pages (buttons/links):
+  - "Back to Home" → `/` (home page).
+- Pulls: `race`, `categories`, `selected_category`, `geojson`, `riders`.
+- Pushes: Fetch route GeoJSON, fetch stored rider track, POST manual timing edits.
+- Routes called: `/races/<id>/post?category=...`, `/races/<id>/route/geojson?category=...`, `/races/<id>/race-rider/<id>/track`, `/races/<id>/race-rider/<id>/manual-times`.
+- Embedded scripts:
+  - Route map load/render (Leaflet).
+  - "Show Track" overlay fetch + render.
+  - Manual timing modal + POST update.
