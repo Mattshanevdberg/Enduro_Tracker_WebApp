@@ -8,20 +8,70 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <style>
-    body { font-family: system-ui, sans-serif; margin: 1.8rem; max-width: 1000px; }
+    body { font-family: system-ui, sans-serif; margin: 1.8rem; max-width: 1100px; }
     .btn { display:inline-block; padding:.55rem 1rem; border:1px solid #333; border-radius:6px; text-decoration:none; background:#fff; }
     .btn:hover { background:#f3f3f3; }
     .muted { color:#555; font-size:.95rem; }
     dl { display:grid; grid-template-columns: 140px 1fr; gap:.3rem .8rem; margin-top:1rem; }
     dt { font-weight:600; }
     .layout { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; align-items:start; }
+    .layout.is-stacked { grid-template-columns: 1fr; }
     @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
-    #map { height: 360px; border:1px dashed #999; border-radius: 6px; margin-top:.8rem; }
+    .race-column,
+    .riders-column { min-width: 0; }
+    .map-wrapper { overflow-x: auto; }
+    #map { height: 480px; border:1px dashed #999; border-radius: 6px; margin-top:.8rem; width: 100%; }
+    .race-info-row { display:grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1rem; align-items:start; }
+    .layout.is-stacked .race-info-row { grid-template-columns: 1fr; }
+    .map-toolbar { display:flex; flex-wrap:wrap; gap:.75rem 1rem; align-items:center; margin-top:.75rem; }
+    .map-size-control { display:flex; align-items:center; gap:.5rem; }
+    .map-size-control label { font-weight:600; }
+    .map-size-control input[type="range"] { width: 200px; }
+    .map-size-value { min-width: 64px; color:#555; }
     form.inline { display:flex; gap:.5rem; align-items:center; margin:.4rem 0; }
     select { padding:.45rem; border:1px solid #ccc; border-radius:6px; }
     table { border-collapse: collapse; width: 100%; }
     th, td { border:1px solid #ddd; padding:.4rem .6rem; text-align:left; }
     th { background:#f7f7f7; }
+    .riders-table-wrap { overflow-x: auto; }
+    .riders-table.is-stacked th,
+    .riders-table.is-stacked td,
+    .riders-table.is-measuring th,
+    .riders-table.is-measuring td { white-space: nowrap; }
+    .track-toggle-wrap { display:inline-flex; align-items:center; gap:.4rem; }
+    .track-toggle { 
+      --track-color: #888;
+      appearance: none;
+      width: 20px;
+      height: 20px;
+      border: 2px solid #222;
+      border-radius: 4px;
+      background: var(--track-color);
+      display: inline-grid;
+      place-content: center;
+      cursor: pointer;
+      box-shadow: inset 0 0 0 2px rgba(255,255,255,0.35);
+    }
+    .track-toggle::after {
+      content: "";
+      width: 10px;
+      height: 6px;
+      border: 2px solid #fff;
+      border-top: none;
+      border-right: none;
+      transform: rotate(-45deg);
+      opacity: 0;
+    }
+    .track-toggle:checked::after { opacity: 1; }
+    .track-toggle:focus-visible { outline: 3px solid #333; outline-offset: 2px; }
+    .track-toggle-text { font-size: .9rem; }
+    .track-key { margin-top:.75rem; border:1px solid #ddd; padding:.6rem .7rem; border-radius:6px; background:#fafafa; width: 260px; max-width: 100%; }
+    .track-key-title { font-weight:600; margin-bottom:.4rem; }
+    .track-key-list { display:grid; gap:.35rem; }
+    .track-key-item { display:flex; align-items:center; gap:.5rem; font-size:.95rem; }
+    .track-key-item .track-toggle { flex: 0 0 auto; }
+    .track-key-item[data-active="false"] { opacity:.55; }
+    .track-key-swatch { width: 16px; height: 16px; border-radius:4px; border:1px solid #222; background: var(--swatch-color); }
   </style>
 </head>
 <body>
@@ -34,20 +84,29 @@
 
   <div class="layout">
     <!-- Left column: basic race facts + map -->
-    <div>
-      <dl>
-        <dt>Website</dt>
-        <dd>{% if race.website %}<a href="{{ race.website }}" target="_blank" rel="noopener">{{ race.website }}</a>{% else %}—{% endif %}</dd>
+    <div class="race-column">
+      <div class="race-info-row">
+        <dl>
+          <dt>Website</dt>
+          <dd>{% if race.website %}<a href="{{ race.website }}" target="_blank" rel="noopener">{{ race.website }}</a>{% else %}—{% endif %}</dd>
 
-        <dt>Start</dt>
-        <dd>{% if race.starts_at %}{{ race.starts_at.strftime('%Y-%m-%d %H:%M') }}{% else %}Not set{% endif %}</dd>
+          <dt>Start</dt>
+          <dd>{% if race.starts_at %}{{ race.starts_at.strftime('%Y-%m-%d %H:%M') }}{% else %}Not set{% endif %}</dd>
 
-        <dt>Active</dt>
-        <dd>{{ 'Yes' if race.active else 'No' }}</dd>
+          <dt>Active</dt>
+          <dd>{{ 'Yes' if race.active else 'No' }}</dd>
 
-        <dt>Description</dt>
-        <dd>{{ race.description or 'No description provided.' }}</dd>
-      </dl>
+          <dt>Description</dt>
+          <dd>{{ race.description or 'No description provided.' }}</dd>
+        </dl>
+
+        {% if categories %}
+          <div class="track-key" id="track-key">
+            <div class="track-key-title">Track Key</div>
+            <div class="track-key-list" id="track-key-list"></div>
+          </div>
+        {% endif %}
+      </div>
 
       {% if categories %}
         <!-- Category picker: drives which route we show below. -->
@@ -60,7 +119,21 @@
           </select>
         </form>
 
-        <div id="map" data-race-id="{{ race.id }}" data-category="{{ selected_category or '' }}"></div>
+        <div class="map-wrapper">
+          <div id="map" data-race-id="{{ race.id }}" data-category="{{ selected_category or '' }}"></div>
+        </div>
+        <div class="map-toolbar">
+          <div class="map-size-control">
+            <label for="map-height">Map height</label>
+            <input id="map-height" type="range" min="320" max="820" step="20" />
+            <span class="map-size-value" id="map-height-value"></span>
+          </div>
+          <div class="map-size-control">
+            <label for="map-width">Map width</label>
+            <input id="map-width" type="range" min="320" max="1100" step="20" />
+            <span class="map-size-value" id="map-width-value"></span>
+          </div>
+        </div>
         <p class="muted" id="map-status" style="margin:.3rem 0 0 0;"></p>
       {% else %}
         <p class="muted">No categories/routes available for this race.</p>
@@ -68,10 +141,11 @@
     </div>
 
     <!-- Right column: riders linked to this race/category -->
-    <div>
+    <div class="riders-column">
       <h3 style="margin-top:0;">Riders for {{ selected_category or 'category' }}</h3>
       {% if riders %}
-        <table>
+        <div class="riders-table-wrap">
+        <table class="riders-table">
           <thead>
             <tr>
               <th>Name</th>
@@ -80,12 +154,16 @@
               <th>Start Time</th>
               <th>End Time</th>
               <th>Race Rider ID</th>
-              <th>Action</th>
+              <th>Manual Edit</th>
             </tr>
           </thead>
           <tbody>
             {% for r in riders %}
-              <tr>
+              <tr class="rider-row"
+                  data-name="{{ r.name }}"
+                  data-team="{{ r.team or 'No team' }}"
+                  data-device="{{ r.device_id or '' }}"
+                  data-race-rider-id="{{ r.race_rider_id }}">
                 <td>{{ r.name }}</td>
                 <td>{{ r.team or '—' }}</td>
                 <td>{{ r.device_id or '—' }}</td>
@@ -93,13 +171,6 @@
                 <td>{{ r.finish_time_rfid or 'waiting...' }}</td>
                 <td>{{ r.race_rider_id }}</td>
                <td>
-                  <button class="btn device-track-btn"
-                          data-name="{{ r.name }}"
-                          data-team="{{ r.team or 'No team' }}"
-                          data-device="{{ r.device_id or '' }}"
-                          data-race-rider-id="{{ r.race_rider_id }}">
-                    Show Track
-                  </button>
                   <button class="btn manual-edit-btn"
                           data-name="{{ r.name }}"
                           data-race-rider-id="{{ r.race_rider_id }}"
@@ -112,6 +183,7 @@
             {% endfor %}
           </tbody>
         </table>
+        </div>
       {% else %}
         <p class="muted">No riders for this category.</p>
       {% endif %}
@@ -140,18 +212,52 @@
   </div>
 
   <script>
-    // Lightweight map + track display:
+    // Map + track display:
     // - On load: draw the route GeoJSON for the selected category.
-    // - On rider click: fetch per-device GeoJSON (computed on-demand) and draw it in red.
+    // - On toggle: fetch per-race-rider GeoJSON and draw each overlay in its own color.
+    // - Multiple overlays can be active at once, with the most recently selected track on top.
     const mapNode = document.getElementById('map');
     const statusNode = document.getElementById('map-status');
+    const mapHeightInput = document.getElementById('map-height');
+    const mapHeightValue = document.getElementById('map-height-value');
+    const mapWidthInput = document.getElementById('map-width');
+    const mapWidthValue = document.getElementById('map-width-value');
+    const layoutNode = document.querySelector('.layout');
+    const ridersTable = document.querySelector('.riders-table');
+    const keyListNode = document.getElementById('track-key-list');
     const raceId = mapNode?.dataset?.raceId;
-    const category = encodeURIComponent(mapNode?.dataset?.category || "");
+    const categoryLabel = mapNode?.dataset?.category || "";
+    const categoryParam = encodeURIComponent(categoryLabel);
+    const categoryText = categoryLabel ? `category "${categoryLabel}"` : "selected category";
 
-    let map;          // Leaflet map instance
-    let routeLayer;   // Base category route
-    let deviceLayer;  // Rider device track overlay
+    const BASE_ROUTE_COLOR = '#1f78b4';
+    const TRACK_PALETTE = [
+      '#e31a1c',
+      '#33a02c',
+      '#ff7f00',
+      '#6a3d9a',
+      '#b15928',
+      '#1b9e77',
+      '#d95f02',
+      '#7570b3',
+      '#e7298a',
+      '#66a61e',
+      '#e6ab02',
+      '#a6761d'
+    ];
+    const MAP_HEIGHT_STORAGE_KEY = 'postRaceMapHeightPx';
+    const MAP_WIDTH_STORAGE_KEY = 'postRaceMapWidthPx';
 
+    let map;          // Leaflet map instance for the post-race view.
+    let routeLayer;   // Base category route layer.
+    const trackLayers = new Map();    // race_rider_id -> Leaflet GeoJSON layer.
+    const trackDataCache = new Map(); // race_rider_id -> cached GeoJSON payload.
+    const trackMeta = new Map();      // race_rider_id -> metadata including assigned color.
+    let layoutCheckHandle = null;     // requestAnimationFrame handle for layout recalculation.
+    let routeKeyRow = null;           // Track key row for the base route.
+
+    // Ensure a Leaflet map exists for the post-race view and return the instance.
+    // This stays lazy so we do not allocate tiles until the DOM is ready.
     function ensureMap() {
       if (map) return map;
       map = L.map('map').setView([0, 0], 2);
@@ -161,79 +267,290 @@
       return map;
     }
 
-    // Draw the category route (base layer).
+    // Update the small status line with a helpful message, guarding against missing DOM.
+    function updateStatus(message) {
+      if (statusNode) statusNode.textContent = message;
+    }
+
+    // Decide if the layout should stack the riders table under the map when widths do not fit.
+    function evaluateLayoutStacking() {
+      if (!layoutNode || !mapNode || !ridersTable) return;
+      ridersTable.classList.add('is-measuring');
+      const layoutWidth = layoutNode.clientWidth;
+      const mapWidth = mapNode.getBoundingClientRect().width;
+      const tableWidth = ridersTable.scrollWidth;
+      ridersTable.classList.remove('is-measuring');
+      const gapPixels = 20;
+      const shouldStack = (mapWidth + tableWidth + gapPixels) > layoutWidth;
+      layoutNode.classList.toggle('is-stacked', shouldStack);
+      ridersTable.classList.toggle('is-stacked', shouldStack);
+    }
+
+    // Schedule a single layout check on the next animation frame.
+    function scheduleLayoutCheck() {
+      if (layoutCheckHandle) return;
+      layoutCheckHandle = window.requestAnimationFrame(() => {
+        layoutCheckHandle = null;
+        evaluateLayoutStacking();
+      });
+    }
+
+    // Apply a new map height and keep Leaflet layout in sync with the resized DOM node.
+    function applyMapHeight(heightPx, shouldPersist) {
+      if (!mapNode) return;
+      mapNode.style.height = `${heightPx}px`;
+      if (mapHeightValue) mapHeightValue.textContent = `${heightPx}px`;
+      if (shouldPersist) localStorage.setItem(MAP_HEIGHT_STORAGE_KEY, String(heightPx));
+      if (map) map.invalidateSize();
+      scheduleLayoutCheck();
+    }
+
+    // Apply a new map width (with a max-width safety clamp) and refresh Leaflet layout.
+    function applyMapWidth(widthPx, shouldPersist) {
+      if (!mapNode) return;
+      mapNode.style.width = `${widthPx}px`;
+      if (mapWidthValue) mapWidthValue.textContent = `${widthPx}px`;
+      if (shouldPersist) localStorage.setItem(MAP_WIDTH_STORAGE_KEY, String(widthPx));
+      if (map) map.invalidateSize();
+      scheduleLayoutCheck();
+    }
+
+    // Initialize the map height slider with a stored preference or a sensible default.
+    (function setupMapHeightControl() {
+      if (!mapHeightInput) return;
+      const storedValue = parseInt(localStorage.getItem(MAP_HEIGHT_STORAGE_KEY) || "", 10);
+      const initialHeight = Number.isFinite(storedValue) ? storedValue : 480;
+      mapHeightInput.value = String(initialHeight);
+      applyMapHeight(initialHeight, false);
+      mapHeightInput.addEventListener('input', () => {
+        const nextValue = parseInt(mapHeightInput.value, 10);
+        if (!Number.isFinite(nextValue)) return;
+        applyMapHeight(nextValue, true);
+      });
+    })();
+
+    // Initialize the map width slider with a stored preference or a sensible default.
+    (function setupMapWidthControl() {
+      if (!mapWidthInput || !mapNode) return;
+      const storedValue = parseInt(localStorage.getItem(MAP_WIDTH_STORAGE_KEY) || "", 10);
+      const fallbackWidth = Math.round(mapNode.getBoundingClientRect().width || 560);
+      const initialWidth = Number.isFinite(storedValue) ? storedValue : fallbackWidth;
+      mapWidthInput.value = String(initialWidth);
+      applyMapWidth(initialWidth, false);
+      mapWidthInput.addEventListener('input', () => {
+        const nextValue = parseInt(mapWidthInput.value, 10);
+        if (!Number.isFinite(nextValue)) return;
+        applyMapWidth(nextValue, true);
+      });
+    })();
+
+    // Choose a stable color for a rider track, falling back to HSL if we exhaust the palette.
+    function assignTrackColor(index) {
+      if (index < TRACK_PALETTE.length) return TRACK_PALETTE[index];
+      const hue = (index * 137.508) % 360;
+      return `hsl(${hue}, 70%, 45%)`;
+    }
+
+    // Apply the assigned color to the checkbox so its background matches the rider track.
+    function applyTrackColorStyles(toggle, color) {
+      toggle.style.setProperty('--track-color', color);
+    }
+
+    // Create rider metadata from a table row so we can render key toggles outside the table.
+    function createTrackMetaFromRow(row, index) {
+      const raceRiderId = (row.dataset.raceRiderId || "").trim();
+      if (!raceRiderId) return null;
+      const riderName = row.dataset.name || 'Unknown rider';
+      const teamName = row.dataset.team || 'No team';
+      const deviceId = (row.dataset.device || "").trim();
+      const color = assignTrackColor(index);
+      const labelParts = [riderName, `ID ${raceRiderId}`];
+      if (teamName && teamName !== 'No team') labelParts.splice(1, 0, teamName);
+      const meta = {
+        raceRiderId,
+        riderName,
+        teamName,
+        deviceId,
+        color,
+        label: labelParts.join(' | '),
+        toggle: null,
+        keyRow: null
+      };
+      trackMeta.set(raceRiderId, meta);
+      return meta;
+    }
+
+    // Build the track key so it always shows the base route and rider toggles.
+    function buildTrackKey() {
+      if (!keyListNode) return;
+      keyListNode.innerHTML = "";
+      const routeLabel = categoryLabel ? `Route (${categoryLabel})` : "Route";
+      routeKeyRow = buildKeyItem(routeLabel, BASE_ROUTE_COLOR, true, false);
+      keyListNode.appendChild(routeKeyRow);
+      trackMeta.forEach(meta => {
+        const row = buildKeyItem(meta.label, meta.color, false, true);
+        meta.keyRow = row;
+        keyListNode.appendChild(row);
+      });
+      updateTrackKeyActiveStates();
+    }
+
+    // Update the active/inactive styling for track key rows without rebuilding the DOM.
+    function updateTrackKeyActiveStates() {
+      trackMeta.forEach(meta => {
+        if (!meta.keyRow) return;
+        const isActive = trackLayers.has(meta.raceRiderId);
+        meta.keyRow.dataset.active = isActive ? 'true' : 'false';
+        if (meta.toggle) meta.toggle.checked = isActive;
+      });
+    }
+
+    // Construct a single track key row with a color swatch and label (optional toggle).
+    function buildKeyItem(label, color, isActive, includeToggle) {
+      const row = document.createElement('div');
+      row.className = 'track-key-item';
+      row.dataset.active = isActive ? 'true' : 'false';
+      let swatch = null;
+      if (includeToggle) {
+        const toggle = document.createElement('input');
+        toggle.type = 'checkbox';
+        toggle.className = 'track-toggle device-track-toggle';
+        applyTrackColorStyles(toggle, color);
+        row.appendChild(toggle);
+        swatch = null;
+      } else {
+        swatch = document.createElement('span');
+        swatch.className = 'track-key-swatch';
+        swatch.style.setProperty('--swatch-color', color);
+        row.appendChild(swatch);
+      }
+      const text = document.createElement('span');
+      text.textContent = label;
+      row.appendChild(text);
+      return row;
+    }
+
+    // Draw the category route (base layer) and keep it behind rider overlays.
     function drawRoute(geojson) {
       ensureMap();
       if (routeLayer) {
         map.removeLayer(routeLayer);
         routeLayer = null;
       }
-      routeLayer = L.geoJSON(geojson, {style: {color: '#1f78b4', weight: 3}});
+      routeLayer = L.geoJSON(geojson, {style: {color: BASE_ROUTE_COLOR, weight: 3}});
       routeLayer.addTo(map);
+      routeLayer.bringToBack();
       try {
         const b = routeLayer.getBounds();
         if (b.isValid()) map.fitBounds(b, { padding: [10, 10] });
       } catch (e) {}
     }
 
-    // Draw a device track (overlay) and optionally refocus bounds.
-    function drawDeviceTrack(geojson) {
+    // Add (or re-add) a rider overlay, keeping it on top of other overlays.
+    function addTrackLayer(raceRiderId, geojson, shouldRefocus) {
       ensureMap();
-      if (deviceLayer) {
-        map.removeLayer(deviceLayer);
-        deviceLayer = null;
+      const meta = trackMeta.get(raceRiderId);
+      if (!meta) return;
+      const existing = trackLayers.get(raceRiderId);
+      if (existing && map) map.removeLayer(existing);
+      const layer = L.geoJSON(geojson, {style: {color: meta.color, weight: 3}});
+      trackLayers.set(raceRiderId, layer);
+      layer.addTo(map);
+      layer.bringToFront();
+      if (routeLayer) routeLayer.bringToBack();
+      if (shouldRefocus) {
+        try {
+          const b = layer.getBounds();
+          if (b.isValid()) map.fitBounds(b, { padding: [10, 10] });
+        } catch (e) {}
       }
-      deviceLayer = L.geoJSON(geojson, {style: {color: '#e31a1c', weight: 3}});
-      deviceLayer.addTo(map);
-      try {
-        const b = deviceLayer.getBounds();
-        if (b.isValid()) map.fitBounds(b, { padding: [10, 10] });
-      } catch (e) {}
+      updateTrackKeyActiveStates();
+    }
+
+    // Remove a rider overlay from the map while keeping its cached data.
+    function removeTrackLayer(raceRiderId) {
+      const layer = trackLayers.get(raceRiderId);
+      if (layer && map) map.removeLayer(layer);
+      trackLayers.delete(raceRiderId);
+      updateTrackKeyActiveStates();
+    }
+
+    // Fetch the stored GeoJSON for a rider and render it in the assigned color if still selected.
+    function fetchAndShowTrack(meta) {
+      const { raceRiderId, riderName, deviceId } = meta;
+      updateStatus(`Loading stored track for ${riderName} (race rider ${raceRiderId}${deviceId ? `, device ${deviceId}` : ""})...`);
+      return fetch(`/races/${raceId}/race-rider/${encodeURIComponent(raceRiderId)}/track`)
+        .then(resp => {
+          if (!resp.ok) throw new Error("Not found");
+          return resp.json();
+        })
+        .then(gj => {
+          trackDataCache.set(raceRiderId, gj);
+          if (meta.toggle && !meta.toggle.checked) {
+            updateTrackKeyActiveStates();
+            return;
+          }
+          addTrackLayer(raceRiderId, gj, true);
+          updateStatus(`Showing stored track for ${riderName} (race rider ${raceRiderId}${deviceId ? `, device ${deviceId}` : ""}).`);
+        })
+        .catch(() => {
+          if (meta.toggle) meta.toggle.checked = false;
+          removeTrackLayer(raceRiderId);
+          updateStatus("No stored track available for this race rider.");
+        });
     }
 
     // Kick off initial route fetch for the selected category.
     if (!mapNode || !raceId) {
-      if (statusNode) statusNode.textContent = "Map cannot load (missing race metadata).";
+      updateStatus("Map cannot load (missing race metadata).");
     } else {
-      fetch(`/races/${raceId}/route/geojson?category=${category}`)
+      fetch(`/races/${raceId}/route/geojson?category=${categoryParam}`)
         .then(r => r.json())
         .then(gj => {
           drawRoute(gj);
-          if (statusNode) statusNode.textContent = `Showing route for category "${decodeURIComponent(category)}".`;
+          updateStatus(`Showing route for ${categoryText}.`);
         })
         .catch(() => {
-          if (statusNode) statusNode.textContent = "Failed to load route data.";
+          updateStatus("Failed to load route data.");
         });
     }
 
-    // When clicking "Show Track", fetch per-device GeoJSON and render it on the same map.
-    document.querySelectorAll('.device-track-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const deviceId = (btn.dataset.device || "").trim(); // still shown in UI/status for clarity
-        const raceRiderId = (btn.dataset.raceRiderId || "").trim();
-        const riderName = btn.dataset.name || 'Unknown rider';
+    // Wire up rider toggles in the track key so multiple overlays can be displayed together.
+    document.querySelectorAll('.rider-row').forEach((row, index) => {
+      createTrackMetaFromRow(row, index);
+    });
 
-        if (!raceRiderId) {
-          if (statusNode) statusNode.textContent = "No race rider id linked for this rider.";
+    // Build the track key UI and attach the toggle behavior.
+    buildTrackKey();
+    trackMeta.forEach(meta => {
+      if (!meta.keyRow) return;
+      const toggle = meta.keyRow.querySelector('.track-toggle');
+      if (!toggle) return;
+      meta.toggle = toggle;
+      toggle.addEventListener('change', () => {
+        if (!meta.raceRiderId) {
+          updateStatus("No race rider id linked for this rider.");
+          toggle.checked = false;
           return;
         }
-
-        if (statusNode) statusNode.textContent = `Loading stored track for ${riderName} (race rider ${raceRiderId}${deviceId ? `, device ${deviceId}` : ""})...`;
-
-        fetch(`/races/${raceId}/race-rider/${encodeURIComponent(raceRiderId)}/track`)
-          .then(resp => {
-            if (!resp.ok) throw new Error("Not found");
-            return resp.json();
-          })
-          .then(gj => {
-            drawDeviceTrack(gj);
-            if (statusNode) statusNode.textContent = `Showing stored track for ${riderName} (race rider ${raceRiderId}${deviceId ? `, device ${deviceId}` : ""}).`;
-          })
-          .catch(() => {
-            if (statusNode) statusNode.textContent = "No stored track available for this race rider.";
-          });
+        if (toggle.checked) {
+          const cached = trackDataCache.get(meta.raceRiderId);
+          if (cached) {
+            addTrackLayer(meta.raceRiderId, cached, true);
+            updateStatus(`Showing stored track for ${meta.riderName} (race rider ${meta.raceRiderId}${meta.deviceId ? `, device ${meta.deviceId}` : ""}).`);
+          } else {
+            fetchAndShowTrack(meta);
+          }
+        } else {
+          removeTrackLayer(meta.raceRiderId);
+          updateStatus(`Hid track for ${meta.riderName} (race rider ${meta.raceRiderId}).`);
+        }
       });
     });
+
+    updateTrackKeyActiveStates();
+    scheduleLayoutCheck();
+    window.addEventListener('resize', scheduleLayoutCheck);
 
     // Manual edit: modal with datetime-local inputs for a friendlier UX.
     (function setupManualModal() {

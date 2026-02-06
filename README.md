@@ -93,6 +93,7 @@ ingest to display.
 - Writes: None.
 - Renders: `templates/post_race.html`.
 - Display: converts rider timing epochs to naive local datetimes for UI controls.
+- UI: map includes multi-select rider track overlays controlled from the compact legend beside race info (toggle state synced to active overlays, reselects replace prior overlays), persisted map height/width sliders, and auto-stacking of the riders table under the map when widths clash.
 - Called from:
   - `templates/home.html`: "Post Race" button in races table.
   - `templates/post_race.html`: category `<select>` `onchange` (GET with `?category=`).
@@ -111,7 +112,7 @@ ingest to display.
 - Writes: None.
 - Returns: GeoJSON payload (JSON).
 - Called from:
-  - `templates/post_race.html`: "Show Track" button (JS `fetch` on click).
+  - `templates/post_race.html`: rider track checkbox toggles (JS `fetch` when checked).
 
 ### manual_times (POST `/races/<race_id>/race-rider/<race_rider_id>/manual-times`)
 - Purpose: Overwrite start/finish times and rebuild a trimmed track snapshot.
