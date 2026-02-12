@@ -93,7 +93,7 @@ ingest to display.
 - Writes: None.
 - Renders: `templates/post_race.html`.
 - Display: converts rider timing epochs to naive local datetimes for UI controls.
-- UI: map includes multi-select rider track overlays controlled from the compact legend beside race info (toggle state synced to active overlays, reselects replace prior overlays), persisted map height/width sliders, and auto-stacking of the riders table under the map when widths clash.
+- UI: map includes multi-select rider track overlays controlled from the compact legend beside race info (toggle state synced to active overlays, reselects replace prior overlays), persisted map height/width sliders, auto-stacking of the riders table under the map when widths clash, and a manual timing modal that can optionally upload a TXT log to `/api/v1/upload-text` before reapplying the chosen start/end window.
 - Called from:
   - `templates/home.html`: "Post Race" button in races table.
   - `templates/post_race.html`: category `<select>` `onchange` (GET with `?category=`).
@@ -121,7 +121,7 @@ ingest to display.
 - Returns: JSON status.
 - Timezone: inputs must be timezone-naive; values are assumed to be in the configured local timezone (`config.yaml` → `global.timezone`) and converted to UTC before saving.
 - Called from:
-  - `templates/post_race.html`: "Manual Edit" button opens modal, modal "Save" triggers JS `fetch`.
+  - `templates/post_race.html`: "Manual Edit" button opens modal, modal "Save" and "Upload TXT" trigger JS `fetch`.
 
 ### save_race (POST `/races/save`)
 - Purpose: Create or update a `Race`.
@@ -218,6 +218,7 @@ ingest to display.
 - Returns: empty 200 on success; JSON error on invalid input.
 - Called from:
   - Text-log upload clients (no template references).
+  - `templates/post_race.html`: manual timing modal "Upload TXT" button.
 
 ## src/utils/gpx.py
 
@@ -457,14 +458,14 @@ ingest to display.
 
 ### post_race.html
 - General: Post-race review with route map and rider tracks.
-- Displays: Race metadata, category route map, riders list with timing.
-- UI actions: Category dropdown (reload), "Show Track", "Manual Edit", modal "Save/Cancel".
+- Displays: Race metadata, category route map, riders list with timing, manual timing modal with optional TXT log upload.
+- UI actions: Category dropdown (reload), "Show Track", "Manual Edit", modal "Save/Cancel/Upload TXT".
 - Linked pages (buttons/links):
   - "Back to Home" → `/` (home page).
 - Pulls: `race`, `categories`, `selected_category`, `geojson`, `riders`.
-- Pushes: Fetch route GeoJSON, fetch stored rider track, POST manual timing edits.
-- Routes called: `/races/<id>/post?category=...`, `/races/<id>/route/geojson?category=...`, `/races/<id>/race-rider/<id>/track`, `/races/<id>/race-rider/<id>/manual-times`.
+- Pushes: Fetch route GeoJSON, fetch stored rider track, POST manual timing edits, POST TXT log ingest.
+- Routes called: `/races/<id>/post?category=...`, `/races/<id>/route/geojson?category=...`, `/races/<id>/race-rider/<id>/track`, `/races/<id>/race-rider/<id>/manual-times`, `/api/v1/upload-text`.
 - Embedded scripts:
   - Route map load/render (Leaflet).
   - "Show Track" overlay fetch + render.
-  - Manual timing modal + POST update.
+  - Manual timing modal + POST update + TXT log upload.

@@ -173,6 +173,7 @@
                <td>
                   <button class="btn manual-edit-btn"
                           data-name="{{ r.name }}"
+                          data-device="{{ r.device_id or '' }}"
                           data-race-rider-id="{{ r.race_rider_id }}"
                           data-start="{{ r.start_time_rfid or '' }}"
                           data-end="{{ r.finish_time_rfid or '' }}">
@@ -204,8 +205,18 @@
         <span style="display:block; font-weight:600; margin-bottom:.25rem;">End time</span>
         <input id="manual-end" type="datetime-local" style="width:100%; padding:.4rem;" />
       </label>
+      <label style="display:block; margin-bottom:.75rem;">
+        <span style="display:block; font-weight:600; margin-bottom:.25rem;">TXT log (optional)</span>
+        <input id="manual-log" type="file" accept=".txt,text/plain" style="width:100%; padding:.35rem;" />
+        <span class="muted" style="display:block; margin-top:.35rem;">
+          Upload a raw GNSS text log for this rider's device. The upload will be ingested
+          via <code>/api/v1/upload-text</code> and then trimmed to the start/end times above.
+        </span>
+      </label>
+      <p id="manual-status" class="muted" style="margin:.15rem 0 .75rem 0;"></p>
       <div style="display:flex; justify-content:flex-end; gap:.5rem;">
         <button id="manual-cancel" class="btn" type="button">Cancel</button>
+        <button id="manual-upload-text" class="btn" type="button">Upload TXT</button>
         <button id="manual-save" class="btn" type="button" style="background:#d9534f; color:#fff;">Save</button>
       </div>
     </div>
@@ -558,29 +569,56 @@
       if (!modal) return;
       const startInput = document.getElementById('manual-start');
       const endInput = document.getElementById('manual-end');
+      const fileInput = document.getElementById('manual-log');
+      const statusLine = document.getElementById('manual-status');
       const title = document.getElementById('manual-title');
       const cancelBtn = document.getElementById('manual-cancel');
+      const uploadBtn = document.getElementById('manual-upload-text');
       const saveBtn = document.getElementById('manual-save');
 
       let currentRaceRiderId = null;
+      let currentDeviceId = "";
+      let currentRiderName = "";
 
-      function openModal(raceRiderId, riderName, startVal, endVal) {
+      // Keep the tiny status line in sync for upload/validation feedback.
+      function setManualStatus(message) {
+        if (!statusLine) return;
+        statusLine.textContent = message || "";
+      }
+
+      function openModal(raceRiderId, riderName, deviceId, startVal, endVal) {
         currentRaceRiderId = raceRiderId;
-        title.textContent = `Manual timing for ${riderName}`;
+        currentDeviceId = deviceId || "";
+        currentRiderName = riderName || "";
+        title.textContent = `Manual timing for ${riderName}${deviceId ? ` (device ${deviceId})` : ""}`;
         startInput.value = startVal || "";
         endInput.value = endVal || "";
+        if (fileInput) fileInput.value = "";
+        setManualStatus("");
         modal.style.display = "flex";
       }
 
       function closeModal() {
         modal.style.display = "none";
         currentRaceRiderId = null;
+        currentDeviceId = "";
+        currentRiderName = "";
+        if (fileInput) fileInput.value = "";
+        setManualStatus("");
       }
 
       cancelBtn.addEventListener('click', closeModal);
       modal.addEventListener('click', (e) => {
         if (e.target === modal) closeModal();
       });
+
+      // Build the manual timing payload once (used by both Save and Upload TXT flows).
+      function buildManualTimesPayload() {
+        return {
+          start_time: startInput.value,
+          end_time: endInput.value,
+        };
+      }
 
       saveBtn.addEventListener('click', () => {
         if (!currentRaceRiderId) return;
@@ -590,10 +628,7 @@
         fetch(`/races/${raceId}/race-rider/${encodeURIComponent(currentRaceRiderId)}/manual-times`, {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({
-            start_time: startInput.value,
-            end_time: endInput.value,
-          }),
+          body: JSON.stringify(buildManualTimesPayload()),
         })
           .then(resp => {
             if (!resp.ok) throw new Error("update failed");
@@ -603,14 +638,75 @@
           .catch(() => alert("Failed to update times. Please check format and try again."));
       });
 
+      // Upload a raw TXT log and then re-apply the manual timing window.
+      // This mirrors the Raspberry Pi ingest flow while letting us trim to the chosen times.
+      uploadBtn.addEventListener('click', async () => {
+        if (!currentRaceRiderId) return;
+        if (!currentDeviceId) {
+          alert("This rider has no device id, so a log cannot be ingested.");
+          return;
+        }
+        const file = fileInput?.files?.[0];
+        if (!file) {
+          alert("Select a .txt log file before uploading.");
+          return;
+        }
+        const confirmed = window.confirm("Upload this text log and rebuild track history using the times above?");
+        if (!confirmed) return;
+
+        try {
+          uploadBtn.disabled = true;
+          setManualStatus(`Uploading TXT log for ${currentRiderName || "rider"}...`);
+          updateStatus(`Uploading TXT log for ${currentRiderName || "rider"}...`);
+
+          const rawText = await file.text();
+          if (!rawText.trim()) {
+            throw new Error("Selected file was empty.");
+          }
+
+          const uploadResp = await fetch("/api/v1/upload-text", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+              pid: currentDeviceId,
+              log: rawText,
+            }),
+          });
+
+          if (!uploadResp.ok) {
+            throw new Error("Upload failed.");
+          }
+
+          // After ingesting the raw log, apply the manual timing window to rebuild track_hist.
+          const manualResp = await fetch(`/races/${raceId}/race-rider/${encodeURIComponent(currentRaceRiderId)}/manual-times`, {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify(buildManualTimesPayload()),
+          });
+
+          if (!manualResp.ok) {
+            throw new Error("Timing update failed.");
+          }
+
+          setManualStatus("Upload complete. Refreshing view...");
+          window.location.reload();
+        } catch (err) {
+          setManualStatus("");
+          alert(err?.message || "TXT upload failed. Please try again.");
+        } finally {
+          uploadBtn.disabled = false;
+        }
+      });
+
       document.querySelectorAll('.manual-edit-btn').forEach(btn => {
         btn.addEventListener('click', () => {
           const raceRiderId = (btn.dataset.raceRiderId || "").trim();
           const riderName = btn.dataset.name || 'Unknown rider';
+          const deviceId = (btn.dataset.device || "").trim();
           const startVal = (btn.dataset.start || "").replace(" ", "T");
           const endVal = (btn.dataset.end || "").replace(" ", "T");
           if (!raceRiderId) return;
-          openModal(raceRiderId, riderName, startVal, endVal);
+          openModal(raceRiderId, riderName, deviceId, startVal, endVal);
         });
       });
     })();
