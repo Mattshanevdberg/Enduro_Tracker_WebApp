@@ -30,6 +30,7 @@ logs/
 
 # Database
 .db
+backups/
 
 # OS
 .DS_Store
