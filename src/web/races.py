@@ -75,6 +75,46 @@ def _find_or_create_route_for_category(session, race_id: int, category_name: str
     return route, cat
 
 
+def _read_track_hist_geojson(session, race_id: int, race_rider_id: int) -> Optional[str]:
+    """
+    Return the latest track_hist GeoJSON for a race_rider when it belongs to race_id.
+
+    We keep this as a helper so route handlers can choose query order (history-first
+    or cache-first) without duplicating join/filter logic.
+    """
+    geojson_row = (
+        session.query(TrackHist.geojson)
+        .join(RaceRider, TrackHist.race_rider_id == RaceRider.id)
+        .join(Category, Category.id == RaceRider.category_id)
+        .join(Route, Route.id == Category.route_id)
+        .filter(Route.race_id == race_id, RaceRider.id == race_rider_id)
+        .order_by(TrackHist.id.desc())  # latest snapshot for this race_rider_id
+        .first()
+    )
+    if not geojson_row or not geojson_row[0]:
+        return None
+    return geojson_row[0]
+
+
+def _read_track_cache_geojson(session, race_id: int, race_rider_id: int) -> Optional[str]:
+    """
+    Return track_cache GeoJSON for a race_rider when it belongs to race_id.
+
+    The cache table has a single row per race_rider_id (PK), so no ordering is needed.
+    """
+    cache_row = (
+        session.query(TrackCache.geojson)
+        .join(RaceRider, TrackCache.race_rider_id == RaceRider.id)
+        .join(Category, Category.id == RaceRider.category_id)
+        .join(Route, Route.id == Category.route_id)
+        .filter(Route.race_id == race_id, RaceRider.id == race_rider_id)
+        .first()
+    )
+    if not cache_row or not cache_row[0]:
+        return None
+    return cache_row[0]
+
+
 @bp_races.route("/new", methods=["GET"])
 def new_race():
     """
@@ -233,37 +273,38 @@ def device_geojson(race_id: int, device_id: str):
 @bp_races.route("/<int:race_id>/race-rider/<int:race_rider_id>/track", methods=["GET"])
 def race_rider_track(race_id: int, race_rider_id: int):
     """
-    Return the stored GeoJSON for a specific race_rider (from track_hist).
+    Return stored GeoJSON for a specific race_rider.
 
-    This is optimized for the post-race view: it pulls a single column in one query,
-    joining just enough tables to ensure the race_rider belongs to the requested race.
+    Default behavior:
+      - Prefer latest `track_hist` snapshot.
+      - Fall back to `track_cache` when history is not available.
+
+    GET parameters
+    --------------
+    prefer_cache : str (optional)
+        When truthy (`1`, `true`, `yes`, `on`), query `track_cache` first so
+        post-race map polling can use the live cache while still falling back
+        to history if needed.
     """
+    prefer_cache = (request.args.get("prefer_cache") or "").strip().lower() in {"1", "true", "yes", "on"}
+
     session = SessionLocal()
     try:
-        geojson_row = (
-            session.query(TrackHist.geojson)
-            .join(RaceRider, TrackHist.race_rider_id == RaceRider.id)
-            .join(Category, Category.id == RaceRider.category_id)
-            .join(Route, Route.id == Category.route_id)
-            .filter(Route.race_id == race_id, RaceRider.id == race_rider_id)
-            .order_by(TrackHist.id.desc())  # grab latest snapshot for this race_rider
-            .first()
-        )
+        # Live polling calls can explicitly ask for cache-first reads.
+        if prefer_cache:
+            cache_geojson = _read_track_cache_geojson(session, race_id, race_rider_id)
+            if cache_geojson:
+                return Response(cache_geojson, mimetype="application/json")
 
-        if not geojson_row or not geojson_row[0]:
-            cache_row = (
-                session.query(TrackCache.geojson)
-                .join(RaceRider, TrackCache.race_rider_id == RaceRider.id)
-                .join(Category, Category.id == RaceRider.category_id)
-                .join(Route, Route.id == Category.route_id)
-                .filter(Route.race_id == race_id, RaceRider.id == race_rider_id)
-                .first()
-            )
-            if not cache_row or not cache_row[0]:
-                return Response("Track not found for this race rider.", status=404)
-            return Response(cache_row[0], mimetype="application/json")
+        hist_geojson = _read_track_hist_geojson(session, race_id, race_rider_id)
+        if hist_geojson:
+            return Response(hist_geojson, mimetype="application/json")
 
-        return Response(geojson_row[0], mimetype="application/json")
+        cache_geojson = _read_track_cache_geojson(session, race_id, race_rider_id)
+        if cache_geojson:
+            return Response(cache_geojson, mimetype="application/json")
+
+        return Response("Track not found for this race rider.", status=404)
     finally:
         session.close()
 

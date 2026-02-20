@@ -79,6 +79,20 @@ ingest to display.
 - Writes: `Route`, `Category` (creates rows if missing).
 - Called from: `edit_race`, `upload_gpx`, `add_race_rider` (internal helper).
 
+### _read_track_hist_geojson
+- Purpose: Helper to return the latest `track_hist.geojson` for a `race_rider_id` scoped to the requested race.
+- Reads: `TrackHist`, `RaceRider`, `Category`, `Route`.
+- Writes: None.
+- Returns: `geojson` string or `None` when not found.
+- Called from: `race_rider_track` only (internal helper).
+
+### _read_track_cache_geojson
+- Purpose: Helper to return `track_cache.geojson` for a `race_rider_id` scoped to the requested race.
+- Reads: `TrackCache`, `RaceRider`, `Category`, `Route`.
+- Writes: None.
+- Returns: `geojson` string or `None` when not found.
+- Called from: `race_rider_track` only (internal helper).
+
 ### new_race (GET `/races/new`)
 - Purpose: Render the "New Race" page.
 - Reads: Config categories.
@@ -93,7 +107,7 @@ ingest to display.
 - Writes: None.
 - Renders: `templates/post_race.html`.
 - Display: converts rider timing epochs to naive local datetimes for UI controls.
-- UI: map includes multi-select rider track overlays controlled from the compact legend beside race info (toggle state synced to active overlays, reselects replace prior overlays), persisted map height/width sliders, auto-stacking of the riders table under the map when widths clash, and a manual timing modal that can optionally upload a TXT log to `/api/v1/upload-text` before reapplying the chosen start/end window.
+- UI: map includes multi-select rider track overlays controlled from the compact legend beside race info (toggle state synced to active overlays, reselects replace prior overlays), persisted map height/width sliders, auto-stacking of the riders table under the map when widths clash, 5-second live refresh polling for selected riders (cache-first), and a manual timing modal that can optionally upload a TXT log to `/api/v1/upload-text` before reapplying the chosen start/end window.
 - Called from:
   - `templates/home.html`: "Post Race" button in races table.
   - `templates/post_race.html`: category `<select>` `onchange` (GET with `?category=`).
@@ -107,12 +121,15 @@ ingest to display.
   - No current template usage; available for external preview calls.
 
 ### race_rider_track (GET `/races/<race_id>/race-rider/<race_rider_id>/track`)
-- Purpose: Return stored GeoJSON track for a race rider, preferring `track_hist` and falling back to `track_cache`.
+- Purpose: Return stored GeoJSON track for a race rider.
 - Reads: `TrackHist`, `TrackCache`, `RaceRider`, `Category`, `Route`.
 - Writes: None.
+- Behavior:
+  - Default: prefers latest `track_hist`, falls back to `track_cache`.
+  - With `?prefer_cache=1`: prefers `track_cache` first (used by live post-race polling), then falls back to `track_hist`.
 - Returns: GeoJSON payload (JSON).
 - Called from:
-  - `templates/post_race.html`: rider track checkbox toggles (JS `fetch` when checked).
+  - `templates/post_race.html`: rider track checkbox toggles and 5-second live polling for selected riders.
 
 ### manual_times (POST `/races/<race_id>/race-rider/<race_rider_id>/manual-times`)
 - Purpose: Overwrite start/finish times and rebuild a trimmed track snapshot.
@@ -463,9 +480,10 @@ ingest to display.
 - Linked pages (buttons/links):
   - "Back to Home" → `/` (home page).
 - Pulls: `race`, `categories`, `selected_category`, `geojson`, `riders`.
-- Pushes: Fetch route GeoJSON, fetch stored rider track, POST manual timing edits, POST TXT log ingest.
-- Routes called: `/races/<id>/post?category=...`, `/races/<id>/route/geojson?category=...`, `/races/<id>/race-rider/<id>/track`, `/races/<id>/race-rider/<id>/manual-times`, `/api/v1/upload-text`.
+- Pushes: Fetch route GeoJSON, fetch stored rider track (cache-first for live polling), POST manual timing edits, POST TXT log ingest.
+- Routes called: `/races/<id>/post?category=...`, `/races/<id>/route/geojson?category=...`, `/races/<id>/race-rider/<id>/track`, `/races/<id>/race-rider/<id>/track?prefer_cache=1`, `/races/<id>/race-rider/<id>/manual-times`, `/api/v1/upload-text`.
 - Embedded scripts:
   - Route map load/render (Leaflet).
   - "Show Track" overlay fetch + render.
+  - 5-second polling refresh for selected rider tracks (preserves selected toggles and layer state).
   - Manual timing modal + POST update + TXT log upload.

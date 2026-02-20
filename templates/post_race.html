@@ -227,6 +227,7 @@
     // - On load: draw the route GeoJSON for the selected category.
     // - On toggle: fetch per-race-rider GeoJSON and draw each overlay in its own color.
     // - Multiple overlays can be active at once, with the most recently selected track on top.
+    // - While the page remains open, selected rider tracks refresh every 5 seconds.
     const mapNode = document.getElementById('map');
     const statusNode = document.getElementById('map-status');
     const mapHeightInput = document.getElementById('map-height');
@@ -258,14 +259,17 @@
     ];
     const MAP_HEIGHT_STORAGE_KEY = 'postRaceMapHeightPx';
     const MAP_WIDTH_STORAGE_KEY = 'postRaceMapWidthPx';
+    const LIVE_TRACK_REFRESH_MS = 5000;
 
     let map;          // Leaflet map instance for the post-race view.
     let routeLayer;   // Base category route layer.
     const trackLayers = new Map();    // race_rider_id -> Leaflet GeoJSON layer.
     const trackDataCache = new Map(); // race_rider_id -> cached GeoJSON payload.
     const trackMeta = new Map();      // race_rider_id -> metadata including assigned color.
+    const inFlightTrackRefresh = new Set(); // race_rider_id values currently being refreshed.
     let layoutCheckHandle = null;     // requestAnimationFrame handle for layout recalculation.
     let routeKeyRow = null;           // Track key row for the base route.
+    let liveRefreshHandle = null;     // setInterval handle for live track refresh.
 
     // Ensure a Leaflet map exists for the post-race view and return the instance.
     // This stays lazy so we do not allocate tiles until the DOM is ready.
@@ -281,6 +285,48 @@
     // Update the small status line with a helpful message, guarding against missing DOM.
     function updateStatus(message) {
       if (statusNode) statusNode.textContent = message;
+    }
+
+    // Build the rider-track endpoint URL and optionally request cache-first behavior.
+    // The timestamp query string is a cheap cache-buster so we always read fresh data.
+    function getTrackRequestUrl(raceRiderId, preferCache) {
+      const baseUrl = `/races/${raceId}/race-rider/${encodeURIComponent(raceRiderId)}/track`;
+      const cacheMode = preferCache ? "prefer_cache=1&" : "";
+      return `${baseUrl}?${cacheMode}_ts=${Date.now()}`;
+    }
+
+    // Pull the first line coordinate set from a GeoJSON FeatureCollection.
+    // This keeps change detection lightweight for high-frequency refresh polling.
+    function extractLineCoords(geojson) {
+      const features = geojson?.features;
+      if (!Array.isArray(features)) return [];
+      for (const feature of features) {
+        const geometry = feature?.geometry;
+        if (!geometry) continue;
+        if (geometry.type === "LineString" && Array.isArray(geometry.coordinates)) {
+          return geometry.coordinates;
+        }
+        if (geometry.type === "MultiLineString" && Array.isArray(geometry.coordinates)) {
+          return geometry.coordinates.reduce((all, part) => {
+            if (Array.isArray(part)) all.push(...part);
+            return all;
+          }, []);
+        }
+      }
+      return [];
+    }
+
+    // Compare old/new track geometry quickly so we avoid unnecessary layer rebuilds.
+    // We treat length changes or last-point movement as "changed".
+    function trackGeometryChanged(previousGeojson, nextGeojson) {
+      if (!previousGeojson) return true;
+      const prevCoords = extractLineCoords(previousGeojson);
+      const nextCoords = extractLineCoords(nextGeojson);
+      if (prevCoords.length !== nextCoords.length) return true;
+      if (nextCoords.length === 0) return false;
+      const prevLast = prevCoords[prevCoords.length - 1] || [];
+      const nextLast = nextCoords[nextCoords.length - 1] || [];
+      return prevLast[0] !== nextLast[0] || prevLast[1] !== nextLast[1];
     }
 
     // Decide if the layout should stack the riders table under the map when widths do not fit.
@@ -486,29 +532,72 @@
       updateTrackKeyActiveStates();
     }
 
-    // Fetch the stored GeoJSON for a rider and render it in the assigned color if still selected.
-    function fetchAndShowTrack(meta) {
+    // Fetch stored GeoJSON for a rider and render it if still selected.
+    // Callers can choose cache-first mode and whether failures should clear selection.
+    function fetchAndShowTrack(meta, options = {}) {
+      const {
+        shouldRefocus = true,
+        silent = false,
+        preferCache = false,
+        keepSelectionOnError = true,
+      } = options;
       const { raceRiderId, riderName, deviceId } = meta;
-      updateStatus(`Loading stored track for ${riderName} (race rider ${raceRiderId}${deviceId ? `, device ${deviceId}` : ""})...`);
-      return fetch(`/races/${raceId}/race-rider/${encodeURIComponent(raceRiderId)}/track`)
+      if (!silent) {
+        updateStatus(`Loading stored track for ${riderName} (race rider ${raceRiderId}${deviceId ? `, device ${deviceId}` : ""})...`);
+      }
+      return fetch(getTrackRequestUrl(raceRiderId, preferCache), { cache: "no-store" })
         .then(resp => {
           if (!resp.ok) throw new Error("Not found");
           return resp.json();
         })
         .then(gj => {
+          const previousGeojson = trackDataCache.get(raceRiderId);
           trackDataCache.set(raceRiderId, gj);
           if (meta.toggle && !meta.toggle.checked) {
             updateTrackKeyActiveStates();
             return;
           }
-          addTrackLayer(raceRiderId, gj, true);
-          updateStatus(`Showing stored track for ${riderName} (race rider ${raceRiderId}${deviceId ? `, device ${deviceId}` : ""}).`);
+          if (trackGeometryChanged(previousGeojson, gj) || !trackLayers.has(raceRiderId)) {
+            addTrackLayer(raceRiderId, gj, shouldRefocus);
+          }
+          if (!silent) {
+            updateStatus(`Showing stored track for ${riderName} (race rider ${raceRiderId}${deviceId ? `, device ${deviceId}` : ""}).`);
+          }
         })
         .catch(() => {
-          if (meta.toggle) meta.toggle.checked = false;
-          removeTrackLayer(raceRiderId);
-          updateStatus("No stored track available for this race rider.");
+          if (!keepSelectionOnError) {
+            if (meta.toggle) meta.toggle.checked = false;
+            removeTrackLayer(raceRiderId);
+          }
+          if (!silent) {
+            updateStatus("No stored track available for this race rider.");
+          }
         });
+    }
+
+    // Poll selected riders and refresh from track_cache without changing selection state.
+    function refreshSelectedTracks() {
+      // Skip background-tab polling to reduce unnecessary network and DB load.
+      if (document.hidden) return;
+      trackMeta.forEach(meta => {
+        if (!meta.toggle || !meta.toggle.checked || !meta.raceRiderId) return;
+        if (inFlightTrackRefresh.has(meta.raceRiderId)) return;
+        inFlightTrackRefresh.add(meta.raceRiderId);
+        fetchAndShowTrack(meta, {
+          shouldRefocus: false,
+          silent: true,
+          preferCache: true,
+          keepSelectionOnError: true,
+        }).finally(() => {
+          inFlightTrackRefresh.delete(meta.raceRiderId);
+        });
+      });
+    }
+
+    // Start or restart the 5-second live refresh interval for selected rider tracks.
+    function startLiveTrackPolling() {
+      if (liveRefreshHandle) window.clearInterval(liveRefreshHandle);
+      liveRefreshHandle = window.setInterval(refreshSelectedTracks, LIVE_TRACK_REFRESH_MS);
     }
 
     // Kick off initial route fetch for the selected category.
@@ -549,9 +638,13 @@
           if (cached) {
             addTrackLayer(meta.raceRiderId, cached, true);
             updateStatus(`Showing stored track for ${meta.riderName} (race rider ${meta.raceRiderId}${meta.deviceId ? `, device ${meta.deviceId}` : ""}).`);
-          } else {
-            fetchAndShowTrack(meta);
           }
+          fetchAndShowTrack(meta, {
+            shouldRefocus: !cached,
+            silent: !!cached,
+            preferCache: true,
+            keepSelectionOnError: true,
+          });
         } else {
           removeTrackLayer(meta.raceRiderId);
           updateStatus(`Hid track for ${meta.riderName} (race rider ${meta.raceRiderId}).`);
@@ -559,6 +652,12 @@
       });
     });
 
+    // Keep selected riders live while the page stays open.
+    startLiveTrackPolling();
+    // Refresh once immediately when tab becomes active again.
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) refreshSelectedTracks();
+    });
     updateTrackKeyActiveStates();
     scheduleLayoutCheck();
     window.addEventListener('resize', scheduleLayoutCheck);
