@@ -286,7 +286,8 @@ def race_rider_track(race_id: int, race_rider_id: int):
         post-race map polling can use the live cache while still falling back
         to history if needed.
     """
-    prefer_cache = (request.args.get("prefer_cache") or "").strip().lower() in {"1", "true", "yes", "on"}
+    # Changed default to history-first since that's the more common use
+    prefer_cache = False # (request.args.get("prefer_cache") or "").strip().lower() in {"1", "true", "yes", "on"}
 
     session = SessionLocal()
     try:
