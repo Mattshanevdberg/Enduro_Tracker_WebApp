@@ -392,6 +392,24 @@ ingest to display.
 - Called from:
   - CLI: `python -m src.workers.gpx_worker` (background process).
 
+## tests/download_latest_track_hist_gpx.py
+
+### download_latest_track_hist_gpx
+- Purpose: Fetch the newest non-empty `track_hist.gpx` snapshot for a `race_rider_id` and write it to disk for manual export testing.
+- Reads: `TrackHist` filtered by `race_rider_id`, ordered by `updated_at_epoch` (latest first, nulls last), then `updated_at`, then `id`.
+- Writes: GPX file under project-level `downloads/` as `race_rider_<id>_track_hist_<track_hist_id>.gpx`.
+- Returns: `(ok, path_or_error)` tuple.
+- Called from:
+  - `tests/download_latest_track_hist_gpx.py:main` (CLI wrapper).
+
+### main
+- Purpose: CLI wrapper that accepts `race_rider_id`, calls `download_latest_track_hist_gpx`, and prints result.
+- Reads: CLI argument (`race_rider_id`).
+- Writes: None directly (delegates file write to helper function).
+- Returns: process exit code (`0` success, `1` failure).
+- Called from:
+  - Direct script execution: `python tests/download_latest_track_hist_gpx.py <race_rider_id>`.
+
 ## Database Tables (src/db/models.py)
 
 - `ingest_raw`: raw device uploads (payload JSON, received/processed timestamps, parse error). Columns: `id`, `device_id`, `payload_json`, `received_at`, `received_at_epoch`, `processed_at`, `processed_at_epoch`, `parse_error`. Relationships: no enforced foreign-key relationship; records are associated to devices by `device_id` value only. Conditions: `device_id` and `payload_json` are required (`NOT NULL`).

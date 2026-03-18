@@ -27,6 +27,7 @@ htmlcov/
 logs/
 .env
 *.log
+downloads/
 
 # Database
 .db
