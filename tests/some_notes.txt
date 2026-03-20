@@ -9,4 +9,10 @@ So yes, the path you register determines the trailing part of the URL clients us
 Correct. Importing a Python module executes its top-level code once, so any statements at module scope—like a print()—run immediately during the import. After that first import, the module is cached in sys.modules; later imports just reuse it, so the top-level code (and prints) won’t rerun unless you reload the module.
 
 ** Creating a backup of the db **
-cp enduro_tracker.db enduro_tracker.db.bak.$(date +%F-%H%M%S)
+pg_dump -h localhost -U enduro_tracker -d enduro_tracker > enduro_tracker_$(date +%F-%H%M%S).sql
+
+** Checking the last 10 rows from a table in the terminal **
+docker compose exec db psql -U enduro_tracker -d enduro_tracker -c "SELECT * FROM your_table_name ORDER BY id DESC LIMIT 10;"
+for example
+docker compose exec db psql -U enduro_tracker -d enduro_tracker -c "SELECT * FROM ingest_raw ORDER BY id DESC LIMIT 10;"
+docker compose exec db psql -U enduro_tracker -d enduro_tracker -c "SELECT * FROM points ORDER BY id DESC LIMIT 10;"

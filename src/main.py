@@ -32,7 +32,7 @@ with open(CONFIG_PATH, 'r') as f:
     config = yaml.safe_load(f)
 
 #set globals
-DATABASE_URL = config['global']['database_url']
+# DATABASE_URL = config['global']['database_url'] # not used
 API_HOST = config['global']['api_host']
 API_PORT = config['global']['api_port']
 

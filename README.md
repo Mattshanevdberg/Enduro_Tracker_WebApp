@@ -12,6 +12,45 @@ ingest to display.
 - Update `README.md` whenever any changes are made, maintaining the current README format.
 - Reference `Web Application System Design.pdf` when answering questions and performing updates.
 
+## compose.yaml
+
+### server
+- Purpose: Existing application service built from the repository Dockerfile.
+- Reads/Writes: receives `DATABASE_URL` from Compose so the runtime DB connection becomes environment-driven.
+- Depends on: `db` with health condition so PostgreSQL is started before the app container.
+- Exposes: host port `8000` to the Gunicorn web process in the container.
+- Notes: the SQLAlchemy engine already prefers `DATABASE_URL`, so Compose now controls whether the app runs against PostgreSQL and the SQLite runtime path is no longer used. The Dockerfile starts Gunicorn with `src.main:app`, which matches the Flask WSGI entry point used for the step 9 empty-database stack test.
+
+### parse-worker
+- Purpose: Background parser service that polls `ingest_raw`, converts fixes into `points`, and marks raw rows as processed.
+- Reads/Writes: receives the same `DATABASE_URL` as the web app so it operates on the shared PostgreSQL database.
+- Depends on: `db` with health condition so parsing only starts after PostgreSQL is ready.
+- Command: `python -m src.workers.parse_worker`.
+- Notes: runs as a standalone long-lived Compose service so parsing can be verified independently from the web process during the PostgreSQL stack test.
+
+### gpx-worker
+- Purpose: Background GeoJSON cache service that polls `points`, resolves the linked `race_rider`, and refreshes `track_cache`.
+- Reads/Writes: receives the same `DATABASE_URL` as the web app so it operates on the shared PostgreSQL database.
+- Depends on: `db` with health condition so cache generation only starts after PostgreSQL is ready.
+- Command: `python -m src.workers.gpx_worker`.
+- Notes: runs as a standalone long-lived Compose service so the live track cache path can be validated against empty PostgreSQL before data migration.
+
+### db
+- Purpose: PostgreSQL service introduced for the staged SQLite-to-PostgreSQL migration before remote deployment.
+- Image: `postgres:18`.
+- Persists: named volume `postgres-data` mounted at `/var/lib/postgresql`.
+- Auth: reads `POSTGRES_DB`, `POSTGRES_USER`, and `POSTGRES_PASSWORD` from the root `.env` file.
+- Exposes: container port `5432` to other Compose services.
+- Healthcheck: uses `pg_isready` with the same env-driven database name and user so Compose can tell when the database is actually ready to accept connections.
+- Notes: this follows the system design direction of SQLite for local development/prototyping and PostgreSQL for the remote/server-style deployment. With `postgres:18`, the working mount target is `/var/lib/postgresql`.
+
+## .env
+
+### PostgreSQL runtime variables
+- Purpose: local environment source file for the PostgreSQL service and the app `DATABASE_URL` interpolation values.
+- Reads/Writes: read by Docker Compose at runtime; ignored by git so local credentials do not need to be committed.
+- Notes: contains the local PostgreSQL runtime values used by Docker Compose and should be updated as needed for remote deployment.
+
 ## src/web/home.py
 
 ### home_page (GET `/`)
@@ -354,7 +393,7 @@ ingest to display.
 ### _process_batch_once
 - Purpose: Background batch step to move raw ingest data into `points`.
 - Reads: `IngestRaw` rows where `processed_at_epoch IS NULL` (limit `BATCH_SIZE = 200`).
-- Writes: `Point` inserts (including `received_at_epoch`) using ON CONFLICT DO NOTHING; updates `IngestRaw.processed_at_epoch` and `parse_error` (only set if all fixes are invalid).
+- Writes: `Point` inserts (including `received_at_epoch`) using PostgreSQL `ON CONFLICT DO NOTHING`; updates `IngestRaw.processed_at_epoch` and `parse_error` (only set if all fixes are invalid).
 - Returns: number of `IngestRaw` rows processed.
 - Called from:
   - `main` loop (internal helper).
@@ -409,6 +448,26 @@ ingest to display.
 - Returns: process exit code (`0` success, `1` failure).
 - Called from:
   - Direct script execution: `python tests/download_latest_track_hist_gpx.py <race_rider_id>`.
+
+## tests/migrate_sqlite_to_postgres.py
+
+### migrate_sqlite_to_postgres
+- Purpose: One-time helper to copy the application data from `enduro_tracker.db` into the PostgreSQL database referenced by `DATABASE_URL`.
+- Reads: SQLite source file `enduro_tracker.db`.
+- Writes: PostgreSQL tables in dependency order using batched inserts and per-table commits.
+- Preserves: explicit primary keys, timestamp fields, epoch mirror fields, and other row values exactly as stored in SQLite.
+- Resets: PostgreSQL sequences for integer `id` primary key tables after each table copy so future inserts continue from the migrated max id.
+- Skips: `alembic_version`, because PostgreSQL should already be stamped during the schema bootstrap step.
+- Called from:
+  - `tests/migrate_sqlite_to_postgres.py:main` (CLI wrapper).
+
+### main
+- Purpose: CLI wrapper that parses the optional source path, table subset, and batch size before running the SQLite-to-PostgreSQL migration.
+- Reads: CLI args (`--source`, `--tables`, `--batch-size`) and `DATABASE_URL`.
+- Writes: None directly (delegates DB copy work to `migrate_sqlite_to_postgres`).
+- Returns: process exit code (`0` success, `1` failure).
+- Called from:
+  - Direct script execution: `DATABASE_URL=... python tests/migrate_sqlite_to_postgres.py`.
 
 ## Database Tables (src/db/models.py)
 

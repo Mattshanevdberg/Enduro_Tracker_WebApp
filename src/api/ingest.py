@@ -36,7 +36,7 @@ with open(CONFIG_PATH, 'r') as f:
     config = yaml.safe_load(f)
 
 #set globals
-DATABASE_URL = config['global']['database_url']
+# DATABASE_URL = config['global']['database_url'] # not used
 
 # this is for ingesting GNSS data
 from src.db.models import SessionLocal, init_db, IngestRaw, RaceRider, TrackHist

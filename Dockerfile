@@ -47,5 +47,7 @@ COPY . .
 # Expose the port that the application listens on.
 EXPOSE 8000
 
-# Run the application.
-CMD gunicorn '.venv.lib.python3.11.site-packages.gunicorn.http.wsgi' --bind=0.0.0.0:8000
+# Run the Flask application through Gunicorn using the exported app object from
+# src.main. This matches the WSGI entry point the remote Docker deployment will
+# use, and it avoids relying on the development-only app.run(...) block.
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "src.main:app"]
