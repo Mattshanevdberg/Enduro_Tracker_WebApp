@@ -292,6 +292,74 @@ def build_ordered_select(table: Table):
     return select(table)
 
 
+def sanitize_batch_text_values(
+    table: Table,
+    batch: list[dict[str, object]],
+) -> tuple[list[dict[str, object]], dict[str, dict[str, int]]]:
+    """
+    Remove NUL bytes from string values that PostgreSQL text columns cannot store.
+
+    Parameters
+    ----------
+    table : Table
+        SQLAlchemy table definition shared by SQLite and PostgreSQL.
+    batch : list[dict[str, object]]
+        Insert-ready batch of SQLite rows represented as dictionaries.
+
+    Returns
+    -------
+    (sanitized_batch, stats) : (list[dict[str, object]], dict[str, dict[str, int]])
+        The sanitized batch plus per-column statistics describing how many rows
+        and NUL bytes were adjusted.
+
+    Notes
+    -----
+    PostgreSQL rejects embedded NUL (0x00) bytes in text/varchar columns while
+    SQLite permits them. The stored payload is therefore preserved exactly
+    except for those invalid bytes, which are removed so the migration can
+    complete successfully.
+    """
+    sanitized_batch: list[dict[str, object]] = []
+    stats: dict[str, dict[str, int]] = {}
+
+    for row in batch:
+        sanitized_row = dict(row)
+        for column_name, value in sanitized_row.items():
+            if not isinstance(value, str) or "\x00" not in value:
+                continue
+
+            nul_byte_count = value.count("\x00")
+            column_stats = stats.setdefault(column_name, {"rows": 0, "nul_bytes": 0})
+            column_stats["rows"] += 1
+            column_stats["nul_bytes"] += nul_byte_count
+
+            sanitized_row[column_name] = value.replace("\x00", "")
+
+        sanitized_batch.append(sanitized_row)
+
+    return sanitized_batch, stats
+
+
+def merge_sanitization_stats(
+    cumulative_stats: dict[str, dict[str, int]],
+    batch_stats: dict[str, dict[str, int]],
+) -> None:
+    """
+    Merge per-batch NUL-byte sanitization stats into a table-level accumulator.
+
+    Parameters
+    ----------
+    cumulative_stats : dict[str, dict[str, int]]
+        Running table-level stats keyed by column name.
+    batch_stats : dict[str, dict[str, int]]
+        Stats collected while sanitizing the current batch.
+    """
+    for column_name, stats in batch_stats.items():
+        column_totals = cumulative_stats.setdefault(column_name, {"rows": 0, "nul_bytes": 0})
+        column_totals["rows"] += stats["rows"]
+        column_totals["nul_bytes"] += stats["nul_bytes"]
+
+
 def iter_source_batches(
     source_conn: Connection,
     table: Table,
@@ -410,17 +478,28 @@ def copy_table(
             )
 
         inserted_count = 0
+        sanitization_stats: dict[str, dict[str, int]] = {}
         for batch in iter_source_batches(source_conn, table, batch_size):
+            sanitized_batch, batch_stats = sanitize_batch_text_values(table, batch)
+            merge_sanitization_stats(sanitization_stats, batch_stats)
+
             # SQLAlchemy executemany-style INSERT keeps the copy efficient while
             # still preserving every column exactly as it appears in SQLite.
-            target_conn.execute(table.insert(), batch)
-            inserted_count += len(batch)
+            target_conn.execute(table.insert(), sanitized_batch)
+            inserted_count += len(sanitized_batch)
             print(f"[migrate] {table_name}: inserted {inserted_count}/{source_count}")
 
         target_count_after = count_rows(target_conn, table)
         if target_count_after != source_count:
             raise RuntimeError(
                 f"Row count mismatch for '{table_name}': SQLite={source_count}, PostgreSQL={target_count_after}"
+            )
+
+        for column_name, stats in sanitization_stats.items():
+            print(
+                f"[migrate] {table_name}: removed {stats['nul_bytes']} NUL byte(s) "
+                f"from {stats['rows']} row(s) in column '{column_name}' because "
+                "PostgreSQL text fields cannot store them."
             )
 
         reset_postgres_sequence(target_conn, table)

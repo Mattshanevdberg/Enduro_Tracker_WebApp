@@ -21,6 +21,11 @@ ingest to display.
 - Exposes: host port `8000` to the Gunicorn web process in the container.
 - Notes: the SQLAlchemy engine already prefers `DATABASE_URL`, so Compose now controls whether the app runs against PostgreSQL and the SQLite runtime path is no longer used. The Dockerfile starts Gunicorn with `src.main:app`, which matches the Flask WSGI entry point used for the step 9 empty-database stack test.
 
+### upload-text sanitizing
+- Purpose: `POST /api/v1/upload-text` now strips embedded NUL (`0x00`) bytes from the uploaded raw text before parsing it and before storing it in `track_hist.raw_txt`.
+- Why: PostgreSQL text columns reject embedded NUL bytes, so this keeps the text-upload path safe even if a device log contains restart-related corruption.
+- Scope: only the unsupported NUL bytes are removed; the rest of the raw uploaded text is preserved.
+
 ### parse-worker
 - Purpose: Background parser service that polls `ingest_raw`, converts fixes into `points`, and marks raw rows as processed.
 - Reads/Writes: receives the same `DATABASE_URL` as the web app so it operates on the shared PostgreSQL database.
@@ -455,7 +460,7 @@ ingest to display.
 - Purpose: One-time helper to copy the application data from `enduro_tracker.db` into the PostgreSQL database referenced by `DATABASE_URL`.
 - Reads: SQLite source file `enduro_tracker.db`.
 - Writes: PostgreSQL tables in dependency order using batched inserts and per-table commits.
-- Preserves: explicit primary keys, timestamp fields, epoch mirror fields, and other row values exactly as stored in SQLite.
+- Preserves: explicit primary keys, timestamp fields, epoch mirror fields, and other row values exactly as stored in SQLite, except embedded NUL bytes in text fields, which are stripped because PostgreSQL text columns cannot store them.
 - Resets: PostgreSQL sequences for integer `id` primary key tables after each table copy so future inserts continue from the migrated max id.
 - Skips: `alembic_version`, because PostgreSQL should already be stamped during the schema bootstrap step.
 - Called from:

@@ -44,7 +44,7 @@ from src.db.models import SessionLocal, init_db, IngestRaw, RaceRider, TrackHist
 # parsing will be handled in a background job later
 # from src.db.models import Point   # enable when parsing points now
 
-from src.utils.gpx import _parse_text_fixes, _build_gpx_string, _build_geojson_string, filter_fixes_by_window  # reuse time formatter for GPX output
+from src.utils.gpx import _sanitize_text_for_postgres, _parse_text_fixes, _build_gpx_string, _build_geojson_string, filter_fixes_by_window  # reuse time formatter for GPX output
 from src.utils.time import datetime_to_epoch
 
 # bp instantiates a Flask Blueprint, which is a reusable bundle of routes, error handlers, etc. for modular apps. 
@@ -248,9 +248,10 @@ def upload_text():
         # 2) Extract device_id and log content
     device_id = data.get("pid")
     raw_fixes = data.get("log")
+    raw_fixes_clean = _sanitize_text_for_postgres(raw_fixes)
 
-    # 3) Decode safely to survive null/invalid characters, then parse fixes.
-    fixes = _parse_text_fixes(raw_fixes) # TODO test that the parsing works for nulls and invalid chars
+    # 3) Remove characters PostgreSQL text columns cannot store, then parse fixes.
+    fixes = _parse_text_fixes(raw_fixes_clean)
     if not fixes:
         return jsonify({"error": "No valid fixes found"}), 422
 
@@ -323,7 +324,7 @@ def upload_text():
                     race_rider_id=rr_id,
                     geojson=fixes_geojson,
                     gpx=fixes_gpx,
-                    raw_txt=raw_fixes,
+                    raw_txt=raw_fixes_clean,
                     updated_at_epoch=datetime_to_epoch(datetime.now(timezone.utc)),
                 )
             )

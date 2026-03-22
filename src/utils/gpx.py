@@ -3,6 +3,7 @@ GPX/GeoJSON utilities.
 
 Contains:
 - _iso8601_utc: epoch -> ISO8601 UTC helper.
+- _sanitize_text_for_postgres: remove raw-text characters PostgreSQL text cannot store.
 - _parse_text_fixes: clean line-delimited JSON fixes.
 - _build_gpx_string: construct GPX XML string from fixes.
 - _build_geojson_string: construct GeoJSON string from fixes.
@@ -59,6 +60,23 @@ def _iso8601_utc(epoch: int) -> str:
     Convert epoch seconds (UTC) to ISO 8601 format used in GPX, e.g. 2025-10-14T12:34:56Z
     """
     return datetime.fromtimestamp(epoch, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+def _sanitize_text_for_postgres(raw_text: Optional[str]) -> str:
+    """
+    Remove raw-text characters PostgreSQL text columns cannot store.
+
+    PostgreSQL rejects embedded NUL (0x00) bytes in text/varchar columns.
+    This helper strips those bytes while leaving the rest of the uploaded text untouched.
+
+    Args:
+        raw_text (Optional[str]): Uploaded raw text payload from the device.
+
+    Returns:
+        str: Raw text safe to store in PostgreSQL text columns.
+    """
+    if raw_text is None:
+        return ""
+    return raw_text.replace("\x00", "")
 
 # ---------------------------------------------------------------------------
 # Helpers to parse text logs and build GPX/GeoJSON strings
