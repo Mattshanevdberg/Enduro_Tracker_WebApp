@@ -56,6 +56,48 @@ ingest to display.
 - Reads/Writes: read by Docker Compose at runtime; ignored by git so local credentials do not need to be committed.
 - Notes: contains the local PostgreSQL runtime values used by Docker Compose and should be updated as needed for remote deployment.
 
+## Alembic Migration Workflow
+
+### Current baseline
+- Purpose: the active Alembic baseline is [438e4bd69220_baseline_schema.py](/home/matthew/Desktop/Master_Dev/Enduro_Tracker_WebApp/migrations/versions/438e4bd69220_baseline_schema.py), which can build the current PostgreSQL schema from an empty database.
+- Notes: legacy pre-baseline revisions are kept in [migrations/versions_legacy](/home/matthew/Desktop/Master_Dev/Enduro_Tracker_WebApp/migrations/versions_legacy) for reference only and are no longer part of the active migration chain.
+
+### Standard change process
+- Step 1: edit [models.py](/home/matthew/Desktop/Master_Dev/Enduro_Tracker_WebApp/src/db/models.py) first because the SQLAlchemy models remain the schema source of truth.
+- Step 2: generate a migration through Compose so Alembic uses the same runtime setup as the application:
+```bash
+docker compose run --rm -v "$PWD:/app" --entrypoint alembic server -c alembic.ini revision --autogenerate -m "your change"
+```
+- Step 3: review the new file in [migrations/versions](/home/matthew/Desktop/Master_Dev/Enduro_Tracker_WebApp/migrations/versions) before applying it.
+- Step 4: apply the migration through Compose:
+```bash
+docker compose run --rm -v "$PWD:/app" --entrypoint alembic server -c alembic.ini upgrade head
+```
+- Step 5: verify the applied revision:
+```bash
+docker compose run --rm -v "$PWD:/app" --entrypoint alembic server -c alembic.ini current
+docker compose exec db psql -U enduro_tracker -d enduro_tracker -c 'SELECT * FROM alembic_version;'
+```
+
+### Review guidance
+- Check that `down_revision` points to the current head revision.
+- Check that the generated diff only contains the schema changes you intended.
+- Check for unexpected destructive actions such as `drop_table`, `drop_column`, or a rename being represented as drop-plus-create.
+- If the change needs data backfill or data reshaping, add that logic manually to the generated migration file before running `upgrade head`.
+
+### PostgreSQL-specific note
+- Do not convert generated operations to `batch_alter_table()` by default.
+- That batch pattern was mainly a SQLite compatibility workaround and is no longer the normal path for this PostgreSQL-first setup.
+- If Alembic generates direct operations such as `op.create_unique_constraint(...)`, keep them unless there is a specific PostgreSQL problem to solve.
+
+### Verification guidance
+- Verify schema changes in PostgreSQL, not in a local `.db` file.
+- Use `psql` schema inspection for the affected table after the migration, for example:
+```bash
+docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
+```
+- For risky or destructive migrations, test against a disposable PostgreSQL database before applying them to the main runtime database.
+
 ## src/web/home.py
 
 ### home_page (GET `/`)
