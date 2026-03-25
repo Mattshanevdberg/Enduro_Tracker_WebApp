@@ -49,6 +49,101 @@ ingest to display.
 - Healthcheck: uses `pg_isready` with the same env-driven database name and user so Compose can tell when the database is actually ready to accept connections.
 - Notes: this follows the system design direction of SQLite for local development/prototyping and PostgreSQL for the remote/server-style deployment. With `postgres:18`, the working mount target is `/var/lib/postgresql`.
 
+## compose.debug.yaml
+
+### Debug workflow override
+- Purpose: override the base Compose stack so the web service runs with Flask debug mode while still using the same PostgreSQL-backed services as the normal runtime stack.
+- Web service behavior: bind-mounts the repository into `/app`, replaces Gunicorn with `flask --app src.main:app run --debug --host=0.0.0.0 --port=8000`, and keeps the published port at `8000`.
+- Worker behavior: bind-mounts the repository into `/app` so a worker restart picks up local code changes without rebuilding the image.
+- One-command debug start:
+```bash
+docker compose -f compose.yaml -f compose.debug.yaml up --build
+```
+- Notes: this keeps Docker Compose as the source of truth for PostgreSQL, environment variables, and service wiring while making the web process easier to debug during development.
+
+## Public Domain Workflow
+
+### Current public dev exposure
+- Purpose: expose the local Docker stack on the purchased domain `kooksnylive.co.za` without making the laptop directly public on the internet.
+- Stack shape: public browser request -> Cloudflare -> Cloudflare Tunnel -> local laptop -> Docker web app on `127.0.0.1:8000`.
+- Notes: this fits the remote/public access direction in `Web Application System Design V4 - 20260224.pdf`, while keeping the origin machine behind Cloudflare rather than exposing the raw host IP.
+
+### Why this setup is used
+- Hardware / host machine: the physical laptop or server running the Docker stack.
+- Public access needs DNS: the purchased domain must point to the service that knows how to reach the app.
+- CGNAT note: the local internet connection uses CGNAT, so the host cannot simply publish its own public IP directly to the internet.
+- Cloudflare role: Cloudflare acts as the public-facing proxy and forwards requests through a secure outbound tunnel started from the local machine.
+- Registrar vs DNS note: the registrar manages domain ownership, while Cloudflare becomes the DNS authority after the nameserver change.
+
+### Start the local app first
+- Bring the application stack up:
+```bash
+docker compose up -d db server parse-worker gpx-worker
+```
+- Confirm the local app responds:
+```bash
+curl -i http://127.0.0.1:8000/
+docker compose ps
+```
+
+### Domain and DNS handoff
+- Domain registrar used: `domains.co.za`.
+- Change the domain nameservers at the registrar to the nameservers provided by Cloudflare.
+- Disable DNSSEC during the nameserver handoff stage.
+- Practical distinction: nameservers decide who controls the DNS directions, while DNS records are the actual directions.
+- After the handoff, Cloudflare manages the DNS records instead of the registrar.
+
+### Cloudflared local tunnel
+- Install `cloudflared` on the local machine and complete the login / tunnel creation flow described in the Cloudflare Tunnel documentation.
+- Check the local Cloudflare state directory:
+```bash
+ls -la ~/.cloudflared
+```
+- Current tunnel details used for this setup:
+  - Tunnel name: `kooksnylive_laptopdev`
+  - Tunnel id: `fedcecd1-48fe-46cf-abe2-efdd87c74147`
+  - Credentials file: `/home/matthew/.cloudflared/fedcecd1-48fe-46cf-abe2-efdd87c74147.json`
+
+### Local tunnel config
+- Create `~/.cloudflared/config.yml` with the local tunnel credentials and ingress rules:
+```yaml
+tunnel: kooksnylive_laptopdev
+credentials-file: /home/YOUR_USERNAME/.cloudflared/YOUR_TUNNEL_ID.json
+
+ingress:
+  - hostname: app.kooksnylive.co.za
+    service: http://127.0.0.1:8000
+  - hostname: kooksnylive.co.za
+    service: http://127.0.0.1:8000
+  - service: http_status:404
+```
+- The two hostnames allow both `app.kooksnylive.co.za` and `kooksnylive.co.za` to reach the same home page.
+
+### Public hostnames
+- Create both public hostnames for the tunnel in Cloudflare so the same local app is reachable on:
+  - `app.kooksnylive.co.za`
+  - `kooksnylive.co.za`
+- After creating them, confirm the DNS entries appear in the Cloudflare dashboard.
+
+### Run the tunnel
+- Manual start:
+```bash
+cloudflared tunnel run kooksnylive_laptopdev
+```
+- With the Docker app already running, this should make both public hostnames serve the local web app.
+
+### Automatic tunnel start
+- To install the tunnel as a service that starts on boot:
+```bash
+sudo cloudflared service install
+```
+
+### References used for this setup
+- Learning video: `https://www.youtube.com/watch?v=p1QU3kLFPdg`
+- Cloudflare add-site / nameserver handoff: `https://developers.cloudflare.com/fundamentals/manage-domains/add-site/`
+- Cloudflare Tunnel setup: `https://developers.cloudflare.com/tunnel/setup/`
+- Cloudflare local tunnel management: `https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/local-management/create-local-tunnel/`
+
 ## .env
 
 ### PostgreSQL runtime variables
