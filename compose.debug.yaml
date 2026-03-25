@@ -1,0 +1,22 @@
+services:
+  server:
+    # Bind-mount the repository so Flask debug mode can reload on code changes
+    # without rebuilding the image during normal web development.
+    volumes:
+      - .:/app
+    # Run the Flask development server instead of Gunicorn for breakpoints,
+    # tracebacks, and auto-reload while still using the same PostgreSQL runtime.
+    entrypoint: ["flask"]
+    command: ["--app", "src.main:app", "run", "--debug", "--host=0.0.0.0", "--port=8000"]
+
+  parse-worker:
+    # Bind-mount the repository so worker restarts pick up local code changes
+    # without requiring a rebuild during active development.
+    volumes:
+      - .:/app
+
+  gpx-worker:
+    # Bind-mount the repository so worker restarts pick up local code changes
+    # without requiring a rebuild during active development.
+    volumes:
+      - .:/app

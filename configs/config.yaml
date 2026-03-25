@@ -1,5 +1,5 @@
 { "global": {
-    "database_url": "sqlite:///enduro_tracker.db", # still to adjust in alembic.ini
+    "database_url": "postgresql+psycopg://user:pass@host:5432/dbname", # Compose DATABASE_URL should remain the runtime source of truth
     "debug_mode": true,
     "api_host": "0.0.0.0",
     "api_port": 5000,

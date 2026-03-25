@@ -43,8 +43,8 @@ with open(CONFIG_PATH, 'r') as f:
 DATABASE_URL_CONFIG = config['global']['database_url']
 
 # DATABASE_URL examples:
-# - Dev (SQLite): sqlite:///enduro_tracker.db
-# - Prod (Postgres): postgresql+psycopg2://user:pass@host:5432/dbname
+# - Compose / runtime: DATABASE_URL=postgresql+psycopg://user:pass@db:5432/dbname
+# - Config fallback:   postgresql+psycopg://user:pass@host:5432/dbname
 DATABASE_URL = os.getenv("DATABASE_URL", DATABASE_URL_CONFIG)
 
 # set up SQLAlchemy’s core pieces for talking to your database:

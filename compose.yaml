@@ -1,0 +1,90 @@
+# Comments are provided throughout this file to help you get started.
+# If you need more help, visit the Docker Compose reference guide at
+# https://docs.docker.com/go/compose-spec-reference/
+
+# Here the instructions define your application as a service called "server".
+# This service is built from the Dockerfile in the current directory.
+# You can add other services your application may depend on here, such as a
+# database or a cache. For examples, see the Awesome Compose repository:
+# https://github.com/docker/awesome-compose
+services:
+  server:
+    build:
+      context: .
+    ports:
+      - 8000:8000
+    # Step 5 moves the runtime database configuration into environment values.
+    # The Flask app already reads DATABASE_URL first in src/db/models.py, so the
+    # container only needs this variable set to switch from SQLite to PostgreSQL.
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+    # Make Compose wait for PostgreSQL to report healthy before the app
+    # container starts. This does not fix the current Gunicorn CMD issue, but it
+    # does ensure the runtime dependency order is correct for the database move.
+    depends_on:
+      db:
+        condition: service_healthy
+    # The Dockerfile now starts Gunicorn with src.main:app, so the web service
+    # can run in the same WSGI shape that will be used on the remote server.
+
+  parse-worker:
+    build:
+      context: .
+    # Reuse the same PostgreSQL runtime URL as the web app so the parser worker
+    # reads from ingest_raw and writes to points in the shared database.
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+    depends_on:
+      db:
+        condition: service_healthy
+    # Run the polling worker as the container entry command so Compose can keep
+    # it alive independently from the web process during the step 9 checks.
+    command: ["python", "-m", "src.workers.parse_worker"]
+
+  gpx-worker:
+    build:
+      context: .
+    # Reuse the same PostgreSQL runtime URL as the web app so the GeoJSON cache
+    # worker reads points and updates track_cache in the shared database.
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+    depends_on:
+      db:
+        condition: service_healthy
+    # Run the track-cache polling worker as its own long-lived service so the
+    # step 9 stack matches the intended multi-process production layout.
+    command: ["python", "-m", "src.workers.gpx_worker"]
+
+  db:
+    image: postgres:18
+    restart: always
+    user: postgres
+    # Persist the PostgreSQL data root in a named volume so the database
+    # survives container recreation and behaves more like the target remote
+    # deployment described in the system design document. PostgreSQL 18 expects
+    # the volume at /var/lib/postgresql rather than /var/lib/postgresql/data.
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    # Read the database bootstrap values from the local .env file so the
+    # database service and the application service share a single source of
+    # truth for the connection details during the migration.
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    expose:
+      - 5432
+    # Wait until PostgreSQL is actually accepting connections before reporting
+    # the container as healthy. Later, the app service can depend on this.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+# Compose automatically reads the root .env file when present. Keeping the
+# connection values in .env makes it easy to move the app runtime from SQLite
+# to PostgreSQL without hard-coding credentials in this file.
+volumes:
+  postgres-data:

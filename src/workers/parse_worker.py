@@ -26,7 +26,7 @@ from typing import List, Optional
 
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import select
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 
 from src.db.models import SessionLocal, init_db, IngestRaw, Point
 from src.utils.time import datetime_to_epoch
@@ -152,6 +152,9 @@ def _process_batch_once() -> int:
                 r.parse_error = str(e)[:500]
 
         # Bulk insert Points with ON CONFLICT DO NOTHING to avoid duplicate errors.
+        # PostgreSQL handles the duplicate suppression at the database layer using
+        # the unique key on (device_id, t_epoch), which keeps the batch insert
+        # efficient while still protecting the worker from duplicate payloads.
         if to_insert:
             rows = [
                 {
@@ -171,7 +174,7 @@ def _process_batch_once() -> int:
                 for p in to_insert
             ]
             stmt = (
-                sqlite_insert(Point)
+                postgresql_insert(Point)
                 .values(rows)
                 .on_conflict_do_nothing(index_elements=["device_id", "t_epoch"])
             )

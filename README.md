@@ -12,6 +12,187 @@ ingest to display.
 - Update `README.md` whenever any changes are made, maintaining the current README format.
 - Reference `Web Application System Design.pdf` when answering questions and performing updates.
 
+## compose.yaml
+
+### server
+- Purpose: Existing application service built from the repository Dockerfile.
+- Reads/Writes: receives `DATABASE_URL` from Compose so the runtime DB connection becomes environment-driven.
+- Depends on: `db` with health condition so PostgreSQL is started before the app container.
+- Exposes: host port `8000` to the Gunicorn web process in the container.
+- Notes: the SQLAlchemy engine already prefers `DATABASE_URL`, so Compose now controls whether the app runs against PostgreSQL and the SQLite runtime path is no longer used. The Dockerfile starts Gunicorn with `src.main:app`, which matches the Flask WSGI entry point used for the step 9 empty-database stack test.
+
+### upload-text sanitizing
+- Purpose: `POST /api/v1/upload-text` now strips embedded NUL (`0x00`) bytes from the uploaded raw text before parsing it and before storing it in `track_hist.raw_txt`.
+- Why: PostgreSQL text columns reject embedded NUL bytes, so this keeps the text-upload path safe even if a device log contains restart-related corruption.
+- Scope: only the unsupported NUL bytes are removed; the rest of the raw uploaded text is preserved.
+
+### parse-worker
+- Purpose: Background parser service that polls `ingest_raw`, converts fixes into `points`, and marks raw rows as processed.
+- Reads/Writes: receives the same `DATABASE_URL` as the web app so it operates on the shared PostgreSQL database.
+- Depends on: `db` with health condition so parsing only starts after PostgreSQL is ready.
+- Command: `python -m src.workers.parse_worker`.
+- Notes: runs as a standalone long-lived Compose service so parsing can be verified independently from the web process during the PostgreSQL stack test.
+
+### gpx-worker
+- Purpose: Background GeoJSON cache service that polls `points`, resolves the linked `race_rider`, and refreshes `track_cache`.
+- Reads/Writes: receives the same `DATABASE_URL` as the web app so it operates on the shared PostgreSQL database.
+- Depends on: `db` with health condition so cache generation only starts after PostgreSQL is ready.
+- Command: `python -m src.workers.gpx_worker`.
+- Notes: runs as a standalone long-lived Compose service so the live track cache path can be validated against empty PostgreSQL before data migration.
+
+### db
+- Purpose: PostgreSQL service introduced for the staged SQLite-to-PostgreSQL migration before remote deployment.
+- Image: `postgres:18`.
+- Persists: named volume `postgres-data` mounted at `/var/lib/postgresql`.
+- Auth: reads `POSTGRES_DB`, `POSTGRES_USER`, and `POSTGRES_PASSWORD` from the root `.env` file.
+- Exposes: container port `5432` to other Compose services.
+- Healthcheck: uses `pg_isready` with the same env-driven database name and user so Compose can tell when the database is actually ready to accept connections.
+- Notes: this follows the system design direction of SQLite for local development/prototyping and PostgreSQL for the remote/server-style deployment. With `postgres:18`, the working mount target is `/var/lib/postgresql`.
+
+## compose.debug.yaml
+
+### Debug workflow override
+- Purpose: override the base Compose stack so the web service runs with Flask debug mode while still using the same PostgreSQL-backed services as the normal runtime stack.
+- Web service behavior: bind-mounts the repository into `/app`, replaces Gunicorn with `flask --app src.main:app run --debug --host=0.0.0.0 --port=8000`, and keeps the published port at `8000`.
+- Worker behavior: bind-mounts the repository into `/app` so a worker restart picks up local code changes without rebuilding the image.
+- One-command debug start:
+```bash
+docker compose -f compose.yaml -f compose.debug.yaml up --build
+```
+- Notes: this keeps Docker Compose as the source of truth for PostgreSQL, environment variables, and service wiring while making the web process easier to debug during development.
+
+## Public Domain Workflow
+
+### Current public dev exposure
+- Purpose: expose the local Docker stack on the purchased domain `kooksnylive.co.za` without making the laptop directly public on the internet.
+- Stack shape: public browser request -> Cloudflare -> Cloudflare Tunnel -> local laptop -> Docker web app on `127.0.0.1:8000`.
+- Notes: this fits the remote/public access direction in `Web Application System Design V4 - 20260224.pdf`, while keeping the origin machine behind Cloudflare rather than exposing the raw host IP.
+
+### Why this setup is used
+- Hardware / host machine: the physical laptop or server running the Docker stack.
+- Public access needs DNS: the purchased domain must point to the service that knows how to reach the app.
+- CGNAT note: the local internet connection uses CGNAT, so the host cannot simply publish its own public IP directly to the internet.
+- Cloudflare role: Cloudflare acts as the public-facing proxy and forwards requests through a secure outbound tunnel started from the local machine.
+- Registrar vs DNS note: the registrar manages domain ownership, while Cloudflare becomes the DNS authority after the nameserver change.
+
+### Start the local app first
+- Bring the application stack up:
+```bash
+docker compose up -d db server parse-worker gpx-worker
+```
+- Confirm the local app responds:
+```bash
+curl -i http://127.0.0.1:8000/
+docker compose ps
+```
+
+### Domain and DNS handoff
+- Domain registrar used: `domains.co.za`.
+- Change the domain nameservers at the registrar to the nameservers provided by Cloudflare.
+- Disable DNSSEC during the nameserver handoff stage.
+- Practical distinction: nameservers decide who controls the DNS directions, while DNS records are the actual directions.
+- After the handoff, Cloudflare manages the DNS records instead of the registrar.
+
+### Cloudflared local tunnel
+- Install `cloudflared` on the local machine and complete the login / tunnel creation flow described in the Cloudflare Tunnel documentation.
+- Check the local Cloudflare state directory:
+```bash
+ls -la ~/.cloudflared
+```
+- Current tunnel details used for this setup:
+  - Tunnel name: `kooksnylive_laptopdev`
+  - Tunnel id: `fedcecd1-48fe-46cf-abe2-efdd87c74147`
+  - Credentials file: `/home/matthew/.cloudflared/fedcecd1-48fe-46cf-abe2-efdd87c74147.json`
+
+### Local tunnel config
+- Create `~/.cloudflared/config.yml` with the local tunnel credentials and ingress rules:
+```yaml
+tunnel: kooksnylive_laptopdev
+credentials-file: /home/YOUR_USERNAME/.cloudflared/YOUR_TUNNEL_ID.json
+
+ingress:
+  - hostname: app.kooksnylive.co.za
+    service: http://127.0.0.1:8000
+  - hostname: kooksnylive.co.za
+    service: http://127.0.0.1:8000
+  - service: http_status:404
+```
+- The two hostnames allow both `app.kooksnylive.co.za` and `kooksnylive.co.za` to reach the same home page.
+
+### Public hostnames
+- Create both public hostnames for the tunnel in Cloudflare so the same local app is reachable on:
+  - `app.kooksnylive.co.za`
+  - `kooksnylive.co.za`
+- After creating them, confirm the DNS entries appear in the Cloudflare dashboard.
+
+### Run the tunnel
+- Manual start:
+```bash
+cloudflared tunnel run kooksnylive_laptopdev
+```
+- With the Docker app already running, this should make both public hostnames serve the local web app.
+
+### Automatic tunnel start
+- To install the tunnel as a service that starts on boot:
+```bash
+sudo cloudflared service install
+```
+
+### References used for this setup
+- Learning video: `https://www.youtube.com/watch?v=p1QU3kLFPdg`
+- Cloudflare add-site / nameserver handoff: `https://developers.cloudflare.com/fundamentals/manage-domains/add-site/`
+- Cloudflare Tunnel setup: `https://developers.cloudflare.com/tunnel/setup/`
+- Cloudflare local tunnel management: `https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/local-management/create-local-tunnel/`
+
+## .env
+
+### PostgreSQL runtime variables
+- Purpose: local environment source file for the PostgreSQL service and the app `DATABASE_URL` interpolation values.
+- Reads/Writes: read by Docker Compose at runtime; ignored by git so local credentials do not need to be committed.
+- Notes: contains the local PostgreSQL runtime values used by Docker Compose and should be updated as needed for remote deployment.
+
+## Alembic Migration Workflow
+
+### Current baseline
+- Purpose: the active Alembic baseline is [438e4bd69220_baseline_schema.py](/home/matthew/Desktop/Master_Dev/Enduro_Tracker_WebApp/migrations/versions/438e4bd69220_baseline_schema.py), which can build the current PostgreSQL schema from an empty database.
+- Notes: legacy pre-baseline revisions are kept in [migrations/versions_legacy](/home/matthew/Desktop/Master_Dev/Enduro_Tracker_WebApp/migrations/versions_legacy) for reference only and are no longer part of the active migration chain.
+
+### Standard change process
+- Step 1: edit [models.py](/home/matthew/Desktop/Master_Dev/Enduro_Tracker_WebApp/src/db/models.py) first because the SQLAlchemy models remain the schema source of truth.
+- Step 2: generate a migration through Compose so Alembic uses the same runtime setup as the application:
+```bash
+docker compose run --rm -v "$PWD:/app" --entrypoint alembic server -c alembic.ini revision --autogenerate -m "your change"
+```
+- Step 3: review the new file in [migrations/versions](/home/matthew/Desktop/Master_Dev/Enduro_Tracker_WebApp/migrations/versions) before applying it.
+- Step 4: apply the migration through Compose:
+```bash
+docker compose run --rm -v "$PWD:/app" --entrypoint alembic server -c alembic.ini upgrade head
+```
+- Step 5: verify the applied revision:
+```bash
+docker compose run --rm -v "$PWD:/app" --entrypoint alembic server -c alembic.ini current
+docker compose exec db psql -U enduro_tracker -d enduro_tracker -c 'SELECT * FROM alembic_version;'
+```
+
+### Review guidance
+- Check that `down_revision` points to the current head revision.
+- Check that the generated diff only contains the schema changes you intended.
+- Check for unexpected destructive actions such as `drop_table`, `drop_column`, or a rename being represented as drop-plus-create.
+- If the change needs data backfill or data reshaping, add that logic manually to the generated migration file before running `upgrade head`.
+
+### PostgreSQL-specific note
+- Do not convert generated operations to `batch_alter_table()` by default.
+- That batch pattern was mainly a SQLite compatibility workaround and is no longer the normal path for this PostgreSQL-first setup.
+- If Alembic generates direct operations such as `op.create_unique_constraint(...)`, keep them unless there is a specific PostgreSQL problem to solve.
+
+### Verification guidance
+- Verify schema changes in PostgreSQL, not in a local `.db` file.
+- Use `psql` schema inspection for the affected table after the migration, for example:
+```bash
+docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
+```
+- For risky or destructive migrations, test against a disposable PostgreSQL database before applying them to the main runtime database.
+
 ## src/web/home.py
 
 ### home_page (GET `/`)
@@ -354,7 +535,7 @@ ingest to display.
 ### _process_batch_once
 - Purpose: Background batch step to move raw ingest data into `points`.
 - Reads: `IngestRaw` rows where `processed_at_epoch IS NULL` (limit `BATCH_SIZE = 200`).
-- Writes: `Point` inserts (including `received_at_epoch`) using ON CONFLICT DO NOTHING; updates `IngestRaw.processed_at_epoch` and `parse_error` (only set if all fixes are invalid).
+- Writes: `Point` inserts (including `received_at_epoch`) using PostgreSQL `ON CONFLICT DO NOTHING`; updates `IngestRaw.processed_at_epoch` and `parse_error` (only set if all fixes are invalid).
 - Returns: number of `IngestRaw` rows processed.
 - Called from:
   - `main` loop (internal helper).
@@ -409,6 +590,26 @@ ingest to display.
 - Returns: process exit code (`0` success, `1` failure).
 - Called from:
   - Direct script execution: `python tests/download_latest_track_hist_gpx.py <race_rider_id>`.
+
+## tests/migrate_sqlite_to_postgres.py
+
+### migrate_sqlite_to_postgres
+- Purpose: One-time helper to copy the application data from `enduro_tracker.db` into the PostgreSQL database referenced by `DATABASE_URL`.
+- Reads: SQLite source file `enduro_tracker.db`.
+- Writes: PostgreSQL tables in dependency order using batched inserts and per-table commits.
+- Preserves: explicit primary keys, timestamp fields, epoch mirror fields, and other row values exactly as stored in SQLite, except embedded NUL bytes in text fields, which are stripped because PostgreSQL text columns cannot store them.
+- Resets: PostgreSQL sequences for integer `id` primary key tables after each table copy so future inserts continue from the migrated max id.
+- Skips: `alembic_version`, because PostgreSQL should already be stamped during the schema bootstrap step.
+- Called from:
+  - `tests/migrate_sqlite_to_postgres.py:main` (CLI wrapper).
+
+### main
+- Purpose: CLI wrapper that parses the optional source path, table subset, and batch size before running the SQLite-to-PostgreSQL migration.
+- Reads: CLI args (`--source`, `--tables`, `--batch-size`) and `DATABASE_URL`.
+- Writes: None directly (delegates DB copy work to `migrate_sqlite_to_postgres`).
+- Returns: process exit code (`0` success, `1` failure).
+- Called from:
+  - Direct script execution: `DATABASE_URL=... python tests/migrate_sqlite_to_postgres.py`.
 
 ## Database Tables (src/db/models.py)
 
