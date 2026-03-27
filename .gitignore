@@ -37,3 +37,7 @@ enduro_tracker.db
 # OS
 .DS_Store
 Thumbs.db
+
+# cloudflare tunnel
+.env.dev
+.env.prod

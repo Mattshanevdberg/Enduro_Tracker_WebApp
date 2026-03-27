@@ -16,10 +16,10 @@ ingest to display.
 
 ### server
 - Purpose: Existing application service built from the repository Dockerfile.
-- Reads/Writes: receives `DATABASE_URL` from Compose so the runtime DB connection becomes environment-driven.
+- Reads/Writes: receives `DATABASE_URL` and `FLASK_SECRET_KEY` from Compose so the runtime DB connection and Flask secret handling become environment-driven.
 - Depends on: `db` with health condition so PostgreSQL is started before the app container.
-- Exposes: host port `8000` to the Gunicorn web process in the container.
-- Notes: the SQLAlchemy engine already prefers `DATABASE_URL`, so Compose now controls whether the app runs against PostgreSQL and the SQLite runtime path is no longer used. The Dockerfile starts Gunicorn with `src.main:app`, which matches the Flask WSGI entry point used for the step 9 empty-database stack test.
+- Exposes: host port `${APP_HOST_PORT}` to the Gunicorn web process listening on container port `8000`.
+- Notes: the SQLAlchemy engine already prefers `DATABASE_URL`, so Compose now controls whether the app runs against PostgreSQL and the SQLite runtime path is no longer used. The Dockerfile starts Gunicorn with `src.main:app`, which matches the Flask WSGI entry point used on the remote server. `FLASK_SECRET_KEY` must be passed explicitly into the container because Compose variable substitution alone does not make an env value available to `os.environ` inside the running Flask process.
 
 ### upload-text sanitizing
 - Purpose: `POST /api/v1/upload-text` now strips embedded NUL (`0x00`) bytes from the uploaded raw text before parsing it and before storing it in `track_hist.raw_txt`.
@@ -43,11 +43,19 @@ ingest to display.
 ### db
 - Purpose: PostgreSQL service introduced for the staged SQLite-to-PostgreSQL migration before remote deployment.
 - Image: `postgres:18`.
-- Persists: named volume `postgres-data` mounted at `/var/lib/postgresql`.
-- Auth: reads `POSTGRES_DB`, `POSTGRES_USER`, and `POSTGRES_PASSWORD` from the root `.env` file.
+- Persists: named volume `postgres-data` mounted at `/var/lib/postgresql`, with the real Docker volume name driven by `POSTGRES_VOLUME_NAME`.
+- Auth: reads `POSTGRES_DB`, `POSTGRES_USER`, and `POSTGRES_PASSWORD` from the active environment file for the selected stack.
 - Exposes: container port `5432` to other Compose services.
 - Healthcheck: uses `pg_isready` with the same env-driven database name and user so Compose can tell when the database is actually ready to accept connections.
-- Notes: this follows the system design direction of SQLite for local development/prototyping and PostgreSQL for the remote/server-style deployment. With `postgres:18`, the working mount target is `/var/lib/postgresql`.
+- Notes: this follows the system design direction of SQLite for local development/prototyping and PostgreSQL for the remote/server-style deployment. With `postgres:18`, the working mount target is `/var/lib/postgresql`. Using separate `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_VOLUME_NAME` values for dev and prod keeps the two environments fully isolated, which matches the environment separation expected by `Web Application System Design V4 - 20260224.pdf`.
+
+### cloudflared
+- Purpose: run a containerised, remotely-managed Cloudflare Tunnel connector inside the same Compose network as the app stack.
+- Image: `cloudflare/cloudflared:latest`.
+- Command: `tunnel --no-autoupdate run --token ${TUNNEL_TOKEN}`.
+- Depends on: `server` so the connector only starts after the web service container is created.
+- Exposes: no host ports; the connector makes outbound connections to Cloudflare only.
+- Notes: the public hostname mapping is managed in the Cloudflare dashboard, while the container only needs the environment-specific tunnel token. Because `cloudflared` lives in the same Docker network, the tunnel target remains `http://server:8000` even when dev and prod publish different host ports on the same machine.
 
 ## compose.debug.yaml
 
@@ -63,93 +71,75 @@ docker compose -f compose.yaml -f compose.debug.yaml up --build
 
 ## Public Domain Workflow
 
-### Current public dev exposure
-- Purpose: expose the local Docker stack on the purchased domain `kooksnylive.co.za` without making the laptop directly public on the internet.
-- Stack shape: public browser request -> Cloudflare -> Cloudflare Tunnel -> local laptop -> Docker web app on `127.0.0.1:8000`.
-- Notes: this fits the remote/public access direction in `Web Application System Design V4 - 20260224.pdf`, while keeping the origin machine behind Cloudflare rather than exposing the raw host IP.
+### Current public environment exposure
+- Purpose: expose the Dockerised application through Cloudflare without publishing the laptop or remote server directly to the internet.
+- Stack shape: public browser request -> Cloudflare edge -> remotely-managed Cloudflare Tunnel -> `cloudflared` container -> `server:8000` on the Docker network.
+- Notes: this fits the remote/public access direction in `Web Application System Design V4 - 20260224.pdf`, while keeping the origin host behind Cloudflare and avoiding direct inbound exposure.
 
 ### Why this setup is used
-- Hardware / host machine: the physical laptop or server running the Docker stack.
-- Public access needs DNS: the purchased domain must point to the service that knows how to reach the app.
+- Hardware / host machine: the physical laptop or remote server running the Docker stack.
+- Public access needs DNS: the purchased domain must point to Cloudflare so Cloudflare can proxy the public hostname.
 - CGNAT note: the local internet connection uses CGNAT, so the host cannot simply publish its own public IP directly to the internet.
-- Cloudflare role: Cloudflare acts as the public-facing proxy and forwards requests through a secure outbound tunnel started from the local machine.
+- Cloudflare role: Cloudflare acts as the public-facing proxy and forwards requests through a secure outbound tunnel started by the `cloudflared` container.
 - Registrar vs DNS note: the registrar manages domain ownership, while Cloudflare becomes the DNS authority after the nameserver change.
 
-### Start the local app first
-- Bring the application stack up:
+### Remotely-managed tunnel layout
+- Dev hostname: `dev.kooksnylive.co.za`.
+- Prod hostname: `app.kooksnylive.co.za`.
+- Dev and prod each use a separate Cloudflare Tunnel token.
+- The tunnel ingress for both environments targets `http://server:8000` because `cloudflared` runs in the same Compose network as the Flask service.
+- If dev and prod run on the same host, the two stacks must publish different host ports even though the internal tunnel target stays `server:8000`.
+
+### Environment-specific Compose stacks
+- Bring up dev:
 ```bash
-docker compose up -d db server parse-worker gpx-worker
+docker compose -p enduro-dev --env-file .env.dev up -d
 ```
-- Confirm the local app responds:
+- Bring up prod:
 ```bash
-curl -i http://127.0.0.1:8000/
-docker compose ps
+docker compose -p enduro-prod --env-file .env.prod up -d
 ```
+- Why project names matter: without `-p`, Compose treats repeated `up` commands from the same repository as the same stack, so the second run replaces the first stack's containers, tunnel token, port mapping, and database volume wiring.
 
-### Domain and DNS handoff
-- Domain registrar used: `domains.co.za`.
-- Change the domain nameservers at the registrar to the nameservers provided by Cloudflare.
-- Disable DNSSEC during the nameserver handoff stage.
-- Practical distinction: nameservers decide who controls the DNS directions, while DNS records are the actual directions.
-- After the handoff, Cloudflare manages the DNS records instead of the registrar.
+### Same-machine dev/prod note
+- If dev and prod run on the same Docker host, use different values for `APP_HOST_PORT`, `APP_HOSTNAME`, `TUNNEL_TOKEN`, database credentials, and `POSTGRES_VOLUME_NAME`.
+- The host ports may differ, for example `8000` for dev and `8001` for prod, but the Cloudflare public hostname configuration should still point to `http://server:8000`.
 
-### Cloudflared local tunnel
-- Install `cloudflared` on the local machine and complete the login / tunnel creation flow described in the Cloudflare Tunnel documentation.
-- Check the local Cloudflare state directory:
-```bash
-ls -la ~/.cloudflared
-```
-- Current tunnel details used for this setup:
-  - Tunnel name: `kooksnylive_laptopdev`
-  - Tunnel id: `fedcecd1-48fe-46cf-abe2-efdd87c74147`
-  - Credentials file: `/home/matthew/.cloudflared/fedcecd1-48fe-46cf-abe2-efdd87c74147.json`
-
-### Local tunnel config
-- Create `~/.cloudflared/config.yml` with the local tunnel credentials and ingress rules:
-```yaml
-tunnel: kooksnylive_laptopdev
-credentials-file: /home/YOUR_USERNAME/.cloudflared/YOUR_TUNNEL_ID.json
-
-ingress:
-  - hostname: app.kooksnylive.co.za
-    service: http://127.0.0.1:8000
-  - hostname: kooksnylive.co.za
-    service: http://127.0.0.1:8000
-  - service: http_status:404
-```
-- The two hostnames allow both `app.kooksnylive.co.za` and `kooksnylive.co.za` to reach the same home page.
-
-### Public hostnames
-- Create both public hostnames for the tunnel in Cloudflare so the same local app is reachable on:
-  - `app.kooksnylive.co.za`
-  - `kooksnylive.co.za`
-- After creating them, confirm the DNS entries appear in the Cloudflare dashboard.
-
-### Run the tunnel
-- Manual start:
-```bash
-cloudflared tunnel run kooksnylive_laptopdev
-```
-- With the Docker app already running, this should make both public hostnames serve the local web app.
-
-### Automatic tunnel start
-- To install the tunnel as a service that starts on boot:
-```bash
-sudo cloudflared service install
-```
+### Public hostname troubleshooting note
+- Cloudflare error `1033` usually indicates a public-hostname-to-tunnel routing problem rather than an app crash.
+- When the tunnel connector is healthy but the site still shows `1033`, check that the correct public hostname is attached to the correct tunnel and that the DNS record points at the intended `cfargotunnel.com` target.
 
 ### References used for this setup
-- Learning video: `https://www.youtube.com/watch?v=p1QU3kLFPdg`
 - Cloudflare add-site / nameserver handoff: `https://developers.cloudflare.com/fundamentals/manage-domains/add-site/`
 - Cloudflare Tunnel setup: `https://developers.cloudflare.com/tunnel/setup/`
-- Cloudflare local tunnel management: `https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/local-management/create-local-tunnel/`
+- Cloudflare remotely-managed tunnel creation: `https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/get-started/create-remote-tunnel/`
+- Cloudflare error `1033`: `https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-1xxx-errors/error-1033/`
 
-## .env
+## .env Files
 
-### PostgreSQL runtime variables
-- Purpose: local environment source file for the PostgreSQL service and the app `DATABASE_URL` interpolation values.
-- Reads/Writes: read by Docker Compose at runtime; ignored by git so local credentials do not need to be committed.
-- Notes: contains the local PostgreSQL runtime values used by Docker Compose and should be updated as needed for remote deployment.
+### .env.dev / .env.prod runtime variables
+- Purpose: environment-specific source files for Compose interpolation and runtime container settings.
+- Reads/Writes: read by Docker Compose at startup time; should remain ignored by git because they contain secrets and tokens.
+- Core PostgreSQL values: `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_VOLUME_NAME`.
+- Public access values: `TUNNEL_TOKEN`, `APP_HOSTNAME`, and `APP_HOST_PORT`.
+- Flask secret values: `FLASK_SECRET_KEY` must be passed into the `server` container explicitly through the Compose `environment` section so Flask can read it through `os.environ`.
+- Notes: changing PostgreSQL bootstrap variables on an already-initialised volume does not reconfigure an existing database cluster. Clean separation requires a fresh volume name per environment or an explicit manual database/user migration.
+
+## src/main.py
+
+### create_app
+- Purpose: Flask application factory that creates the app instance, loads the Flask secret key, registers CORS, and attaches all API and web blueprints.
+- Reads: `FLASK_SECRET_KEY` from the container runtime environment, `config.yaml` for host and port globals.
+- Writes: `app.config["SECRET_KEY"]`.
+- Called from: module import path `src.main:app` for Gunicorn, and the direct-run block at the bottom of the file.
+- Notes: the app now expects `FLASK_SECRET_KEY` to exist in the container environment. If Compose does not pass that value into the `server` service, Gunicorn fails during import with `KeyError: 'FLASK_SECRET_KEY'`.
+
+### Direct-run debug block
+- Purpose: support direct local execution through `python src/main.py`.
+- Reads: `API_HOST` and `API_PORT` from `config.yaml`.
+- Writes: none.
+- Called from: only when `src/main.py` is executed directly.
+- Notes: the containerised runtime uses Gunicorn from the Dockerfile rather than this `app.run(...)` path, so the production deployment does not depend on Flask's built-in debug server.
 
 ## Alembic Migration Workflow
 

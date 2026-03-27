@@ -41,6 +41,7 @@ def create_app():
         __name__, 
         template_folder="../templates" # point Flask to your templates folder (repo root/templates)
         )
+    app.config["SECRET_KEY"] = os.environ["FLASK_SECRET_KEY"]
     CORS(app) # enables Cross-Origin Resource Sharing on the app so browsers from other origins can call the API
 
     # Root endpoint - decorates the following function, telling Flask to invoke it for GET requests to the root path
@@ -67,5 +68,5 @@ def create_app():
 app = create_app()
 
 if __name__ == "__main__":
-    app.run(debug=True, host=API_HOST, port=API_PORT)
+    app.run(debug=os.environ["FLASK_DEBUG"], host=API_HOST, port=API_PORT)
 
