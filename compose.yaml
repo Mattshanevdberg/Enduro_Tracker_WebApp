@@ -9,8 +9,7 @@
 # https://github.com/docker/awesome-compose
 services:
   server:
-    build:
-      context: .
+    image: ${APP_IMAGE_REPOSITORY}:${APP_IMAGE_TAG}
     ports:
       - "${APP_HOST_PORT}:8000"
     # Step 5 moves the runtime database configuration into environment values.
@@ -30,8 +29,7 @@ services:
     # can run in the same WSGI shape that will be used on the remote server.
 
   parse-worker:
-    build:
-      context: .
+    image: ${APP_IMAGE_REPOSITORY}:${APP_IMAGE_TAG}
     # Reuse the same PostgreSQL runtime URL as the web app so the parser worker
     # reads from ingest_raw and writes to points in the shared database.
     environment:
@@ -44,8 +42,7 @@ services:
     command: ["python", "-m", "src.workers.parse_worker"]
 
   gpx-worker:
-    build:
-      context: .
+    image: ${APP_IMAGE_REPOSITORY}:${APP_IMAGE_TAG}
     # Reuse the same PostgreSQL runtime URL as the web app so the GeoJSON cache
     # worker reads points and updates track_cache in the shared database.
     environment:

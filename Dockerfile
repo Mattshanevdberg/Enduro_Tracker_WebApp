@@ -9,6 +9,9 @@
 ARG PYTHON_VERSION=3.11.2
 FROM python:${PYTHON_VERSION}-slim as base
 
+# the OCI source label is required for the remote Docker deployment to pull the image from a registry (GHCR).
+LABEL org.opencontainers.image.source=https://github.com/Mattshanevdberg/Enduro_Tracker_WebApp
+
 # Prevents Python from writing pyc files.
 ENV PYTHONDONTWRITEBYTECODE=1
 
