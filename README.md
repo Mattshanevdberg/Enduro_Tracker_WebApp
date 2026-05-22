@@ -398,6 +398,14 @@ docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
 - Called from:
   - External timing feeds or devices (no template references).
 
+### upload_rfid (POST `/api/v1/upload-rfid`)
+- Purpose: Diagnostic RFID reader endpoint used to confirm the exact request format sent by the reader software before persistence is designed.
+- Reads: request query string (`mode`, `rfid`, `rssi`, `datestamp`, `id`), optional form values, optional JSON body, raw body text, and basic request metadata.
+- Writes: None (persistence deferred until the RFID reader payload shape is confirmed).
+- Returns: JSON ack with `accepted: true` and the values Flask received.
+- Called from:
+  - External RFID reader software using a URL template such as `/api/v1/upload-rfid?mode=1&rfid={EPC}&rssi={avgRSSI}&datestamp={latSeenStr}&id={readerId}`.
+
 ### upload_text (POST `/api/v1/upload-text`)
 - Purpose: Ingest a raw text log, parse fixes, trim to RFID window (if available), and persist to track history.
 - Reads: request JSON (`pid`, `log`); all `RaceRider` rows for the device and their epoch timing windows.

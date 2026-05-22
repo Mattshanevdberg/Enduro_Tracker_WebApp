@@ -5,11 +5,13 @@ Routes:
   POST /api/v1/upload         -> Compact GNSS JSON (device_id + fixes array); stores raw payload.
   POST /api/v1/upload-text    -> Raw text log (line-delimited JSON); returns GPX/GeoJSON previews.
   POST /api/v1/upload-timing  -> Timing marker (epoch, device_id, start/finish flag, source flag).
+  POST /api/v1/upload-rfid    -> Diagnostic RFID reader POST; prints received values for format discovery.
 
 Behavior:
   - Validate minimal schema for each route; avoid heavy work in-request.
   - GNSS upload stores a durable raw copy; text upload builds in-memory GPX/GeoJSON previews.
   - Timing markers are accepted and validated; persistence is wired in later.
+  - RFID upload is currently a test endpoint only; persistence is intentionally deferred until the reader payload is confirmed.
 
 Notes:
   - Keep these endpoints fast; background jobs handle heavier processing later.
@@ -162,6 +164,64 @@ def upload():
     #         session.close()
 
     return "", 200
+
+
+# @bp.route("/upload-rfid", methods=["POST"]) decorator registers upload_rfid as the handler for
+# POST /api/v1/upload-rfid. The RFID reader's URL template places values after the question mark
+# (for example ?rfid={EPC}&rssi={avgRSSI}), so those values arrive in Flask as request.args rather
+# than as a JSON body. This diagnostic route also prints form fields, JSON, and raw body text so the
+# first real reader test shows the complete shape of the incoming request before any database logic is added.
+@bp.route("/upload-rfid", methods=["POST"])
+def upload_rfid():
+    """
+    Print a diagnostic view of an RFID reader upload.
+
+    Expected URL template shape:
+      /api/v1/upload-rfid?mode=1&rfid={EPC}&rssi={avgRSSI}&datestamp={latSeenStr}&id={readerId}
+
+    Current behavior:
+      - Reads query string values from request.args.
+      - Reads form values from request.form if the reader sends application/x-www-form-urlencoded or multipart/form-data.
+      - Reads JSON values from request.get_json(silent=True) if the reader sends application/json.
+      - Reads raw body text from request.get_data(as_text=True) for any other POST body shape.
+      - Prints the received information to the Flask/Gunicorn console for format discovery.
+      - Returns a small JSON acknowledgement so the RFID reader receives a successful response.
+
+    Input Args (HTTP):
+      Query string values expected from the current reader template:
+        - mode: optional mode flag from the reader software
+        - rfid: RFID EPC/tag value from {EPC}
+        - rssi: average signal strength value from {avgRSSI}
+        - datestamp: reader-provided last-seen timestamp string from {latSeenStr}
+        - id: reader identifier from {readerId}
+
+    Output:
+      JSON response with accepted=true and the query/form/json/body values Flask received.
+    """
+    query_values = request.args.to_dict(flat=True)
+    form_values = request.form.to_dict(flat=True)
+    json_values = request.get_json(silent=True)
+    raw_body = request.get_data(as_text=True)
+
+    # Print a clear separator around the diagnostic payload so individual RFID hits are easy to find
+    # in Docker/Gunicorn logs while the reader format is still being confirmed.
+    print("RFID upload received")
+    print(f"  method: {request.method}")
+    print(f"  path: {request.path}")
+    print(f"  content_type: {request.content_type}")
+    print(f"  remote_addr: {request.remote_addr}")
+    print(f"  query_values: {query_values}")
+    print(f"  form_values: {form_values}")
+    print(f"  json_values: {json_values}")
+    print(f"  raw_body: {raw_body}")
+
+    return jsonify({
+        "accepted": True,
+        "query": query_values,
+        "form": form_values,
+        "json": json_values,
+        "raw_body": raw_body,
+    }), 200
 
 
 @bp.route("/upload-timing", methods=["POST"])
