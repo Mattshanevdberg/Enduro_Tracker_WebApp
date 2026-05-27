@@ -20,3 +20,9 @@ services:
     # without requiring a rebuild during active development.
     volumes:
       - .:/app
+
+  rfid-worker:
+    # Bind-mount the repository so the RFID worker picks up local code changes
+    # without requiring a rebuild during active development.
+    volumes:
+      - .:/app

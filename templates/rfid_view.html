@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>RFID Records</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 2rem; }
+      h1 { margin-bottom: .5rem; }
+      .topnav { margin-bottom: 1rem; }
+      .btn { padding:.5rem 1rem; border:1px solid #333; border-radius:6px; background:#fff; text-decoration:none; cursor:pointer; color:#111; display:inline-block; }
+      .btn:hover { background:#f3f3f3; }
+      .msg { margin: .5rem 0 1rem; padding: .6rem .8rem; border-radius: 6px; }
+      .ok { border:1px solid #28a745; background:#e8f5ea; }
+      .err { border:1px solid #dc3545; background:#fdecee; }
+      .muted { color:#555; font-size:.9rem; }
+      form.filters { margin: 1rem 0; max-width: 1100px; }
+      .grid { display:grid; grid-template-columns: repeat(4, minmax(150px, 1fr)); gap:.7rem .8rem; align-items:end; }
+      label { display:block; font-weight:600; margin-bottom:.25rem; }
+      input { box-sizing:border-box; padding:.45rem .5rem; border:1px solid #ccc; border-radius:6px; width:100%; }
+      .actions { display:flex; gap:.6rem; flex-wrap:wrap; }
+      .table-wrap { overflow-x:auto; margin-top:1.25rem; }
+      table { border-collapse: collapse; width:100%; min-width:1050px; }
+      th, td { border:1px solid #ddd; padding:.45rem .55rem; text-align:left; vertical-align:top; }
+      th { background:#fafafa; white-space:nowrap; }
+      code { white-space:nowrap; }
+      @media (max-width: 760px) {
+        body { margin: 1rem; }
+        .grid { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="topnav">
+      <a class="btn" href="{{ url_for('home.home_page') }}">Back to Home</a>
+    </div>
+
+    <h1>RFID Records</h1>
+    <p class="muted">Showing newest records first.</p>
+
+    {% if message is not none %}
+      <div class="msg {{ 'ok' if success else 'err' }}">{{ message }}</div>
+    {% endif %}
+
+    <form class="filters" method="get" action="{{ url_for('rfid.rfid_index') }}">
+      <div class="grid">
+        <div>
+          <label for="id">ID</label>
+          <input id="id" name="id" value="{{ filters.id }}" inputmode="numeric" />
+        </div>
+        <div>
+          <label for="epc">EPC</label>
+          <input id="epc" name="epc" value="{{ filters.epc }}" />
+        </div>
+        <div>
+          <label for="reader_id">Reader ID</label>
+          <input id="reader_id" name="reader_id" value="{{ filters.reader_id }}" />
+        </div>
+        <div>
+          <label for="ant">Antenna</label>
+          <input id="ant" name="ant" value="{{ filters.ant }}" />
+        </div>
+        <div>
+          <label for="time_from">Reader Time From</label>
+          <input id="time_from" name="time_from" type="datetime-local" step="1" value="{{ filters.time_from }}" />
+        </div>
+        <div>
+          <label for="time_to">Reader Time To</label>
+          <input id="time_to" name="time_to" type="datetime-local" step="1" value="{{ filters.time_to }}" />
+        </div>
+        <div>
+          <label for="received_from">Received Time From</label>
+          <input id="received_from" name="received_from" type="datetime-local" step="1" value="{{ filters.received_from }}" />
+        </div>
+        <div>
+          <label for="received_to">Received Time To</label>
+          <input id="received_to" name="received_to" type="datetime-local" step="1" value="{{ filters.received_to }}" />
+        </div>
+        <div>
+          <label for="limit">Limit</label>
+          <input id="limit" name="limit" value="{{ filters.limit }}" inputmode="numeric" />
+        </div>
+        <div class="actions">
+          <button class="btn" type="submit">Filter</button>
+          <a class="btn" href="{{ url_for('rfid.rfid_index') }}">Clear</a>
+        </div>
+      </div>
+    </form>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>EPC</th>
+            <th>RSSI</th>
+            <th>Avg RSSI</th>
+            <th>Antenna</th>
+            <th>Reader ID</th>
+            <th>Reader Time</th>
+            <th>Received Time</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+            <tr>
+              <td>{{ row.id }}</td>
+              <td><code>{{ row.epc }}</code></td>
+              <td>{{ row.rssi if row.rssi is not none else '' }}</td>
+              <td>{{ row.avg_rssi if row.avg_rssi is not none else '' }}</td>
+              <td>{{ row.ant or '' }}</td>
+              <td>{{ row.reader_id or '' }}</td>
+              <td>
+                {% if row.reader_time %}
+                  {{ row.reader_time.strftime('%Y-%m-%d %H:%M:%S') }}
+                {% endif %}
+              </td>
+              <td>
+                {% if row.received_at %}
+                  {{ row.received_at.strftime('%Y-%m-%d %H:%M:%S') }}
+                {% endif %}
+              </td>
+            </tr>
+          {% else %}
+            <tr><td colspan="8">No RFID records found.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </body>
+</html>

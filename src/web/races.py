@@ -13,7 +13,9 @@ POST /races/<race_id>/route/remove            -> Remove GPX for selected categor
 GET  /races/<race_id>/route/geojson           -> Return GeoJSON for selected category (map uses this)
 GET  /races/<race_id>/device/<device_id>/geojson      -> Build GeoJSON on the fly for a device (dynamic)
 GET  /races/<race_id>/race-rider/<race_rider_id>/track -> Return stored GeoJSON from track_hist for a race rider
+GET  /races/<race_id>/race-rider-timings              -> Return live race_riders timing fields for the post-race table
 POST /races/<race_id>/race-rider/<race_rider_id>/manual-times -> Manually overwrite start/finish times
+POST /races/<race_id>/race-rider/<race_rider_id>/confirm-finish -> Confirm RFID finish timing
 
 POST /races/<race_id>/riders/add                     -> Add a RaceRider row for this category
 POST /races/<race_id>/riders/<entry_id>/edit         -> Update an existing RaceRider row
@@ -115,6 +117,34 @@ def _read_track_cache_geojson(session, race_id: int, race_rider_id: int) -> Opti
     return cache_row[0]
 
 
+def _race_rider_timing_payload(race_rider: RaceRider) -> dict:
+    """
+    Build the JSON/template timing values for one RaceRider.
+
+    Input Args:
+      race_rider: RaceRider row with RFID epoch timing fields.
+
+    Output:
+      Dict containing display text, datetime-local input values, RFID warning flag,
+      and RFID finish confirmation flag.
+    """
+    start_dt = epoch_to_datetime(race_rider.start_time_rfid_epoch).replace(tzinfo=None) if race_rider.start_time_rfid_epoch is not None else None
+    finish_dt = epoch_to_datetime(race_rider.finish_time_rfid_epoch).replace(tzinfo=None) if race_rider.finish_time_rfid_epoch is not None else None
+
+    finish_confirmed = bool(race_rider.finish_time_rfid_confirmed)
+    show_multiple_rfid_warning = bool(race_rider.multiple_rfid_flag) and not finish_confirmed
+
+    return {
+        "race_rider_id": race_rider.id,
+        "start_time_rfid": start_dt.strftime("%Y-%m-%d %H:%M:%S") if start_dt else None,
+        "finish_time_rfid": finish_dt.strftime("%Y-%m-%d %H:%M:%S") if finish_dt else None,
+        "start_time_input": start_dt.strftime("%Y-%m-%dT%H:%M:%S") if start_dt else "",
+        "finish_time_input": finish_dt.strftime("%Y-%m-%dT%H:%M:%S") if finish_dt else "",
+        "multiple_rfid_flag": show_multiple_rfid_warning,
+        "finish_time_rfid_confirmed": finish_confirmed,
+    }
+
+
 @bp_races.route("/new", methods=["GET"])
 def new_race():
     """
@@ -210,10 +240,7 @@ def post_race(race_id: int):
                 session.query(
                     Rider.name,
                     Rider.team,
-                    RaceRider.device_id,
-                    RaceRider.id,
-                    RaceRider.start_time_rfid_epoch,
-                    RaceRider.finish_time_rfid_epoch,
+                    RaceRider,
                 )
                 .join(RaceRider, RaceRider.rider_id == Rider.id)
                 .filter(RaceRider.category_id == category_row.id)
@@ -221,24 +248,15 @@ def post_race(race_id: int):
                 .all()
             )
             riders_for_category = []
-            for (n, t, d, rr_id, start_epoch, finish_epoch) in rider_rows:
+            for (n, t, rr) in rider_rows:
+                timing_payload = _race_rider_timing_payload(rr)
                 riders_for_category.append(
                     {
                         "name": n,
                         "team": t,
-                        "device_id": d,
-                        "race_rider_id": rr_id,
-                        # Use naive local-time strings for UI (datetime-local inputs expect no offset).
-                        "start_time_rfid": (
-                            epoch_to_datetime(start_epoch).replace(tzinfo=None)
-                            if start_epoch is not None
-                            else None
-                        ),
-                        "finish_time_rfid": (
-                            epoch_to_datetime(finish_epoch).replace(tzinfo=None)
-                            if finish_epoch is not None
-                            else None
-                        ),
+                        "device_id": rr.device_id,
+                        "race_rider_id": rr.id,
+                        **timing_payload,
                     }
                 )
 
@@ -249,7 +267,45 @@ def post_race(race_id: int):
             selected_category=selected_category,
             geojson=geojson,
             riders=riders_for_category,
+            has_multiple_rfid_flag=any(r.get("multiple_rfid_flag") for r in riders_for_category),
         )
+    finally:
+        session.close()
+
+
+@bp_races.route("/<int:race_id>/race-rider-timings", methods=["GET"])
+def race_rider_timings(race_id: int):
+    """
+    Return live RaceRider timing values for the post-race riders table.
+
+    GET parameters
+    --------------
+    category : str (optional)
+        Category name to scope the returned riders. This should match the selected
+        post-race category tab.
+    """
+    selected_category = (request.args.get("category") or "").strip()
+
+    session = SessionLocal()
+    try:
+        query = (
+            session.query(RaceRider)
+            .join(Category, RaceRider.category_id == Category.id)
+            .join(Route, Category.route_id == Route.id)
+            .filter(Route.race_id == race_id)
+            .order_by(RaceRider.id.asc())
+        )
+        if selected_category:
+            query = query.filter(Category.name == selected_category)
+
+        rows = query.all()
+        return jsonify({
+            "race_id": race_id,
+            "category": selected_category,
+            "riders": [_race_rider_timing_payload(row) for row in rows],
+        }), 200
+    except SQLAlchemyError as e:
+        return jsonify({"error": f"DB error: {e}"}), 500
     finally:
         session.close()
 
@@ -359,6 +415,9 @@ def manual_times(race_id: int, race_rider_id: int):
         # Update stored times (epoch seconds, UTC).
         rr.start_time_rfid_epoch = start_epoch
         rr.finish_time_rfid_epoch = end_epoch
+        rr.finish_time_rfid_confirmed = end_epoch is not None
+        if rr.finish_time_rfid_confirmed:
+            rr.multiple_rfid_flag = False
 
         # Rebuild trimmed track from the latest raw text (if available) and store as a new track_hist entry.
         latest_track = (
@@ -386,6 +445,39 @@ def manual_times(race_id: int, race_rider_id: int):
 
         session.commit()
         return jsonify({"ok": True}), 200
+    except SQLAlchemyError as e:
+        session.rollback()
+        return jsonify({"error": f"DB error: {e}"}), 500
+    finally:
+        session.close()
+
+
+@bp_races.route("/<int:race_id>/race-rider/<int:race_rider_id>/confirm-finish", methods=["POST"])
+def confirm_finish_time(race_id: int, race_rider_id: int):
+    """
+    Confirm a race rider's current RFID finish time after organiser review.
+
+    This freezes the accepted finish time for RFID processing, clears the multiple
+    RFID warning flag, and lets the post-race page remove the highlight/asterisk.
+    """
+    session = SessionLocal()
+    try:
+        rr = (
+            session.query(RaceRider)
+            .join(Category, RaceRider.category_id == Category.id)
+            .join(Route, Category.route_id == Route.id)
+            .filter(Route.race_id == race_id, RaceRider.id == race_rider_id)
+            .one_or_none()
+        )
+        if not rr:
+            return jsonify({"error": "Race rider not found"}), 404
+        if rr.finish_time_rfid_epoch is None:
+            return jsonify({"error": "Cannot confirm a missing finish time"}), 400
+
+        rr.finish_time_rfid_confirmed = True
+        rr.multiple_rfid_flag = False
+        session.commit()
+        return jsonify({"ok": True, "timing": _race_rider_timing_payload(rr)}), 200
     except SQLAlchemyError as e:
         session.rollback()
         return jsonify({"error": f"DB error: {e}"}), 500

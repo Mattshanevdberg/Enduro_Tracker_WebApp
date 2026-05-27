@@ -40,6 +40,13 @@ ingest to display.
 - Command: `python -m src.workers.gpx_worker`.
 - Notes: runs as a standalone long-lived Compose service so the live track cache path can be validated against empty PostgreSQL before data migration.
 
+### rfid-worker
+- Purpose: Background RFID timing service that polls `ingest_rfid`, resolves EPC tags to devices, and updates `race_riders` start/finish timing fields.
+- Reads/Writes: receives the same `DATABASE_URL` as the web app so it operates on the shared PostgreSQL database.
+- Depends on: `db` with health condition so RFID processing starts after PostgreSQL is ready.
+- Command: `python -m src.workers.rfid_worker`.
+- Notes: polls every 30 seconds, marks each RFID ingest row as processed, stores skip/error reasons on false reads, sets `race_riders.multiple_rfid_flag` when a read cannot be grouped into start/finish windows, and ignores further finish reads after `finish_time_rfid_confirmed` is set.
+
 ### db
 - Purpose: PostgreSQL service introduced for the staged SQLite-to-PostgreSQL migration before remote deployment.
 - Image: `postgres:18`.
@@ -62,7 +69,7 @@ ingest to display.
 ### Debug workflow override
 - Purpose: override the base Compose stack so the web service runs with Flask debug mode while still using the same PostgreSQL-backed services as the normal runtime stack.
 - Web service behavior: bind-mounts the repository into `/app`, replaces Gunicorn with `flask --app src.main:app run --debug --host=0.0.0.0 --port=8000`, and keeps the published port at `8000`.
-- Worker behavior: bind-mounts the repository into `/app` so a worker restart picks up local code changes without rebuilding the image.
+- Worker behavior: bind-mounts the repository into `/app` for `parse-worker`, `gpx-worker`, and `rfid-worker` so a worker restart picks up local code changes without rebuilding the image.
 - One-command debug start:
 ```bash
 docker compose -f compose.yaml -f compose.debug.yaml up --build
@@ -131,6 +138,7 @@ docker compose -p enduro-prod --env-file .env.prod up -d
 - Purpose: Flask application factory that creates the app instance, loads the Flask secret key, registers CORS, and attaches all API and web blueprints.
 - Reads: `FLASK_SECRET_KEY` from the container runtime environment, `config.yaml` for host and port globals.
 - Writes: `app.config["SECRET_KEY"]`.
+- Registers: ingest API routes, home, riders, devices, races, and RFID record viewer blueprints.
 - Called from: module import path `src.main:app` for Gunicorn, and the direct-run block at the bottom of the file.
 - Notes: the app now expects `FLASK_SECRET_KEY` to exist in the container environment. If Compose does not pass that value into the `server` service, Gunicorn fails during import with `KeyError: 'FLASK_SECRET_KEY'`.
 
@@ -198,6 +206,7 @@ docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
   - `templates/riders_form.html`: "Back to Home" link.
   - `templates/race_form.html`: "Back" link.
   - `templates/post_race.html`: "Back to Home" link.
+  - `templates/rfid_view.html`: "Back to Home" link.
 
 ## src/web/devices.py
 
@@ -207,10 +216,17 @@ docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
 - Writes: None.
 - Called from: `devices_index` only (internal helper).
 
+### _epc_in_use
+- Purpose: Check whether an RFID EPC is already assigned to another device.
+- Reads: `Device.epc_id`.
+- Writes: None.
+- Returns: True when another device already uses the EPC.
+- Called from: `devices_index` and `device_edit` only (internal helper).
+
 ### devices_index (GET/POST `/devices/`)
 - Purpose: List devices (GET) and create a new device (POST).
 - Reads: `Device` (list view).
-- Writes: `Device` (new row on POST).
+- Writes: `Device` (new row on POST, including optional `epc_id`).
 - Renders: `templates/devices.html`.
 - Called from:
   - `templates/home.html`: "Manage Devices" button (GET).
@@ -218,13 +234,38 @@ docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
   - `templates/device_edit.html`: "Back to Devices" link (GET).
 
 ### device_edit (GET/POST `/devices/<device_id>/edit`)
-- Purpose: Edit `device_info` for a specific device.
+- Purpose: Edit `device_info` and optional `epc_id` for a specific device.
 - Reads: `Device` (by id).
-- Writes: `Device.device_info` (on POST).
+- Writes: `Device.device_info` and `Device.epc_id` (on POST).
 - Renders: `templates/device_edit.html`.
 - Called from:
   - `templates/devices.html`: "Edit" link in devices table (GET).
   - `templates/device_edit.html`: "Save" button (POST).
+
+## src/web/rfid.py
+
+### _parse_optional_int
+- Purpose: Parse an optional integer filter value from the RFID records query string.
+- Reads/Writes: None.
+- Returns: integer value or None for an empty input.
+- Called from: `rfid_index` only (internal helper).
+
+### _parse_limit
+- Purpose: Parse and clamp the RFID records row limit.
+- Reads: raw limit string from `request.args`.
+- Writes: None.
+- Returns: integer limit between 1 and 1000.
+- Called from: `rfid_index` only (internal helper).
+
+### rfid_index (GET `/rfid/`)
+- Purpose: List recent `IngestRfid` rows with server-side column filters.
+- Reads: `IngestRfid` rows filtered by optional `id`, `epc`, `reader_id`, `ant`, reader datetime range, received datetime range, and `limit`.
+- Writes: None.
+- Renders: `templates/rfid_view.html`.
+- Display: converts `time_stamp_epoch` and `received_at_epoch` to datetimes for the template table.
+- Called from:
+  - `templates/home.html`: "View RFID Records" button (GET).
+  - `templates/rfid_view.html`: filter form and "Clear" link (GET).
 
 ## src/web/riders.py
 
@@ -265,6 +306,13 @@ docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
 - Returns: `geojson` string or `None` when not found.
 - Called from: `race_rider_track` only (internal helper).
 
+### _race_rider_timing_payload
+- Purpose: Helper to format one `RaceRider` timing row for templates and JSON polling.
+- Reads: `RaceRider.start_time_rfid_epoch`, `RaceRider.finish_time_rfid_epoch`, `RaceRider.multiple_rfid_flag`, `RaceRider.finish_time_rfid_confirmed`.
+- Writes: None.
+- Returns: timing display strings, datetime-local input values, RFID warning flag suppressed by confirmed finishes, and RFID finish confirmation flag.
+- Called from: `post_race` and `race_rider_timings` only (internal helper).
+
 ### new_race (GET `/races/new`)
 - Purpose: Render the "New Race" page.
 - Reads: Config categories.
@@ -279,7 +327,7 @@ docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
 - Writes: None.
 - Renders: `templates/post_race.html`.
 - Display: converts rider timing epochs to naive local datetimes for UI controls.
-- UI: map includes multi-select rider track overlays controlled from the compact legend beside race info (toggle state synced to active overlays, reselects replace prior overlays), persisted map height/width sliders, auto-stacking of the riders table under the map when widths clash, 5-second live refresh polling for selected riders (cache-first), and a manual timing modal that can optionally upload a TXT log to `/api/v1/upload-text` before reapplying the chosen start/end window.
+- UI: map includes multi-select rider track overlays controlled from the compact legend beside race info (toggle state synced to active overlays, reselects replace prior overlays), persisted map height/width sliders, auto-stacking of the riders table under the map when widths clash, 5-second live refresh polling for selected rider tracks (cache-first), 5-second live refresh polling for rider timing cells, and a manual timing modal that can optionally upload a TXT log to `/api/v1/upload-text` before reapplying the chosen start/end window.
 - Called from:
   - `templates/home.html`: "Post Race" button in races table.
   - `templates/post_race.html`: category `<select>` `onchange` (GET with `?category=`).
@@ -303,14 +351,31 @@ docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
 - Called from:
   - `templates/post_race.html`: rider track checkbox toggles and 5-second live polling for selected riders.
 
+### race_rider_timings (GET `/races/<race_id>/race-rider-timings`)
+- Purpose: Return live `RaceRider` start/end timing values for the post-race riders table.
+- Reads: `RaceRider`, `Category`, `Route`.
+- Writes: None.
+- Query params: `category` optionally scopes results to the selected post-race category.
+- Returns: JSON payload with current timing display strings, datetime-local input strings, `multiple_rfid_flag`, and `finish_time_rfid_confirmed`.
+- Called from:
+  - `templates/post_race.html`: 5-second polling refresh for start/end timing cells, RFID warning state, and confirmation button state.
+
 ### manual_times (POST `/races/<race_id>/race-rider/<race_rider_id>/manual-times`)
 - Purpose: Overwrite start/finish times and rebuild a trimmed track snapshot.
 - Reads: `RaceRider`, latest `TrackHist` (for raw text).
-- Writes: `RaceRider.start_time_rfid_epoch`, `RaceRider.finish_time_rfid_epoch`, new `TrackHist` row with `updated_at_epoch`.
+- Writes: `RaceRider.start_time_rfid_epoch`, `RaceRider.finish_time_rfid_epoch`, `RaceRider.finish_time_rfid_confirmed`, `RaceRider.multiple_rfid_flag`, new `TrackHist` row with `updated_at_epoch`.
 - Returns: JSON status.
 - Timezone: inputs must be timezone-naive; values are assumed to be in the configured local timezone (`config.yaml` → `global.timezone`) and converted to UTC before saving.
 - Called from:
   - `templates/post_race.html`: "Manual Edit" button opens modal, modal "Save" and "Upload TXT" trigger JS `fetch`.
+
+### confirm_finish_time (POST `/races/<race_id>/race-rider/<race_rider_id>/confirm-finish`)
+- Purpose: Confirm the current RFID finish timing after organiser review.
+- Reads: `RaceRider`, `Category`, `Route`.
+- Writes: `RaceRider.finish_time_rfid_confirmed=True` and `RaceRider.multiple_rfid_flag=False`.
+- Returns: JSON status with the refreshed timing payload.
+- Called from:
+  - `templates/post_race.html`: "Confirm" timing button next to manual edit.
 
 ### save_race (POST `/races/save`)
 - Purpose: Create or update a `Race`.
@@ -399,10 +464,10 @@ docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
   - External timing feeds or devices (no template references).
 
 ### upload_rfid (POST `/api/v1/upload-rfid`)
-- Purpose: Diagnostic RFID reader endpoint used to confirm the exact request format sent by the reader software before persistence is designed.
-- Reads: request query string (`mode`, `rfid`, `rssi`, `datestamp`, `id`), optional form values, optional JSON body, raw body text, and basic request metadata.
-- Writes: None (persistence deferred until the RFID reader payload shape is confirmed).
-- Returns: JSON ack with `accepted: true` and the values Flask received.
+- Purpose: Ingest an RFID reader tag event, normalize the timestamp/RSSI fields, and store the event for later worker processing.
+- Reads: form values (`epc`, `rssi`, `ant`, `timestamp`, `readerId`, `average_rssi`) from the RFID reader's `application/x-www-form-urlencoded` POST body.
+- Writes: `IngestRfid` (new row with `epc`, `rssi`, `ant`, `time_stamp_epoch`, `reader_id`, `avg_rssi`, `received_at_epoch`).
+- Returns: JSON ack with `accepted: true`, inserted `id`, `epc`, `time_stamp_epoch`, and `received_at_epoch`; 422 on missing/invalid `epc` or `timestamp`; 500 on DB error.
 - Called from:
   - External RFID reader software using a URL template such as `/api/v1/upload-rfid?mode=1&rfid={EPC}&rssi={avgRSSI}&datestamp={latSeenStr}&id={readerId}`.
 
@@ -520,6 +585,14 @@ docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
 - Called from:
   - `src/web/races.py:manual_times`
 
+### rfid_timestamp_to_epoch
+- Purpose: Parse RFID reader timestamp strings such as `20260526T163756` and convert them to UTC epoch seconds, with ISO8601 fallback support.
+- Reads: `configs/config.yaml` (`global.timezone`) when `tz_name` is not provided.
+- Writes: None.
+- Returns: epoch seconds (int) or None for empty input.
+- Called from:
+  - `src/api/ingest.py:upload_rfid`
+
 ## src/workers/parse_worker.py
 
 ### _convert_fix
@@ -571,6 +644,49 @@ docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
 - Called from:
   - CLI: `python -m src.workers.gpx_worker` (background process).
 
+## src/workers/rfid_worker.py
+
+### _get_unprocessed_rfid_rows
+- Purpose: Fetch `IngestRfid` rows where `processed_at_epoch IS NULL`.
+- Reads: `IngestRfid`.
+- Writes: None.
+- Returns: oldest unprocessed RFID rows up to `BATCH_SIZE`.
+- Called from: `_process_batch_once` only (internal helper).
+
+### _find_device_id_for_epc
+- Purpose: Resolve an RFID EPC to a registered `Device.id`.
+- Reads: `Device.epc_id`.
+- Writes: None.
+- Returns: device id or None when the EPC is unregistered.
+- Called from: `_process_rfid_row` only (internal helper).
+
+### _latest_race_rider_for_device
+- Purpose: Find the newest `RaceRider` linked to a device and the related race start epoch.
+- Reads: `RaceRider`, `Category`, `Route`, `Race`.
+- Writes: None.
+- Returns: `(RaceRider, starts_at_epoch)` or `(None, None)`.
+- Called from: `_process_rfid_row` only (internal helper).
+
+### _process_rfid_row
+- Purpose: Apply one RFID ingest row to start/finish timing fields or flag it as ambiguous.
+- Reads: `IngestRfid`, `Device`, `RaceRider`, `Race.starts_at_epoch`.
+- Writes: `RaceRider.start_time_rfid_epoch`, `RaceRider.start_time_pi_epoch`, `RaceRider.finish_time_rfid_epoch`, `RaceRider.finish_time_pi_epoch`, `RaceRider.multiple_rfid_flag`, `IngestRfid.processed_at_epoch`, `IngestRfid.process_error`.
+- Behavior: start reads must be within one hour of race start and repeated reads are averaged when within five seconds; first finish reads must be outside the start window, repeated finish reads are averaged when within five seconds, confirmed finish timings ignore later finish reads and clear stale multiple-RFID warnings, and unmatched extras set `multiple_rfid_flag`.
+- Called from: `_process_batch_once` only (internal helper).
+
+### _process_batch_once
+- Purpose: Process one batch of unprocessed RFID ingest rows.
+- Reads/Writes: same as `_process_rfid_row`.
+- Returns: number of rows processed.
+- Called from: `main` loop (internal helper).
+
+### main
+- Purpose: Run the background RFID timing worker.
+- Reads/Writes: same as `_process_batch_once`.
+- Behavior: polls every `SLEEP_SEC = 30.0` when idle.
+- Called from:
+  - CLI: `python -m src.workers.rfid_worker` (background process).
+
 ## tests/download_latest_track_hist_gpx.py
 
 ### download_latest_track_hist_gpx
@@ -612,13 +728,14 @@ docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
 ## Database Tables (src/db/models.py)
 
 - `ingest_raw`: raw device uploads (payload JSON, received/processed timestamps, parse error). Columns: `id`, `device_id`, `payload_json`, `received_at`, `received_at_epoch`, `processed_at`, `processed_at_epoch`, `parse_error`. Relationships: no enforced foreign-key relationship; records are associated to devices by `device_id` value only. Conditions: `device_id` and `payload_json` are required (`NOT NULL`).
-- `devices`: registered hardware devices; referenced by race_riders. Columns: `id`, `device_info`. Relationships: one device can map to many `race_riders` entries via `race_riders.device_id -> devices.id`. Conditions: none beyond primary-key uniqueness on `id`.
+- `ingest_rfid`: raw RFID reader tag events. Columns: `id`, `epc`, `rssi`, `ant`, `time_stamp_epoch`, `reader_id`, `avg_rssi`, `received_at_epoch`, `processed_at_epoch`, `process_error`. Relationships: view-only link to `devices` through `ingest_rfid.epc == devices.epc_id` so unknown/false RFID reads can still be stored. Conditions: `epc` is required (`NOT NULL`); `time_stamp_epoch`, `reader_id`, and `processed_at_epoch` are indexed for worker lookups.
+- `devices`: registered hardware devices; referenced by race_riders. Columns: `id`, `device_info`, `epc_id`. Relationships: one device can map to many `race_riders` entries via `race_riders.device_id -> devices.id`, and can view many `ingest_rfid` rows through matching EPC values. Conditions: primary-key uniqueness on `id`; unique constraint `ux_devices_epc_id` enforces at most one device per non-null EPC tag.
 - `points`: parsed GNSS fixes per device (t_epoch, lat/lon, optional metrics). Columns: `id`, `device_id`, `t_epoch`, `lat`, `lon`, `ele`, `sog`, `cog`, `fx`, `hdop`, `nsat`, `received_at`, `received_at_epoch`. Relationships: no enforced foreign key to `devices`; points are linked to `race_riders` through a view-only `device_id` join. Conditions: unique constraint `ux_points_device_time` enforces one row per (`device_id`, `t_epoch`).
 - `riders`: core athlete details (name, team, bike, bio). Columns: `id`, `name`, `bike`, `bio`, `team`, `category`. Relationships: one rider can have many `race_riders` entries via `race_riders.rider_id -> riders.id`. Conditions: `name` is required (`NOT NULL`).
 - `races`: event metadata (name, description, website, starts/ends, active flag). Columns: `id`, `name`, `description`, `website`, `starts_at`, `starts_at_epoch`, `ends_at`, `ends_at_epoch`, `active`. Relationships: one race can have many `route` rows via `route.race_id -> races.id`. Conditions: `name` and `active` are required (`NOT NULL`) and `active` defaults to `true`.
 - `route`: per-race route geometry storage (gpx/geojson). Columns: `id`, `race_id`, `geojson`, `gpx`. Relationships: belongs to one `race` and can have many `categories` via `categories.route_id -> route.id`. Conditions: `race_id` is required (`NOT NULL`) and must reference an existing `races.id`.
 - `categories`: category labels tied to a route; unique per route. Columns: `id`, `route_id`, `name`. Relationships: belongs to one `route` and is referenced by many `race_riders`, plus one-to-one cache/history links in `leaderboard_cache` and `leaderboard_hist`. Conditions: unique constraint `ux_route_category_name` enforces unique `name` per `route_id`.
-- `race_riders`: joins rider, device, and category for a race; stores timing and status flags. Columns: `id`, `rider_id`, `device_id`, `category_id`, `comm_setting`, `active`, `recording`, `start_time_rfid`, `start_time_rfid_epoch`, `finish_time_rfid`, `finish_time_rfid_epoch`, `start_time_pi`, `start_time_pi_epoch`, `finish_time_pi`, `finish_time_pi_epoch`. Relationships: each row belongs to one `rider`, one `device`, and one `category`, with one-to-one links to `track_cache` and `track_hist`. Conditions: `rider_id`, `device_id`, `category_id`, `active`, and `recording` are required, with `active`/`recording` defaulting to `true`.
+- `race_riders`: joins rider, device, and category for a race; stores timing and status flags. Columns: `id`, `rider_id`, `device_id`, `category_id`, `comm_setting`, `active`, `recording`, `start_time_rfid`, `start_time_rfid_epoch`, `finish_time_rfid`, `finish_time_rfid_epoch`, `start_time_pi`, `start_time_pi_epoch`, `finish_time_pi`, `finish_time_pi_epoch`, `multiple_rfid_flag`, `finish_time_rfid_confirmed`. Relationships: each row belongs to one `rider`, one `device`, and one `category`, with one-to-one links to `track_cache` and `track_hist`. Conditions: `rider_id`, `device_id`, `category_id`, `active`, `recording`, `multiple_rfid_flag`, and `finish_time_rfid_confirmed` are required, with `active`/`recording` defaulting to `true` and RFID flags defaulting to `false`.
 - `leaderboard_cache`: live leaderboard snapshot per category. Columns: `category_id`, `payload_json`, `etag`, `updated_at`, `updated_at_epoch`. Relationships: one-to-one with `categories` via `category_id` as both foreign key and primary key. Conditions: `payload_json` and `updated_at` are required (`NOT NULL`).
 - `track_cache`: live track geojson per race_rider. Columns: `race_rider_id`, `geojson`, `etag`, `updated_at`, `updated_at_epoch`. Relationships: one-to-one with `race_riders` via `race_rider_id` as both foreign key and primary key. Conditions: `updated_at` is required (`NOT NULL`).
 - `leaderboard_hist`: archived leaderboard snapshots per category. Columns: `id`, `category_id`, `payload_json`, `official_pdf`, `updated_at`, `updated_at_epoch`. Relationships: many history rows can belong to one `category` via `category_id -> categories.id`. Conditions: `category_id`, `payload_json`, and `updated_at` are required (`NOT NULL`).
@@ -629,40 +746,53 @@ docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
 ### home.html
 - General: Home/landing page and navigation hub.
 - Displays: Races table (name, start, website, active).
-- UI actions: "Input Rider Details", "Manage Devices", "Add New Race", "Edit", "Post Race".
+- UI actions: "Input Rider Details", "Manage Devices", "Add New Race", "View RFID Records", "Edit", "Post Race".
 - Linked pages (buttons):
   - "Input Rider Details" → `/riders/new` (riders form page).
   - "Manage Devices" → `/devices/` (devices list page).
   - "Add New Race" → `/races/new` (new race form).
+  - "View RFID Records" → `/rfid/` (RFID records page).
   - "Edit" → `/races/<id>/edit` (race edit page).
   - "Post Race" → `/races/<id>/post` (post-race page).
 - Pulls: `races`, `default_category`.
 - Pushes: none (links only).
-- Routes called: `/`, `/riders/new`, `/devices/`, `/races/new`, `/races/<id>/edit`, `/races/<id>/post`.
+- Routes called: `/`, `/riders/new`, `/devices/`, `/races/new`, `/rfid/`, `/races/<id>/edit`, `/races/<id>/post`.
 - Embedded scripts: none.
 
 ### devices.html
 - General: Device list and create form.
-- Displays: Device ID, Device Info.
+- Displays: Device ID, RFID EPC, Device Info.
 - UI actions: "Save" (create), "Edit", "Back to Home".
 - Linked pages (buttons):
   - "Back to Home" → `/` (home page).
   - "Edit" → `/devices/<id>/edit` (device edit page).
 - Pulls: `devices`, `message`, `success`, `form`.
-- Pushes: POST create device.
+- Pushes: POST create device with optional RFID EPC.
 - Routes called: `/devices/` (GET/POST), `/devices/<id>/edit`, `/`.
 - Embedded scripts: none.
 
 ### device_edit.html
-- General: Edit a single device's info.
-- Displays: Device ID (read-only), Device Info.
+- General: Edit a single device's info and RFID EPC.
+- Displays: Device ID (read-only), Device Info, RFID EPC.
 - UI actions: "Save", "Back to Devices", "Home".
 - Linked pages (buttons):
   - "Back to Devices" → `/devices/` (devices list page).
   - "Home" → `/` (home page).
 - Pulls: `device`, `message`, `success`.
-- Pushes: POST update device info.
+- Pushes: POST update device info and optional RFID EPC.
 - Routes called: `/devices/<id>/edit`, `/devices/`, `/`.
+- Embedded scripts: none.
+
+### rfid_view.html
+- General: RFID ingest records viewer with server-side filters.
+- Displays: RFID row id, EPC, RSSI, average RSSI, antenna, reader id, reader time, and received time.
+- UI actions: "Filter", "Clear", "Back to Home".
+- Linked pages (buttons):
+  - "Back to Home" → `/` (home page).
+  - "Clear" → `/rfid/` (unfiltered RFID records page).
+- Pulls: `rows`, `filters`, `message`, `success`, `max_limit`.
+- Pushes: GET filter query string values only.
+- Routes called: `/rfid/`, `/`.
 - Embedded scripts: none.
 
 ### riders_form.html
@@ -693,15 +823,16 @@ docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
 
 ### post_race.html
 - General: Post-race review with route map and rider tracks.
-- Displays: Race metadata, category route map, riders list with timing, manual timing modal with optional TXT log upload.
-- UI actions: Category dropdown (reload), "Show Track", "Manual Edit", modal "Save/Cancel/Upload TXT".
+- Displays: Race metadata, category route map, riders list with timing, ambiguous RFID finish-time highlights with an asterisk review note, finish confirmation state, manual timing modal with optional TXT log upload.
+- UI actions: Category dropdown (reload), "Show Track", "Manual Edit", "Confirm" timing, modal "Save/Cancel/Upload TXT".
 - Linked pages (buttons/links):
   - "Back to Home" → `/` (home page).
-- Pulls: `race`, `categories`, `selected_category`, `geojson`, `riders`.
-- Pushes: Fetch route GeoJSON, fetch stored rider track (cache-first for live polling), POST manual timing edits, POST TXT log ingest.
-- Routes called: `/races/<id>/post?category=...`, `/races/<id>/route/geojson?category=...`, `/races/<id>/race-rider/<id>/track`, `/races/<id>/race-rider/<id>/track?prefer_cache=1`, `/races/<id>/race-rider/<id>/manual-times`, `/api/v1/upload-text`.
+- Pulls: `race`, `categories`, `selected_category`, `geojson`, `riders`, `has_multiple_rfid_flag`.
+- Pushes: Fetch route GeoJSON, fetch stored rider track (cache-first for live polling), fetch live rider timing values, POST manual timing edits, POST finish timing confirmation, POST TXT log ingest.
+- Routes called: `/races/<id>/post?category=...`, `/races/<id>/route/geojson?category=...`, `/races/<id>/race-rider/<id>/track`, `/races/<id>/race-rider/<id>/track?prefer_cache=1`, `/races/<id>/race-rider-timings?category=...`, `/races/<id>/race-rider/<id>/manual-times`, `/races/<id>/race-rider/<id>/confirm-finish`, `/api/v1/upload-text`.
 - Embedded scripts:
   - Route map load/render (Leaflet).
   - "Show Track" overlay fetch + render.
   - 5-second polling refresh for selected rider tracks (preserves selected toggles and layer state).
+  - 5-second polling refresh for start/end timing cells, multiple-RFID asterisk state, and confirmation button state.
   - Manual timing modal + POST update + TXT log upload.
