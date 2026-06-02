@@ -21,6 +21,7 @@ from src.web.home import bp_home
 from src.web.riders import bp_riders
 from src.web.devices import bp_devices
 from src.web.races import bp_races
+from src.web.rfid import bp_rfid
 
 # regular imports
 import yaml
@@ -62,6 +63,7 @@ def create_app():
     app.register_blueprint(bp_riders) # "/riders/new" rider management pages
     app.register_blueprint(bp_devices)  # /devices device management pages
     app.register_blueprint(bp_races)  # /races/* race management pages
+    app.register_blueprint(bp_rfid)  # /rfid RFID ingest record viewer
     return app
 
 # For `flask run`
@@ -69,4 +71,3 @@ app = create_app()
 
 if __name__ == "__main__":
     app.run(debug=os.environ["FLASK_DEBUG"], host=API_HOST, port=API_PORT)
-

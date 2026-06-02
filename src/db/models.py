@@ -3,6 +3,7 @@ Database models and session factory (SQLAlchemy).
 
 Tables:
 - ingest_raw: durable store of original JSON as received.
+- ingest_rfid: durable store of RFID reader tag events as received.
 - points: parsed storage of individual fixes (linked to devices).
 - devices: registry of hardware trackers.
 - riders / race_riders: entrants and their race-specific configuration.
@@ -96,20 +97,85 @@ class IngestRaw(Base):
     #device = relationship("Device", back_populates="ingest_records")
 
 
+class IngestRfid(Base):
+    """
+    Durable copy of RFID reader tag events.
+
+    Columns:
+      id                : PK
+      epc               : RFID EPC/tag value read by the reader
+      rssi              : signal strength value from the reader event
+      ant               : antenna identifier used for the read
+      time_stamp_epoch  : reader event timestamp converted to epoch seconds (UTC)
+      reader_id         : RFID reader identifier
+      avg_rssi          : average signal strength value from the reader event
+      received_at_epoch : server receipt time converted to epoch seconds (UTC)
+      processed_at_epoch: when the RFID worker processed this row (UTC epoch) [nullable]
+      process_error     : latest RFID worker error/skip reason (if any)       [nullable]
+
+    Relationship:
+      - Linked to Device through epc == devices.epc_id when the EPC is registered.
+      - This is intentionally not enforced with a database foreign key so unknown
+        or false RFID reads can still be ingested and reviewed by the worker/UI.
+    """
+
+    __tablename__ = "ingest_rfid"
+
+    id = Column(Integer, primary_key=True)
+    epc = Column(String(128), index=True, nullable=False)
+    rssi = Column(Float, nullable=True)
+    ant = Column(String(64), nullable=True)
+    time_stamp_epoch = Column(Integer, index=True, nullable=True)
+    reader_id = Column(String(64), index=True, nullable=True)
+    avg_rssi = Column(Float, nullable=True)
+    received_at_epoch = Column(Integer, nullable=True)
+    processed_at_epoch = Column(Integer, index=True, nullable=True)
+    process_error = Column(Text, nullable=True)
+
+    # This mirrors the Point/RaceRider loose relationship pattern: RFID reads can be
+    # traversed to a registered Device when the EPC matches, but inserts are still
+    # allowed for unknown EPC values so false reads are not lost.
+    device = relationship(
+        "Device",
+        primaryjoin=lambda: foreign(IngestRfid.epc) == Device.epc_id,
+        viewonly=True,
+    )
+
+
 class Device(Base):
     """
     Registered hardware device (spot tracker, phone, etc.).
+
+    Columns:
+      id          : device identifier used by trackers and race_riders
+      device_info : optional descriptive text for the hardware
+      epc_id      : optional unique RFID EPC/tag assigned to this device
+
+    Relationship:
+      - One Device can have many IngestRfid rows when ingest_rfid.epc matches epc_id.
     """
 
     __tablename__ = "devices"
 
     id = Column(String(64), primary_key=True)
     device_info = Column(Text, nullable=True)
+    epc_id = Column(String(128), nullable=True)
+
+    # EPC values must map to at most one Device. PostgreSQL still permits multiple
+    # NULL values, which is useful while older devices have not been assigned tags yet.
+    __table_args__ = (
+        UniqueConstraint("epc_id", name="ux_devices_epc_id"),
+    )
 
     # shouldn't need the commented two as relationship is inherited through race_riders
     #ingest_records = relationship("IngestRaw", back_populates="device")
     #points = relationship("Point", back_populates="device")
     race_riders = relationship("RaceRider", back_populates="device")
+    rfid_records = relationship(
+        "IngestRfid",
+        primaryjoin=lambda: Device.epc_id == foreign(IngestRfid.epc),
+        viewonly=True,
+    )
 
 
 class Point(Base):
@@ -255,6 +321,11 @@ class Category(Base):
 class RaceRider(Base):
     """
     Entry linking a rider, device, and category for a race.
+
+    Columns include timing fields from both RFID and Pi sources. multiple_rfid_flag
+    marks entries where RFID processing saw extra reads that could not be confidently
+    grouped into the start or finish timing window. finish_time_rfid_confirmed
+    freezes the accepted RFID finish timing after organiser review.
     """
 
     __tablename__ = "race_riders"
@@ -278,6 +349,8 @@ class RaceRider(Base):
     finish_time_pi = Column(DateTime(timezone=True), nullable=True)# when the rider finishes the race - set by the PI on the start line
     # Phase A: epoch mirror (UTC seconds) for future migration away from DateTime.
     finish_time_pi_epoch = Column(Integer, nullable=True)
+    multiple_rfid_flag = Column(Boolean, nullable=False, default=False)
+    finish_time_rfid_confirmed = Column(Boolean, nullable=False, default=False)
     #pi_offset_time = Column(Integer, nullable=True) # offset in seconds to apply to the pi's clock to sync with official - removed as can just calculate it
 
     rider = relationship("Rider", back_populates="race_entries")

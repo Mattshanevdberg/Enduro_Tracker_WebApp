@@ -33,6 +33,7 @@
     table { border-collapse: collapse; width: 100%; }
     th, td { border:1px solid #ddd; padding:.4rem .6rem; text-align:left; }
     th { background:#f7f7f7; }
+    .rfid-warning { border:2px solid #b42318; background:#fff1f0; font-weight:600; }
     .riders-table-wrap { overflow-x: auto; }
     .riders-table.is-stacked th,
     .riders-table.is-stacked td,
@@ -155,6 +156,7 @@
               <th>End Time</th>
               <th>Race Rider ID</th>
               <th>Manual Edit</th>
+              <th>Timing Confirmed</th>
             </tr>
           </thead>
           <tbody>
@@ -167,23 +169,33 @@
                 <td>{{ r.name }}</td>
                 <td>{{ r.team or '—' }}</td>
                 <td>{{ r.device_id or '—' }}</td>
-                <td>{{ r.start_time_rfid or 'waiting...' }}</td>
-                <td>{{ r.finish_time_rfid or 'waiting...' }}</td>
+                <td class="timing-start" data-race-rider-id="{{ r.race_rider_id }}">{{ r.start_time_rfid or 'waiting...' }}</td>
+                <td class="timing-finish {{ 'rfid-warning' if r.multiple_rfid_flag else '' }}" data-race-rider-id="{{ r.race_rider_id }}">
+                  {{ r.finish_time_rfid or 'waiting...' }}{% if r.multiple_rfid_flag and r.finish_time_rfid %}*{% endif %}
+                </td>
                 <td>{{ r.race_rider_id }}</td>
                <td>
                   <button class="btn manual-edit-btn"
                           data-name="{{ r.name }}"
                           data-device="{{ r.device_id or '' }}"
                           data-race-rider-id="{{ r.race_rider_id }}"
-                          data-start="{{ r.start_time_rfid or '' }}"
-                          data-end="{{ r.finish_time_rfid or '' }}">
+                          data-start="{{ r.start_time_input or '' }}"
+                          data-end="{{ r.finish_time_input or '' }}">
                     Manual Edit
+                  </button>
+                </td>
+                <td>
+                  <button class="btn confirm-timing-btn"
+                          data-race-rider-id="{{ r.race_rider_id }}"
+                          {{ 'disabled' if r.finish_time_rfid_confirmed or not r.finish_time_rfid else '' }}>
+                    {{ 'Confirmed' if r.finish_time_rfid_confirmed else 'Confirm' }}
                   </button>
                 </td>
               </tr>
             {% endfor %}
           </tbody>
         </table>
+        <p id="rfid-review-note" class="muted" style="{{ '' if has_multiple_rfid_flag else 'display:none;' }}">* multiple timing entries, timing to be manually reviewed and confirmed</p>
         </div>
       {% else %}
         <p class="muted">No riders for this category.</p>
@@ -260,16 +272,20 @@
     const MAP_HEIGHT_STORAGE_KEY = 'postRaceMapHeightPx';
     const MAP_WIDTH_STORAGE_KEY = 'postRaceMapWidthPx';
     const LIVE_TRACK_REFRESH_MS = 5000;
+    const LIVE_TIMING_REFRESH_MS = 5000;
 
     let map;          // Leaflet map instance for the post-race view.
     let routeLayer;   // Base category route layer.
     const trackLayers = new Map();    // race_rider_id -> Leaflet GeoJSON layer.
     const trackDataCache = new Map(); // race_rider_id -> cached GeoJSON payload.
     const trackMeta = new Map();      // race_rider_id -> metadata including assigned color.
+    const timingRows = new Map();     // race_rider_id -> table row for live timing refresh.
     const inFlightTrackRefresh = new Set(); // race_rider_id values currently being refreshed.
     let layoutCheckHandle = null;     // requestAnimationFrame handle for layout recalculation.
     let routeKeyRow = null;           // Track key row for the base route.
     let liveRefreshHandle = null;     // setInterval handle for live track refresh.
+    let liveTimingRefreshHandle = null; // setInterval handle for live RFID timing refresh.
+    let timingRefreshInFlight = false;  // prevents overlapping timing refresh requests.
 
     // Ensure a Leaflet map exists for the post-race view and return the instance.
     // This stays lazy so we do not allocate tiles until the DOM is ready.
@@ -293,6 +309,112 @@
       const baseUrl = `/races/${raceId}/race-rider/${encodeURIComponent(raceRiderId)}/track`;
       const cacheMode = preferCache ? "prefer_cache=1&" : "";
       return `${baseUrl}?${cacheMode}_ts=${Date.now()}`;
+    }
+
+    // Build the live timing endpoint URL for the selected category.
+    // The timestamp query string is a cache-buster so timing changes show quickly.
+    function getTimingRequestUrl() {
+      return `/races/${raceId}/race-rider-timings?category=${categoryParam}&_ts=${Date.now()}`;
+    }
+
+    // Keep the asterisk explanation visible only while at least one rider is flagged.
+    function updateRfidReviewNote(hasFlaggedTiming) {
+      const note = document.getElementById('rfid-review-note');
+      if (!note) return;
+      note.style.display = hasFlaggedTiming ? "" : "none";
+    }
+
+    // Render the end-time cell text, preserving the asterisk when multiple RFID
+    // timing entries have been detected for that race rider.
+    function renderFinishTimingText(finishTime, multipleRfidFlag) {
+      const display = finishTime || "waiting...";
+      return multipleRfidFlag && finishTime ? `${display}*` : display;
+    }
+
+    // Apply one RaceRider timing payload to the table row and manual-edit button.
+    function applyTimingUpdate(timing) {
+      const raceRiderId = String(timing.race_rider_id || "");
+      const row = timingRows.get(raceRiderId);
+      if (!row) return;
+
+      const startCell = row.querySelector('.timing-start');
+      const finishCell = row.querySelector('.timing-finish');
+      const manualButton = row.querySelector('.manual-edit-btn');
+      const confirmButton = row.querySelector('.confirm-timing-btn');
+
+      if (startCell) startCell.textContent = timing.start_time_rfid || "waiting...";
+      if (finishCell) {
+        finishCell.textContent = renderFinishTimingText(timing.finish_time_rfid, timing.multiple_rfid_flag);
+        finishCell.classList.toggle('rfid-warning', !!timing.multiple_rfid_flag);
+      }
+      if (manualButton) {
+        manualButton.dataset.start = timing.start_time_input || "";
+        manualButton.dataset.end = timing.finish_time_input || "";
+      }
+      if (confirmButton) {
+        const isConfirmed = !!timing.finish_time_rfid_confirmed;
+        const hasFinishTime = !!timing.finish_time_rfid;
+        confirmButton.textContent = isConfirmed ? "Confirmed" : "Confirm";
+        confirmButton.disabled = isConfirmed || !hasFinishTime;
+      }
+    }
+
+    // Poll the current race/category timing values so RFID finishes appear without
+    // forcing the organiser to refresh the post-race page.
+    function refreshRiderTimings() {
+      if (document.hidden || timingRefreshInFlight || !raceId) return;
+      timingRefreshInFlight = true;
+      fetch(getTimingRequestUrl(), { cache: "no-store" })
+        .then(resp => {
+          if (!resp.ok) throw new Error("timing refresh failed");
+          return resp.json();
+        })
+        .then(data => {
+          let hasFlaggedTiming = false;
+          (data.riders || []).forEach(timing => {
+            if (timing.multiple_rfid_flag) hasFlaggedTiming = true;
+            applyTimingUpdate(timing);
+          });
+          updateRfidReviewNote(hasFlaggedTiming);
+          scheduleLayoutCheck();
+        })
+        .catch(() => {
+          // Keep the existing table values if a transient refresh fails.
+        })
+        .finally(() => {
+          timingRefreshInFlight = false;
+        });
+    }
+
+    // Start or restart the 5-second live refresh interval for rider timing cells.
+    function startLiveTimingPolling() {
+      if (liveTimingRefreshHandle) window.clearInterval(liveTimingRefreshHandle);
+      liveTimingRefreshHandle = window.setInterval(refreshRiderTimings, LIVE_TIMING_REFRESH_MS);
+    }
+
+    // Confirm the currently displayed RFID finish time and clear the warning state.
+    function confirmFinishTiming(raceRiderId, button) {
+      if (!raceRiderId || button.disabled) return;
+      const confirmed = window.confirm("Confirm this RFID finish time and ignore further RFID finish reads for this rider?");
+      if (!confirmed) return;
+
+      button.disabled = true;
+      fetch(`/races/${raceId}/race-rider/${encodeURIComponent(raceRiderId)}/confirm-finish`, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+      })
+        .then(resp => {
+          if (!resp.ok) throw new Error("confirm failed");
+          return resp.json();
+        })
+        .then(data => {
+          if (data.timing) applyTimingUpdate(data.timing);
+          refreshRiderTimings();
+        })
+        .catch(() => {
+          button.disabled = false;
+          alert("Failed to confirm timing. Please try again.");
+        });
     }
 
     // Pull the first line coordinate set from a GeoJSON FeatureCollection.
@@ -617,7 +739,16 @@
 
     // Wire up rider toggles in the track key so multiple overlays can be displayed together.
     document.querySelectorAll('.rider-row').forEach((row, index) => {
+      const raceRiderId = (row.dataset.raceRiderId || "").trim();
+      if (raceRiderId) timingRows.set(raceRiderId, row);
       createTrackMetaFromRow(row, index);
+    });
+
+    document.querySelectorAll('.confirm-timing-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const raceRiderId = (btn.dataset.raceRiderId || "").trim();
+        confirmFinishTiming(raceRiderId, btn);
+      });
     });
 
     // Build the track key UI and attach the toggle behavior.
@@ -654,9 +785,14 @@
 
     // Keep selected riders live while the page stays open.
     startLiveTrackPolling();
+    startLiveTimingPolling();
+    refreshRiderTimings();
     // Refresh once immediately when tab becomes active again.
     document.addEventListener('visibilitychange', () => {
-      if (!document.hidden) refreshSelectedTracks();
+      if (!document.hidden) {
+        refreshSelectedTracks();
+        refreshRiderTimings();
+      }
     });
     updateTrackKeyActiveStates();
     scheduleLayoutCheck();
@@ -733,7 +869,10 @@
             if (!resp.ok) throw new Error("update failed");
             return resp.json();
           })
-          .then(() => window.location.reload())
+          .then(() => {
+            refreshRiderTimings();
+            closeModal();
+          })
           .catch(() => alert("Failed to update times. Please check format and try again."));
       });
 

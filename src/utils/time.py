@@ -71,3 +71,30 @@ def iso_to_epoch(iso_str: str, tz_name: str | None = None, allow_tz: bool = Fals
     if dt.tzinfo is not None and not allow_tz:
         raise ValueError("timezone offsets are not allowed for this input")
     return datetime_to_epoch(dt, tz_name=tz_name)
+
+
+def rfid_timestamp_to_epoch(timestamp_str: str, tz_name: str | None = None) -> int | None:
+    """
+    Parse an RFID reader timestamp string and return UTC epoch seconds.
+
+    Accepted shapes:
+      - 20260526T163756   (reader compact timestamp)
+      - 20260526163756    (compact timestamp without "T")
+      - ISO8601 strings accepted by datetime.fromisoformat()
+
+    Empty strings return None so callers can decide whether the timestamp is required.
+    Timezone-naive timestamps are interpreted in the configured local timezone.
+    """
+    if not timestamp_str:
+        return None
+
+    cleaned = timestamp_str.strip()
+    for fmt in ("%Y%m%dT%H%M%S", "%Y%m%d%H%M%S"):
+        try:
+            return datetime_to_epoch(datetime.strptime(cleaned, fmt), tz_name=tz_name)
+        except ValueError:
+            pass
+
+    # Accept ISO strings as a fallback, including the common trailing "Z" UTC marker.
+    dt = datetime.fromisoformat(cleaned.replace("Z", "+00:00"))
+    return datetime_to_epoch(dt, tz_name=tz_name)

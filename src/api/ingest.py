@@ -5,11 +5,13 @@ Routes:
   POST /api/v1/upload         -> Compact GNSS JSON (device_id + fixes array); stores raw payload.
   POST /api/v1/upload-text    -> Raw text log (line-delimited JSON); returns GPX/GeoJSON previews.
   POST /api/v1/upload-timing  -> Timing marker (epoch, device_id, start/finish flag, source flag).
+  POST /api/v1/upload-rfid    -> RFID reader tag event; stores parsed RFID event payload.
 
 Behavior:
   - Validate minimal schema for each route; avoid heavy work in-request.
   - GNSS upload stores a durable raw copy; text upload builds in-memory GPX/GeoJSON previews.
   - Timing markers are accepted and validated; persistence is wired in later.
+  - RFID upload stores a durable parsed copy for a later worker to link to device/race timing rows.
 
 Notes:
   - Keep these endpoints fast; background jobs handle heavier processing later.
@@ -38,14 +40,14 @@ with open(CONFIG_PATH, 'r') as f:
 #set globals
 # DATABASE_URL = config['global']['database_url'] # not used
 
-# this is for ingesting GNSS data
-from src.db.models import SessionLocal, init_db, IngestRaw, RaceRider, TrackHist
+# this is for ingesting GNSS and RFID data
+from src.db.models import SessionLocal, init_db, IngestRaw, IngestRfid, RaceRider, TrackHist
 # this is for parsing the points and saving to a db table in a usable format
 # parsing will be handled in a background job later
 # from src.db.models import Point   # enable when parsing points now
 
 from src.utils.gpx import _sanitize_text_for_postgres, _parse_text_fixes, _build_gpx_string, _build_geojson_string, filter_fixes_by_window  # reuse time formatter for GPX output
-from src.utils.time import datetime_to_epoch
+from src.utils.time import datetime_to_epoch, rfid_timestamp_to_epoch
 
 # bp instantiates a Flask Blueprint, which is a reusable bundle of routes, error handlers, etc. for modular apps. 
 # The variable bp holds that blueprint so you can register routes on it and later attach it to the main app. 
@@ -162,6 +164,121 @@ def upload():
     #         session.close()
 
     return "", 200
+
+
+def _parse_optional_float(value):
+    """
+    Parse an optional float from RFID payload text.
+
+    Input Args:
+      value: string/number value from request data.
+
+    Output:
+      float value, or None when the input is empty.
+
+    Raises:
+      ValueError when the input is present but cannot be converted to float.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str) and value.strip() == "":
+        return None
+    return float(value)
+
+
+# @bp.route("/upload-rfid", methods=["POST"]) decorator registers upload_rfid as the handler for
+# POST /api/v1/upload-rfid. The RFID reader sends the EPC and RSSI in both the query string and a
+# form-encoded POST body; the route trusts the form body because it contains the richer and consistent
+# event payload. This route persists the parsed event quickly and leaves rider/device timing decisions
+# to a future worker.
+@bp.route("/upload-rfid", methods=["POST"])
+def upload_rfid():
+    """
+    Ingest an RFID reader tag event and store it in ingest_rfid.
+
+    Expected URL template shape:
+      /api/v1/upload-rfid?mode=1&rfid={EPC}&rssi={avgRSSI}&datestamp={latSeenStr}&id={readerId}
+
+    Current behavior:
+      - Reads form values from request.form.
+      - Extracts EPC, RSSI, antenna, reader timestamp, reader id, average RSSI, and server received time.
+      - Converts the reader timestamp and server receipt time to epoch seconds.
+      - Stores the parsed event in ingest_rfid for later worker processing.
+      - Returns a small JSON acknowledgement so the RFID reader receives a successful response.
+
+    Input Args (HTTP):
+      Form values:
+        - epc: RFID EPC/tag value
+        - rssi: signal strength value
+        - ant: antenna identifier
+        - timestamp: reader event timestamp
+        - readerId: reader identifier
+        - average_rssi: average signal strength value
+
+    Output:
+      JSON response with accepted=true and inserted ingest_rfid id.
+    """
+    form_values = request.form.to_dict(flat=True)
+    received_at_epoch = datetime_to_epoch(datetime.now(timezone.utc))
+
+    epc = (form_values.get("epc") or "").strip()
+    raw_rssi = form_values.get("rssi")
+    ant = (form_values.get("ant") or "").strip() or None
+    raw_timestamp = (form_values.get("timestamp") or "").strip()
+    reader_id = (form_values.get("readerId") or "").strip() or None
+    raw_avg_rssi = form_values.get("average_rssi")
+
+    if not isinstance(epc, str) or not epc:
+        return jsonify({"error": "epc is required"}), 422
+
+    try:
+        rssi = _parse_optional_float(raw_rssi)
+        avg_rssi = _parse_optional_float(raw_avg_rssi)
+        time_stamp_epoch = rfid_timestamp_to_epoch(raw_timestamp)
+    except (TypeError, ValueError):
+        return jsonify({"error": "Invalid RFID numeric or timestamp value"}), 422
+
+    if time_stamp_epoch is None:
+        return jsonify({"error": "timestamp is required"}), 422
+
+    # Keep a compact diagnostic print so early RFID tests can still be traced in container logs.
+    print("RFID upload received")
+    print(f"  epc: {epc}")
+    print(f"  rssi: {rssi}")
+    print(f"  ant: {ant}")
+    print(f"  time_stamp_epoch: {time_stamp_epoch}")
+    print(f"  reader_id: {reader_id}")
+    print(f"  avg_rssi: {avg_rssi}")
+    print(f"  received_at_epoch: {received_at_epoch}")
+
+    session = SessionLocal()
+    try:
+        ingest_rfid = IngestRfid(
+            epc=epc,
+            rssi=rssi,
+            ant=str(ant) if ant is not None else None,
+            time_stamp_epoch=time_stamp_epoch,
+            reader_id=str(reader_id) if reader_id is not None else None,
+            avg_rssi=avg_rssi,
+            received_at_epoch=received_at_epoch,
+        )
+        session.add(ingest_rfid)
+        session.commit()
+        ingest_rfid_id = ingest_rfid.id
+    except SQLAlchemyError as e:
+        session.rollback()
+        print(f"DB error: {e}")
+        return "", 500
+    finally:
+        session.close()
+
+    return jsonify({
+        "accepted": True,
+        "id": ingest_rfid_id,
+        "epc": epc,
+        "time_stamp_epoch": time_stamp_epoch,
+        "received_at_epoch": received_at_epoch,
+    }), 200
 
 
 @bp.route("/upload-timing", methods=["POST"])

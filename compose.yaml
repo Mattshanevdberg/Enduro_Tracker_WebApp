@@ -54,6 +54,19 @@ services:
     # step 9 stack matches the intended multi-process production layout.
     command: ["python", "-m", "src.workers.gpx_worker"]
 
+  rfid-worker:
+    image: ${APP_IMAGE_REPOSITORY}:${APP_IMAGE_TAG}
+    # Reuse the same PostgreSQL runtime URL as the web app so RFID ingest rows
+    # can be linked to devices and race_rider timing fields in the shared DB.
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+    depends_on:
+      db:
+        condition: service_healthy
+    # Run the RFID polling worker as its own long-lived service. It processes
+    # ingest_rfid rows and updates race_riders start/finish timing fields.
+    command: ["python", "-m", "src.workers.rfid_worker"]
+
   db:
     image: postgres:18
     restart: always
