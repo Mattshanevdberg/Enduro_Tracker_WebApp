@@ -1,0 +1,96 @@
+/*
+Shared table component styles.
+
+This file is the shared table layer for the CSS split. It is loaded after
+base.css by pages that need reusable table wrappers, table cells, wide-table
+behavior, table action buttons, and table text helpers.
+
+Depends on:
+- base.css variables for colour, borders, and shadows.
+
+Used for:
+- Home race list.
+- Riders table.
+- Devices table.
+- RFID record table.
+- Race rider assignment table.
+*/
+
+.table-card {
+  overflow-x: auto;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  background: var(--color-white);
+  box-shadow: var(--shadow-card);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--color-white);
+}
+
+.wide-table {
+  min-width: 1050px;
+}
+
+th,
+td {
+  padding: 0.75rem 0.85rem;
+  border-bottom: 1px solid var(--color-line);
+  text-align: left;
+  vertical-align: middle;
+}
+
+th {
+  color: var(--color-white);
+  background: var(--color-navy-900);
+  font-size: 0.78rem;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+tbody tr:hover {
+  background: var(--color-cloud);
+}
+
+tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+td a:not(.btn) {
+  color: var(--color-forest-700);
+  font-weight: 650;
+}
+
+.actions {
+  white-space: nowrap;
+}
+
+.actions .btn {
+  min-height: 2.25rem;
+  padding: 0.45rem 0.72rem;
+  color: var(--color-navy-950);
+  background: var(--color-forest-100);
+  border-color: rgba(20, 108, 67, 0.35);
+}
+
+.actions .btn:hover {
+  color: var(--color-white);
+  background: var(--color-forest-700);
+}
+
+.pre-wrap {
+  white-space: pre-wrap;
+}
+
+code {
+  white-space: nowrap;
+}
+
+@media (max-width: 700px) {
+  th,
+  td {
+    padding: 0.65rem;
+  }
+}

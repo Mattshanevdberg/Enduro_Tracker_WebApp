@@ -208,6 +208,68 @@ docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
   - `templates/post_race.html`: "Back to Home" link.
   - `templates/rfid_view.html`: "Back to Home" link.
 
+## CSS Structure
+
+### Recommended combined structure
+- Purpose: Use a combined CSS structure so shared theme and component styles stay reusable while complex pages can keep page-specific layout rules close to their own templates.
+- Structure:
+```text
+src/static/css/
+  base.css
+  forms.css
+  tables.css
+  maps.css
+  home.css
+  race-form.css
+  post-race.css
+  rfid.css
+```
+- Positives: balances reuse and page safety, keeps the navy/white/forest-green theme consistent, reduces duplicated form/table/map styling, and lets behavior-heavy pages such as `templates/race_form.html` and `templates/post_race.html` have targeted layout fixes without destabilising simpler pages.
+- Negatives: requires discipline about where each rule belongs, can create ambiguity for reusable-but-page-flavoured rules such as filter grids, and means some templates may load more than one stylesheet.
+- Rule: put theme tokens, typography, page shell, and baseline buttons in `base.css`.
+- Rule: put reusable form controls, form grids, labels, messages, and input states in `forms.css`.
+- Rule: put reusable table wrappers, wide-table behavior, cells, headings, and table action styling in `tables.css`.
+- Rule: put reusable Leaflet/map containers and map sizing helpers in `maps.css`.
+- Rule: put only home-page refinements in `home.css`.
+- Rule: put only race form layout and behavior-sensitive styling in `race-form.css`.
+- Rule: put only post-race layout, modal, live timing, and live map refinements in `post-race.css`.
+- Rule: put only RFID page refinements in `rfid.css` when they are not reusable enough for `forms.css` or `tables.css`.
+
+### Page stylesheet example
+- Purpose: Load shared styles first and page-specific overrides last so the base theme remains consistent while each page can safely refine its own layout.
+- Example:
+```html
+<link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}" />
+<link rel="stylesheet" href="{{ url_for('static', filename='css/forms.css') }}" />
+<link rel="stylesheet" href="{{ url_for('static', filename='css/tables.css') }}" />
+<link rel="stylesheet" href="{{ url_for('static', filename='css/maps.css') }}" />
+<link rel="stylesheet" href="{{ url_for('static', filename='css/race-form.css') }}" />
+```
+- Notes: stylesheet order matters. Shared files should define the default look, while page files should only add or override what that page genuinely needs.
+
+### Current base.css usage
+- Purpose: Provide the lean shared static stylesheet for the Flask-rendered UI, currently applied to `templates/home.html`, `templates/riders_form.html`, `templates/devices.html`, `templates/device_edit.html`, `templates/rfid_view.html`, `templates/race_form.html`, and `templates/post_race.html`.
+- Reads: CSS custom properties defined in `:root` for navy, white, forest green, neutral surfaces, borders, text, and shadows.
+- Writes: Browser presentation only; no application data is changed.
+- Styles: theme variables, page shell, page header, primary buttons, section titles, muted text, empty state, and mobile layout adjustments.
+- Called from:
+  - `templates/home.html`: linked through `url_for('static', filename='css/base.css')`.
+  - `templates/riders_form.html`: linked through `url_for('static', filename='css/base.css')`.
+  - `templates/devices.html`: linked through `url_for('static', filename='css/base.css')`.
+  - `templates/device_edit.html`: linked through `url_for('static', filename='css/base.css')`.
+  - `templates/rfid_view.html`: linked through `url_for('static', filename='css/base.css')`.
+  - `templates/race_form.html`: linked through `url_for('static', filename='css/base.css')`.
+  - `templates/post_race.html`: linked through `url_for('static', filename='css/base.css')`.
+- Notes: this CSS split follows the simple Flask web UI direction in `Web Application System Design V4 - 20260224.pdf`. Future work should move broad reusable rules out of `base.css` into component stylesheets and keep complex page-specific rules in their own page files.
+
+### Shared component files
+- Purpose: Provide reusable component stylesheets that are loaded after `base.css` by pages that need them.
+- Current state: `forms.css`, `tables.css`, and `maps.css` exist under `src/static/css`; `templates/home.html`, `templates/riders_form.html`, `templates/devices.html`, `templates/device_edit.html`, `templates/rfid_view.html`, `templates/race_form.html`, and `templates/post_race.html` now load the relevant component files.
+- `forms.css`: contains reusable content panels, form grids, filter grids, field rows, inputs, checkboxes, file inputs, focus states, status messages, and form action layout.
+- `tables.css`: contains reusable table cards, table cells, wide-table behavior, table heading styling, table action buttons, `pre-wrap`, and `code` wrapping helpers.
+- `maps.css`: contains reusable compact map preview container styling plus shared Leaflet map wrapper/canvas styling for route and track maps.
+- Notes: `maps.css` is currently loaded by `templates/race_form.html` for the route preview map and `templates/post_race.html` for the route/track review map; Home, Riders, Devices, and RFID pages do not need it.
+
 ## src/web/devices.py
 
 ### _list_devices
@@ -746,6 +808,7 @@ docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
 ### home.html
 - General: Home/landing page and navigation hub.
 - Displays: Races table (name, start, website, active).
+- Styles: Uses `src/static/css/base.css` for the lean shared base theme and `src/static/css/tables.css` for the race-list table.
 - UI actions: "Input Rider Details", "Manage Devices", "Add New Race", "View RFID Records", "Edit", "Post Race".
 - Linked pages (buttons):
   - "Input Rider Details" → `/riders/new` (riders form page).
@@ -762,6 +825,7 @@ docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
 ### devices.html
 - General: Device list and create form.
 - Displays: Device ID, RFID EPC, Device Info.
+- Styles: Uses `src/static/css/base.css` for the lean shared base theme, `src/static/css/forms.css` for the device form panel and messages, and `src/static/css/tables.css` for the device table.
 - UI actions: "Save" (create), "Edit", "Back to Home".
 - Linked pages (buttons):
   - "Back to Home" → `/` (home page).
@@ -774,6 +838,7 @@ docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
 ### device_edit.html
 - General: Edit a single device's info and RFID EPC.
 - Displays: Device ID (read-only), Device Info, RFID EPC.
+- Styles: Uses `src/static/css/base.css` for the lean shared base theme and `src/static/css/forms.css` for the edit form panel, inputs, status messages, and form action layout.
 - UI actions: "Save", "Back to Devices", "Home".
 - Linked pages (buttons):
   - "Back to Devices" → `/devices/` (devices list page).
@@ -786,6 +851,7 @@ docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
 ### rfid_view.html
 - General: RFID ingest records viewer with server-side filters.
 - Displays: RFID row id, EPC, RSSI, average RSSI, antenna, reader id, reader time, and received time.
+- Styles: Uses `src/static/css/base.css` for the lean shared base theme, `src/static/css/forms.css` for the filter panel, filter grid, messages, and filter actions, and `src/static/css/tables.css` for the wide RFID records table.
 - UI actions: "Filter", "Clear", "Back to Home".
 - Linked pages (buttons):
   - "Back to Home" → `/` (home page).
@@ -798,6 +864,7 @@ docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
 ### riders_form.html
 - General: Create/edit rider form with riders list.
 - Displays: Rider fields and riders table.
+- Styles: Uses `src/static/css/base.css` for the lean shared base theme, `src/static/css/forms.css` for the rider form panel and messages, and `src/static/css/tables.css` for the riders table.
 - UI actions: "Save", "Edit", "Back to Home".
 - Linked pages (buttons/links):
   - "Back to Home" → `/` (home page).
@@ -810,6 +877,7 @@ docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
 ### race_form.html
 - General: Create/edit race, upload route GPX, manage category riders.
 - Displays: Race fields, category selector, route map preview, rider/device tables.
+- Styles: Uses `src/static/css/base.css` for the lean shared base theme, `src/static/css/forms.css` for form controls and row actions, `src/static/css/tables.css` for the rider assignment table, `src/static/css/maps.css` for the Leaflet route preview container, and `src/static/css/race-form.css` for race-form-only layout.
 - UI actions: "Save Changes", category dropdown (reload), "Upload GPX", "Remove GPX", "Save" (add rider), "Edit" (update rider entry), "Remove" (delete entry), "Back".
 - Linked pages (buttons/links):
   - "Back" → `/` (home page).
@@ -824,6 +892,7 @@ docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
 ### post_race.html
 - General: Post-race review with route map and rider tracks.
 - Displays: Race metadata, category route map, riders list with timing, ambiguous RFID finish-time highlights with an asterisk review note, finish confirmation state, manual timing modal with optional TXT log upload.
+- Styles: Uses `src/static/css/base.css` for the lean shared base theme, `src/static/css/forms.css` for category/manual timing controls, `src/static/css/tables.css` for the riders timing table, `src/static/css/maps.css` for the Leaflet route/track map canvas, and `src/static/css/post-race.css` for post-race-only layout, track key, RFID warning, and modal styles.
 - UI actions: Category dropdown (reload), "Show Track", "Manual Edit", "Confirm" timing, modal "Save/Cancel/Upload TXT".
 - Linked pages (buttons/links):
   - "Back to Home" → `/` (home page).

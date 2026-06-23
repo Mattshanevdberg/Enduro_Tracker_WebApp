@@ -1,0 +1,330 @@
+/*
+Post-race page styles.
+
+This file owns layout and interaction styling that is specific to
+templates/post_race.html. Shared form, table, and map primitives stay in
+forms.css, tables.css, and maps.css so this page can keep its live timing,
+track overlay, and modal behavior isolated from simpler pages.
+
+Depends on:
+- base.css for theme variables, page background, typography, and buttons.
+- forms.css for selects, datetime inputs, file inputs, and focus states.
+- tables.css for the riders timing table.
+- maps.css for the Leaflet map wrapper and map canvas.
+*/
+
+.post-race-page {
+  width: min(1100px, calc(100% - 2rem));
+  margin: 0 auto;
+  padding: 1.8rem 0 3rem;
+}
+
+.post-race-page h1 {
+  margin: 0;
+  color: var(--color-white);
+  font-size: clamp(2rem, 5vw, 3.8rem);
+  line-height: 1;
+}
+
+.post-race-page h3 {
+  margin-top: 0;
+}
+
+.post-race-kicker {
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.post-race-nav {
+  margin-bottom: 1rem;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 1.25rem;
+  align-items: start;
+}
+
+.layout.is-stacked {
+  grid-template-columns: 1fr;
+}
+
+.race-column,
+.riders-column {
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  background: var(--color-white);
+  box-shadow: var(--shadow-card);
+}
+
+.race-info-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 1rem;
+  align-items: start;
+}
+
+.layout.is-stacked .race-info-row {
+  grid-template-columns: 1fr;
+}
+
+.race-facts {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: 0.3rem 0.8rem;
+  margin-top: 0;
+}
+
+.race-facts dt {
+  font-weight: 700;
+}
+
+.race-facts dd {
+  margin: 0;
+}
+
+.category-form {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0.4rem 0;
+}
+
+.category-form label {
+  font-weight: 700;
+}
+
+.map-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1rem;
+  align-items: center;
+  margin-top: 0.75rem;
+}
+
+.map-size-control {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.map-size-control label {
+  font-weight: 700;
+}
+
+.map-size-control input[type="range"] {
+  width: 200px;
+}
+
+.map-size-value {
+  min-width: 64px;
+  color: var(--color-muted);
+}
+
+.map-status {
+  margin: 0.3rem 0 0;
+}
+
+.rfid-warning {
+  border: 2px solid #b42318;
+  background: #fff1f0;
+  font-weight: 700;
+}
+
+.riders-table-wrap {
+  overflow-x: auto;
+}
+
+.riders-table.is-stacked th,
+.riders-table.is-stacked td,
+.riders-table.is-measuring th,
+.riders-table.is-measuring td {
+  white-space: nowrap;
+}
+
+.track-toggle-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.track-toggle {
+  --track-color: #888;
+  display: inline-grid;
+  width: 20px;
+  height: 20px;
+  place-content: center;
+  border: 2px solid #222;
+  border-radius: 4px;
+  appearance: none;
+  background: var(--track-color);
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.35);
+  cursor: pointer;
+}
+
+.track-toggle::after {
+  width: 10px;
+  height: 6px;
+  border: 2px solid var(--color-white);
+  border-top: none;
+  border-right: none;
+  content: "";
+  opacity: 0;
+  transform: rotate(-45deg);
+}
+
+.track-toggle:checked::after {
+  opacity: 1;
+}
+
+.track-toggle:focus-visible {
+  outline: 3px solid var(--color-navy-900);
+  outline-offset: 2px;
+}
+
+.track-toggle-text {
+  font-size: 0.9rem;
+}
+
+.track-key {
+  width: 260px;
+  max-width: 100%;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--color-line);
+  border-radius: 6px;
+  background: var(--color-cloud);
+}
+
+.track-key-title {
+  margin-bottom: 0.4rem;
+  font-weight: 700;
+}
+
+.track-key-list {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.track-key-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.95rem;
+}
+
+.track-key-item .track-toggle {
+  flex: 0 0 auto;
+}
+
+.track-key-item[data-active="false"] {
+  opacity: 0.55;
+}
+
+.track-key-swatch {
+  width: 16px;
+  height: 16px;
+  border: 1px solid #222;
+  border-radius: 4px;
+  background: var(--swatch-color);
+}
+
+.post-race-note {
+  margin: 0.6rem 0 0;
+}
+
+.is-hidden {
+  display: none;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.modal-card {
+  width: 90%;
+  max-width: 420px;
+  padding: 1rem;
+  border-radius: 6px;
+  background: var(--color-white);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.2);
+}
+
+.modal-title {
+  margin: 0 0 0.5rem;
+}
+
+.modal-help {
+  margin: 0.25rem 0 0.75rem;
+  color: var(--color-muted);
+}
+
+.modal-field {
+  display: block;
+  margin-bottom: 0.75rem;
+}
+
+.modal-field-compact {
+  margin-bottom: 0.5rem;
+}
+
+.modal-field-label {
+  display: block;
+  margin-bottom: 0.25rem;
+  font-weight: 700;
+}
+
+.modal-file-help {
+  display: block;
+  margin-top: 0.35rem;
+}
+
+.manual-status {
+  margin: 0.15rem 0 0.75rem;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.btn-danger {
+  color: var(--color-white);
+  background: #b42318;
+  border-color: rgba(180, 35, 24, 0.5);
+}
+
+.btn-danger:hover {
+  background: #8f1d16;
+}
+
+@media (max-width: 900px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 700px) {
+  .post-race-page {
+    width: min(100% - 1rem, 1100px);
+    padding-top: 1rem;
+  }
+
+  .race-facts {
+    grid-template-columns: 1fr;
+  }
+
+  .category-form,
+  .map-size-control,
+  .modal-actions {
+    display: grid;
+  }
+}

@@ -4,90 +4,28 @@
   <meta charset="utf-8" />
   <title>Post Race - {{ race.name }}</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/forms.css') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/tables.css') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/maps.css') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/post-race.css') }}" />
   <!-- Leaflet: lightweight map renderer for the route preview -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <style>
-    body { font-family: system-ui, sans-serif; margin: 1.8rem; max-width: 1100px; }
-    .btn { display:inline-block; padding:.55rem 1rem; border:1px solid #333; border-radius:6px; text-decoration:none; background:#fff; }
-    .btn:hover { background:#f3f3f3; }
-    .muted { color:#555; font-size:.95rem; }
-    dl { display:grid; grid-template-columns: 140px 1fr; gap:.3rem .8rem; margin-top:1rem; }
-    dt { font-weight:600; }
-    .layout { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; align-items:start; }
-    .layout.is-stacked { grid-template-columns: 1fr; }
-    @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
-    .race-column,
-    .riders-column { min-width: 0; }
-    .map-wrapper { overflow-x: auto; }
-    #map { height: 480px; border:1px dashed #999; border-radius: 6px; margin-top:.8rem; width: 100%; }
-    .race-info-row { display:grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1rem; align-items:start; }
-    .layout.is-stacked .race-info-row { grid-template-columns: 1fr; }
-    .map-toolbar { display:flex; flex-wrap:wrap; gap:.75rem 1rem; align-items:center; margin-top:.75rem; }
-    .map-size-control { display:flex; align-items:center; gap:.5rem; }
-    .map-size-control label { font-weight:600; }
-    .map-size-control input[type="range"] { width: 200px; }
-    .map-size-value { min-width: 64px; color:#555; }
-    form.inline { display:flex; gap:.5rem; align-items:center; margin:.4rem 0; }
-    select { padding:.45rem; border:1px solid #ccc; border-radius:6px; }
-    table { border-collapse: collapse; width: 100%; }
-    th, td { border:1px solid #ddd; padding:.4rem .6rem; text-align:left; }
-    th { background:#f7f7f7; }
-    .rfid-warning { border:2px solid #b42318; background:#fff1f0; font-weight:600; }
-    .riders-table-wrap { overflow-x: auto; }
-    .riders-table.is-stacked th,
-    .riders-table.is-stacked td,
-    .riders-table.is-measuring th,
-    .riders-table.is-measuring td { white-space: nowrap; }
-    .track-toggle-wrap { display:inline-flex; align-items:center; gap:.4rem; }
-    .track-toggle { 
-      --track-color: #888;
-      appearance: none;
-      width: 20px;
-      height: 20px;
-      border: 2px solid #222;
-      border-radius: 4px;
-      background: var(--track-color);
-      display: inline-grid;
-      place-content: center;
-      cursor: pointer;
-      box-shadow: inset 0 0 0 2px rgba(255,255,255,0.35);
-    }
-    .track-toggle::after {
-      content: "";
-      width: 10px;
-      height: 6px;
-      border: 2px solid #fff;
-      border-top: none;
-      border-right: none;
-      transform: rotate(-45deg);
-      opacity: 0;
-    }
-    .track-toggle:checked::after { opacity: 1; }
-    .track-toggle:focus-visible { outline: 3px solid #333; outline-offset: 2px; }
-    .track-toggle-text { font-size: .9rem; }
-    .track-key { margin-top:.75rem; border:1px solid #ddd; padding:.6rem .7rem; border-radius:6px; background:#fafafa; width: 260px; max-width: 100%; }
-    .track-key-title { font-weight:600; margin-bottom:.4rem; }
-    .track-key-list { display:grid; gap:.35rem; }
-    .track-key-item { display:flex; align-items:center; gap:.5rem; font-size:.95rem; }
-    .track-key-item .track-toggle { flex: 0 0 auto; }
-    .track-key-item[data-active="false"] { opacity:.55; }
-    .track-key-swatch { width: 16px; height: 16px; border-radius:4px; border:1px solid #222; background: var(--swatch-color); }
-  </style>
 </head>
-<body>
-  <div style="margin-bottom:1rem;">
+<body class="post-race-page">
+  <div class="post-race-nav">
     <a class="btn" href="{{ url_for('home.home_page') }}">Back to Home</a>
   </div>
 
   <h1>{{ race.name }}</h1>
-  <p class="muted">Post Race</p>
+  <p class="muted post-race-kicker">Post Race</p>
 
   <div class="layout">
     <!-- Left column: basic race facts + map -->
     <div class="race-column">
       <div class="race-info-row">
-        <dl>
+        <dl class="race-facts">
           <dt>Website</dt>
           <dd>{% if race.website %}<a href="{{ race.website }}" target="_blank" rel="noopener">{{ race.website }}</a>{% else %}—{% endif %}</dd>
 
@@ -111,7 +49,7 @@
 
       {% if categories %}
         <!-- Category picker: drives which route we show below. -->
-        <form class="inline" method="get" action="{{ url_for('races.post_race', race_id=race.id) }}">
+        <form class="category-form" method="get" action="{{ url_for('races.post_race', race_id=race.id) }}">
           <label for="category">Category</label>
           <select id="category" name="category" onchange="this.form.submit()">
             {% for cat in categories %}
@@ -121,7 +59,7 @@
         </form>
 
         <div class="map-wrapper">
-          <div id="map" data-race-id="{{ race.id }}" data-category="{{ selected_category or '' }}"></div>
+          <div id="map" class="map-canvas" data-race-id="{{ race.id }}" data-category="{{ selected_category or '' }}"></div>
         </div>
         <div class="map-toolbar">
           <div class="map-size-control">
@@ -135,7 +73,7 @@
             <span class="map-size-value" id="map-width-value"></span>
           </div>
         </div>
-        <p class="muted" id="map-status" style="margin:.3rem 0 0 0;"></p>
+        <p class="muted map-status" id="map-status"></p>
       {% else %}
         <p class="muted">No categories/routes available for this race.</p>
       {% endif %}
@@ -143,9 +81,9 @@
 
     <!-- Right column: riders linked to this race/category -->
     <div class="riders-column">
-      <h3 style="margin-top:0;">Riders for {{ selected_category or 'category' }}</h3>
+      <h3>Riders for {{ selected_category or 'category' }}</h3>
       {% if riders %}
-        <div class="riders-table-wrap">
+        <div class="table-card riders-table-wrap">
         <table class="riders-table">
           <thead>
             <tr>
@@ -195,7 +133,7 @@
             {% endfor %}
           </tbody>
         </table>
-        <p id="rfid-review-note" class="muted" style="{{ '' if has_multiple_rfid_flag else 'display:none;' }}">* multiple timing entries, timing to be manually reviewed and confirmed</p>
+        <p id="rfid-review-note" class="muted post-race-note {{ '' if has_multiple_rfid_flag else 'is-hidden' }}">* multiple timing entries, timing to be manually reviewed and confirmed</p>
         </div>
       {% else %}
         <p class="muted">No riders for this category.</p>
@@ -205,31 +143,31 @@
 
   {% if categories and selected_category %}
   <!-- Lightweight modal for manual start/end edit -->
-  <div id="manual-modal" class="modal-backdrop" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.4); align-items:center; justify-content:center; z-index:9999;">
-    <div class="modal-card" style="background:#fff; padding:1rem; border-radius:6px; max-width:420px; width:90%; box-shadow:0 6px 18px rgba(0,0,0,0.2);">
-      <h4 id="manual-title" style="margin:0 0 .5rem 0;">Manual timing</h4>
-      <p style="margin:.25rem 0 .75rem 0; color:#555;">Enter start/end times (local) for this rider.</p>
-      <label style="display:block; margin-bottom:.5rem;">
-        <span style="display:block; font-weight:600; margin-bottom:.25rem;">Start time</span>
-        <input id="manual-start" type="datetime-local" style="width:100%; padding:.4rem;" />
+  <div id="manual-modal" class="modal-backdrop">
+    <div class="modal-card">
+      <h4 id="manual-title" class="modal-title">Manual timing</h4>
+      <p class="modal-help">Enter start/end times (local) for this rider.</p>
+      <label class="modal-field modal-field-compact">
+        <span class="modal-field-label">Start time</span>
+        <input id="manual-start" type="datetime-local" />
       </label>
-      <label style="display:block; margin-bottom:.75rem;">
-        <span style="display:block; font-weight:600; margin-bottom:.25rem;">End time</span>
-        <input id="manual-end" type="datetime-local" style="width:100%; padding:.4rem;" />
+      <label class="modal-field">
+        <span class="modal-field-label">End time</span>
+        <input id="manual-end" type="datetime-local" />
       </label>
-      <label style="display:block; margin-bottom:.75rem;">
-        <span style="display:block; font-weight:600; margin-bottom:.25rem;">TXT log (optional)</span>
-        <input id="manual-log" type="file" accept=".txt,text/plain" style="width:100%; padding:.35rem;" />
-        <span class="muted" style="display:block; margin-top:.35rem;">
+      <label class="modal-field">
+        <span class="modal-field-label">TXT log (optional)</span>
+        <input id="manual-log" type="file" accept=".txt,text/plain" />
+        <span class="muted modal-file-help">
           Upload a raw GNSS text log for this rider's device. The upload will be ingested
           via <code>/api/v1/upload-text</code> and then trimmed to the start/end times above.
         </span>
       </label>
-      <p id="manual-status" class="muted" style="margin:.15rem 0 .75rem 0;"></p>
-      <div style="display:flex; justify-content:flex-end; gap:.5rem;">
+      <p id="manual-status" class="muted manual-status"></p>
+      <div class="modal-actions">
         <button id="manual-cancel" class="btn" type="button">Cancel</button>
         <button id="manual-upload-text" class="btn" type="button">Upload TXT</button>
-        <button id="manual-save" class="btn" type="button" style="background:#d9534f; color:#fff;">Save</button>
+        <button id="manual-save" class="btn btn-danger" type="button">Save</button>
       </div>
     </div>
   </div>
@@ -321,6 +259,7 @@
     function updateRfidReviewNote(hasFlaggedTiming) {
       const note = document.getElementById('rfid-review-note');
       if (!note) return;
+      note.classList.toggle('is-hidden', !hasFlaggedTiming);
       note.style.display = hasFlaggedTiming ? "" : "none";
     }
 

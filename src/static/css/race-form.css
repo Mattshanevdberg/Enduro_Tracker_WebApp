@@ -1,0 +1,111 @@
+/*
+Race form page styles.
+
+This file owns layout that is specific to templates/race_form.html. Shared
+form, table, and map primitives stay in forms.css, tables.css, and maps.css so
+this page can keep its current behaviour while still using the common theme.
+
+Depends on:
+- base.css for theme variables, page background, typography, and buttons.
+- forms.css for inputs, labels, field rows, checkboxes, file inputs, and focus states.
+- tables.css for rider assignment tables.
+- maps.css for the Leaflet map preview container.
+*/
+
+.race-form-page {
+  padding: 1.5rem;
+}
+
+.race-form-page h1 {
+  margin: 0 0 1rem;
+  color: var(--color-white);
+}
+
+.race-form-page h2 {
+  color: var(--color-white);
+}
+
+.race-form-page label {
+  font-weight: 700;
+}
+
+.topnav {
+  margin-bottom: 0.8rem;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+.full {
+  grid-column: 1 / -1;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+}
+
+.race-field {
+  flex: 1 1 12rem;
+}
+
+.race-field-wide {
+  flex: 2 1 16rem;
+}
+
+.race-field-narrow {
+  flex: 1 1 8rem;
+}
+
+.race-align-end {
+  align-self: end;
+}
+
+.race-panel {
+  padding: 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  background: var(--color-white);
+  box-shadow: var(--shadow-card);
+}
+
+.race-panel h2 {
+  color: var(--color-text);
+}
+
+.race-gpx-upload {
+  margin: 0.6rem 0;
+}
+
+.race-gpx-remove {
+  margin: 0.2rem 0 1rem;
+}
+
+.race-rider-add {
+  margin: 0.4rem 0 1rem;
+}
+
+.race-save-note {
+  margin: 0.8rem 0;
+}
+
+.race-form-page .map-preview {
+  margin-top: 1rem;
+}
+
+@media (max-width: 900px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 700px) {
+  .race-form-page {
+    padding: 1rem 0.5rem;
+  }
+}

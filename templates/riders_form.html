@@ -4,84 +4,84 @@
     <meta charset="utf-8" />
     <title>Input Rider Details</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <style>
-      body { font-family: system-ui, sans-serif; margin: 2rem; max-width: 720px; }
-      form { display:grid; grid-template-columns: 1fr 2fr; gap:.6rem .8rem; align-items:center; }
-      label { font-weight:600; }
-      input, select, textarea { padding:.5rem; border:1px solid #ccc; border-radius:6px; width:100%; }
-      .actions { grid-column: 1 / -1; display:flex; gap:.6rem; margin-top:.8rem; }
-      .btn { padding:.5rem 1rem; border:1px solid #333; border-radius:6px; text-decoration:none; background:white; cursor:pointer; }
-      .btn:hover { background:#f3f3f3; }
-      .msg { margin-bottom:1rem; padding:.6rem .8rem; border-radius:6px; }
-      .msg.ok { border:1px solid #28a745; background:#e8f5ea; }
-      .msg.err { border:1px solid #dc3545; background:#fdecee; }
-    </style>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/forms.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/tables.css') }}" />
   </head>
   <body>
-    <h1>{{ 'Edit Rider' if editing_rider else 'Input Rider Details' }}</h1>
+    <main class="page-shell">
+      <header class="page-header">
+        <h1>{{ 'Edit Rider' if editing_rider else 'Input Rider Details' }}</h1>
+        <p>Create rider profiles and keep category, team, bike, and bio details ready for race setup.</p>
+      </header>
 
-    {% if message %}
-      <div class="msg {{ 'ok' if success else 'err' }}">{{ message }}</div>
-    {% endif %}
+      {% if message %}
+        <div class="msg {{ 'ok' if success else 'err' }}">{{ message }}</div>
+      {% endif %}
 
-    <form method="post" action="{{ url_for('riders.rider_form', rider_id=editing_rider.id) if editing_rider else url_for('riders.rider_form') }}">
-      {% if editing_rider %}<input type="hidden" name="rider_id" value="{{ editing_rider.id }}"/>{% endif %}
-      <label for="name">Full name *</label>
-      <input id="name" name="name" placeholder="Name Surname" required value="{{ form.name or '' }}"/>
+      <section class="content-panel">
+        <form class="form-grid" method="post" action="{{ url_for('riders.rider_form', rider_id=editing_rider.id) if editing_rider else url_for('riders.rider_form') }}">
+          {% if editing_rider %}<input type="hidden" name="rider_id" value="{{ editing_rider.id }}"/>{% endif %}
+          <label for="name">Full name *</label>
+          <input id="name" name="name" placeholder="Name Surname" required value="{{ form.name or '' }}"/>
 
-      <label for="category">Category *</label>
-      <select id="category" name="category" required>
-        <option value="">-- select --</option>
-        {% for opt in categories %}
-          <option value="{{ opt }}" {{ 'selected' if form.category==opt else '' }}>{{ opt }}</option>
-        {% endfor %}
-      </select>
+          <label for="category">Category *</label>
+          <select id="category" name="category" required>
+            <option value="">-- select --</option>
+            {% for opt in categories %}
+              <option value="{{ opt }}" {{ 'selected' if form.category==opt else '' }}>{{ opt }}</option>
+            {% endfor %}
+          </select>
 
-      <label for="team">Team</label>
-      <input id="team" name="team" placeholder="Optional" value="{{ form.team or '' }}"/>
+          <label for="team">Team</label>
+          <input id="team" name="team" placeholder="Optional" value="{{ form.team or '' }}"/>
 
-      <label for="bike">Bike</label>
-      <input id="bike" name="bike" placeholder="Optional" value="{{ form.bike or '' }}"/>
+          <label for="bike">Bike</label>
+          <input id="bike" name="bike" placeholder="Optional" value="{{ form.bike or '' }}"/>
 
-      <label for="bio">Bio</label>
-      <textarea id="bio" name="bio" rows="4" placeholder="Optional">{{ form.bio or '' }}</textarea>
+          <label for="bio">Bio</label>
+          <textarea id="bio" name="bio" rows="4" placeholder="Optional">{{ form.bio or '' }}</textarea>
 
-      <div class="actions">
-        <button class="btn" type="submit">Save</button>
-        <a class="btn" href="{{ url_for('home.home_page') }}">Back to Home</a>
-      </div>
-    </form>
+          <div class="actions">
+            <button class="btn" type="submit">Save</button>
+            <a class="btn" href="{{ url_for('home.home_page') }}">Back to Home</a>
+          </div>
+        </form>
+      </section>
 
-    <h2 style="margin-top:1.5rem;">Existing Riders</h2>
-    {% if riders %}
-      <table style="border-collapse:collapse; width:100%; margin-top:.6rem;">
-        <thead>
-          <tr>
-            <th style="text-align:left; border:1px solid #ddd; padding:.4rem .6rem;">Name</th>
-            <th style="text-align:left; border:1px solid #ddd; padding:.4rem .6rem;">Category</th>
-            <th style="text-align:left; border:1px solid #ddd; padding:.4rem .6rem;">Team</th>
-            <th style="text-align:left; border:1px solid #ddd; padding:.4rem .6rem;">Bike</th>
-            <th style="text-align:left; border:1px solid #ddd; padding:.4rem .6rem;">Bio</th>
-            <th style="text-align:left; border:1px solid #ddd; padding:.4rem .6rem;">Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for r in riders %}
-            <tr>
-              <td style="border:1px solid #ddd; padding:.4rem .6rem;">{{ r.name }}</td>
-              <td style="border:1px solid #ddd; padding:.4rem .6rem;">{{ r.category }}</td>
-              <td style="border:1px solid #ddd; padding:.4rem .6rem;">{{ r.team or '—' }}</td>
-              <td style="border:1px solid #ddd; padding:.4rem .6rem;">{{ r.bike or '—' }}</td>
-              <td style="border:1px solid #ddd; padding:.4rem .6rem;">{{ r.bio or '—' }}</td>
-              <td style="border:1px solid #ddd; padding:.4rem .6rem;">
-                <a class="btn" href="{{ url_for('riders.rider_form', rider_id=r.id) }}">Edit</a>
-              </td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    {% else %}
-      <p style="color:#555;">No riders found.</p>
-    {% endif %}
+      <h2 class="section-title">Existing Riders</h2>
+      {% if riders %}
+        <div class="table-card">
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Category</th>
+                <th>Team</th>
+                <th>Bike</th>
+                <th>Bio</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for r in riders %}
+                <tr>
+                  <td>{{ r.name }}</td>
+                  <td>{{ r.category }}</td>
+                  <td>{{ r.team or '—' }}</td>
+                  <td>{{ r.bike or '—' }}</td>
+                  <td>{{ r.bio or '—' }}</td>
+                  <td class="actions">
+                    <a class="btn" href="{{ url_for('riders.rider_form', rider_id=r.id) }}">Edit</a>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <p class="empty-state">No riders found.</p>
+      {% endif %}
+    </main>
   </body>
 </html>
