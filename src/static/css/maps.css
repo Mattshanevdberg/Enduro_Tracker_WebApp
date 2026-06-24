@@ -1,0 +1,35 @@
+/*
+Shared map component styles.
+
+This file is the shared map layer for the CSS split. It should be loaded after
+base.css by pages that need reusable Leaflet/map container sizing.
+
+Depends on:
+- base.css variables for neutral surface and border colours.
+
+Used for:
+- Race form GPX route preview.
+- Post-race route and rider track map containers.
+*/
+
+.map-preview {
+  height: 360px;
+  margin-top: 1rem;
+  border: 1px dashed var(--color-line);
+  border-radius: 6px;
+  background: var(--color-cloud);
+}
+
+.map-wrapper {
+  overflow-x: auto;
+}
+
+.map-canvas {
+  width: 100%;
+  min-width: 320px;
+  height: 480px;
+  margin-top: 0.8rem;
+  border: 1px dashed var(--color-line);
+  border-radius: 6px;
+  background: var(--color-cloud);
+}

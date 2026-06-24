@@ -4,90 +4,28 @@
   <meta charset="utf-8" />
   <title>Post Race - {{ race.name }}</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/forms.css') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/tables.css') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/maps.css') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/post-race.css') }}" />
   <!-- Leaflet: lightweight map renderer for the route preview -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <style>
-    body { font-family: system-ui, sans-serif; margin: 1.8rem; max-width: 1100px; }
-    .btn { display:inline-block; padding:.55rem 1rem; border:1px solid #333; border-radius:6px; text-decoration:none; background:#fff; }
-    .btn:hover { background:#f3f3f3; }
-    .muted { color:#555; font-size:.95rem; }
-    dl { display:grid; grid-template-columns: 140px 1fr; gap:.3rem .8rem; margin-top:1rem; }
-    dt { font-weight:600; }
-    .layout { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; align-items:start; }
-    .layout.is-stacked { grid-template-columns: 1fr; }
-    @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
-    .race-column,
-    .riders-column { min-width: 0; }
-    .map-wrapper { overflow-x: auto; }
-    #map { height: 480px; border:1px dashed #999; border-radius: 6px; margin-top:.8rem; width: 100%; }
-    .race-info-row { display:grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1rem; align-items:start; }
-    .layout.is-stacked .race-info-row { grid-template-columns: 1fr; }
-    .map-toolbar { display:flex; flex-wrap:wrap; gap:.75rem 1rem; align-items:center; margin-top:.75rem; }
-    .map-size-control { display:flex; align-items:center; gap:.5rem; }
-    .map-size-control label { font-weight:600; }
-    .map-size-control input[type="range"] { width: 200px; }
-    .map-size-value { min-width: 64px; color:#555; }
-    form.inline { display:flex; gap:.5rem; align-items:center; margin:.4rem 0; }
-    select { padding:.45rem; border:1px solid #ccc; border-radius:6px; }
-    table { border-collapse: collapse; width: 100%; }
-    th, td { border:1px solid #ddd; padding:.4rem .6rem; text-align:left; }
-    th { background:#f7f7f7; }
-    .rfid-warning { border:2px solid #b42318; background:#fff1f0; font-weight:600; }
-    .riders-table-wrap { overflow-x: auto; }
-    .riders-table.is-stacked th,
-    .riders-table.is-stacked td,
-    .riders-table.is-measuring th,
-    .riders-table.is-measuring td { white-space: nowrap; }
-    .track-toggle-wrap { display:inline-flex; align-items:center; gap:.4rem; }
-    .track-toggle { 
-      --track-color: #888;
-      appearance: none;
-      width: 20px;
-      height: 20px;
-      border: 2px solid #222;
-      border-radius: 4px;
-      background: var(--track-color);
-      display: inline-grid;
-      place-content: center;
-      cursor: pointer;
-      box-shadow: inset 0 0 0 2px rgba(255,255,255,0.35);
-    }
-    .track-toggle::after {
-      content: "";
-      width: 10px;
-      height: 6px;
-      border: 2px solid #fff;
-      border-top: none;
-      border-right: none;
-      transform: rotate(-45deg);
-      opacity: 0;
-    }
-    .track-toggle:checked::after { opacity: 1; }
-    .track-toggle:focus-visible { outline: 3px solid #333; outline-offset: 2px; }
-    .track-toggle-text { font-size: .9rem; }
-    .track-key { margin-top:.75rem; border:1px solid #ddd; padding:.6rem .7rem; border-radius:6px; background:#fafafa; width: 260px; max-width: 100%; }
-    .track-key-title { font-weight:600; margin-bottom:.4rem; }
-    .track-key-list { display:grid; gap:.35rem; }
-    .track-key-item { display:flex; align-items:center; gap:.5rem; font-size:.95rem; }
-    .track-key-item .track-toggle { flex: 0 0 auto; }
-    .track-key-item[data-active="false"] { opacity:.55; }
-    .track-key-swatch { width: 16px; height: 16px; border-radius:4px; border:1px solid #222; background: var(--swatch-color); }
-  </style>
 </head>
-<body>
-  <div style="margin-bottom:1rem;">
+<body class="post-race-page">
+  <div class="post-race-nav">
     <a class="btn" href="{{ url_for('home.home_page') }}">Back to Home</a>
   </div>
 
   <h1>{{ race.name }}</h1>
-  <p class="muted">Post Race</p>
+  <p class="muted post-race-kicker">Post Race</p>
 
   <div class="layout">
     <!-- Left column: basic race facts + map -->
     <div class="race-column">
       <div class="race-info-row">
-        <dl>
+        <dl class="race-facts">
           <dt>Website</dt>
           <dd>{% if race.website %}<a href="{{ race.website }}" target="_blank" rel="noopener">{{ race.website }}</a>{% else %}—{% endif %}</dd>
 
@@ -111,9 +49,9 @@
 
       {% if categories %}
         <!-- Category picker: drives which route we show below. -->
-        <form class="inline" method="get" action="{{ url_for('races.post_race', race_id=race.id) }}">
+        <form class="category-form" method="get" action="{{ url_for('races.post_race', race_id=race.id) }}">
           <label for="category">Category</label>
-          <select id="category" name="category" onchange="this.form.submit()">
+          <select id="category" name="category" data-auto-submit>
             {% for cat in categories %}
               <option value="{{ cat }}" {{ 'selected' if cat == selected_category else '' }}>{{ cat }}</option>
             {% endfor %}
@@ -121,7 +59,7 @@
         </form>
 
         <div class="map-wrapper">
-          <div id="map" data-race-id="{{ race.id }}" data-category="{{ selected_category or '' }}"></div>
+          <div id="map" class="map-canvas" data-race-id="{{ race.id }}" data-category="{{ selected_category or '' }}"></div>
         </div>
         <div class="map-toolbar">
           <div class="map-size-control">
@@ -135,7 +73,7 @@
             <span class="map-size-value" id="map-width-value"></span>
           </div>
         </div>
-        <p class="muted" id="map-status" style="margin:.3rem 0 0 0;"></p>
+        <p class="muted map-status" id="map-status"></p>
       {% else %}
         <p class="muted">No categories/routes available for this race.</p>
       {% endif %}
@@ -143,59 +81,59 @@
 
     <!-- Right column: riders linked to this race/category -->
     <div class="riders-column">
-      <h3 style="margin-top:0;">Riders for {{ selected_category or 'category' }}</h3>
+      <h3>Riders for {{ selected_category or 'category' }}</h3>
       {% if riders %}
-        <div class="riders-table-wrap">
-        <table class="riders-table">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Team</th>
-              <th>Device</th>
-              <th>Start Time</th>
-              <th>End Time</th>
-              <th>Race Rider ID</th>
-              <th>Manual Edit</th>
-              <th>Timing Confirmed</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for r in riders %}
-              <tr class="rider-row"
-                  data-name="{{ r.name }}"
-                  data-team="{{ r.team or 'No team' }}"
-                  data-device="{{ r.device_id or '' }}"
-                  data-race-rider-id="{{ r.race_rider_id }}">
-                <td>{{ r.name }}</td>
-                <td>{{ r.team or '—' }}</td>
-                <td>{{ r.device_id or '—' }}</td>
-                <td class="timing-start" data-race-rider-id="{{ r.race_rider_id }}">{{ r.start_time_rfid or 'waiting...' }}</td>
-                <td class="timing-finish {{ 'rfid-warning' if r.multiple_rfid_flag else '' }}" data-race-rider-id="{{ r.race_rider_id }}">
-                  {{ r.finish_time_rfid or 'waiting...' }}{% if r.multiple_rfid_flag and r.finish_time_rfid %}*{% endif %}
-                </td>
-                <td>{{ r.race_rider_id }}</td>
-               <td>
-                  <button class="btn manual-edit-btn"
-                          data-name="{{ r.name }}"
-                          data-device="{{ r.device_id or '' }}"
-                          data-race-rider-id="{{ r.race_rider_id }}"
-                          data-start="{{ r.start_time_input or '' }}"
-                          data-end="{{ r.finish_time_input or '' }}">
-                    Manual Edit
-                  </button>
-                </td>
-                <td>
-                  <button class="btn confirm-timing-btn"
-                          data-race-rider-id="{{ r.race_rider_id }}"
-                          {{ 'disabled' if r.finish_time_rfid_confirmed or not r.finish_time_rfid else '' }}>
-                    {{ 'Confirmed' if r.finish_time_rfid_confirmed else 'Confirm' }}
-                  </button>
-                </td>
+        <div class="table-card riders-table-wrap">
+          <table class="riders-table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Team</th>
+                <th>Device</th>
+                <th>Start Time</th>
+                <th>End Time</th>
+                <th>Race Rider ID</th>
+                <th>Manual Edit</th>
+                <th>Timing Confirmed</th>
               </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-        <p id="rfid-review-note" class="muted" style="{{ '' if has_multiple_rfid_flag else 'display:none;' }}">* multiple timing entries, timing to be manually reviewed and confirmed</p>
+            </thead>
+            <tbody>
+              {% for r in riders %}
+                <tr class="rider-row"
+                    data-name="{{ r.name }}"
+                    data-team="{{ r.team or 'No team' }}"
+                    data-device="{{ r.device_id or '' }}"
+                    data-race-rider-id="{{ r.race_rider_id }}">
+                  <td>{{ r.name }}</td>
+                  <td>{{ r.team or '—' }}</td>
+                  <td>{{ r.device_id or '—' }}</td>
+                  <td class="timing-start" data-race-rider-id="{{ r.race_rider_id }}">{{ r.start_time_rfid or 'waiting...' }}</td>
+                  <td class="timing-finish {{ 'rfid-warning' if r.multiple_rfid_flag else '' }}" data-race-rider-id="{{ r.race_rider_id }}">
+                    {{ r.finish_time_rfid or 'waiting...' }}{% if r.multiple_rfid_flag and r.finish_time_rfid %}*{% endif %}
+                  </td>
+                  <td>{{ r.race_rider_id }}</td>
+                  <td>
+                    <button class="btn manual-edit-btn"
+                            data-name="{{ r.name }}"
+                            data-device="{{ r.device_id or '' }}"
+                            data-race-rider-id="{{ r.race_rider_id }}"
+                            data-start="{{ r.start_time_input or '' }}"
+                            data-end="{{ r.finish_time_input or '' }}">
+                      Manual Edit
+                    </button>
+                  </td>
+                  <td>
+                    <button class="btn confirm-timing-btn"
+                            data-race-rider-id="{{ r.race_rider_id }}"
+                            {{ 'disabled' if r.finish_time_rfid_confirmed or not r.finish_time_rfid else '' }}>
+                      {{ 'Confirmed' if r.finish_time_rfid_confirmed else 'Confirm' }}
+                    </button>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          <p id="rfid-review-note" class="muted post-race-note {{ '' if has_multiple_rfid_flag else 'is-hidden' }}">* multiple timing entries, timing to be manually reviewed and confirmed</p>
         </div>
       {% else %}
         <p class="muted">No riders for this category.</p>
@@ -203,752 +141,43 @@
     </div>
   </div>
 
+  {% if categories %}
+  <script defer src="{{ url_for('static', filename='js/components/forms.js') }}"></script>
+  {% endif %}
+
   {% if categories and selected_category %}
   <!-- Lightweight modal for manual start/end edit -->
-  <div id="manual-modal" class="modal-backdrop" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.4); align-items:center; justify-content:center; z-index:9999;">
-    <div class="modal-card" style="background:#fff; padding:1rem; border-radius:6px; max-width:420px; width:90%; box-shadow:0 6px 18px rgba(0,0,0,0.2);">
-      <h4 id="manual-title" style="margin:0 0 .5rem 0;">Manual timing</h4>
-      <p style="margin:.25rem 0 .75rem 0; color:#555;">Enter start/end times (local) for this rider.</p>
-      <label style="display:block; margin-bottom:.5rem;">
-        <span style="display:block; font-weight:600; margin-bottom:.25rem;">Start time</span>
-        <input id="manual-start" type="datetime-local" style="width:100%; padding:.4rem;" />
+  <div id="manual-modal" class="modal-backdrop">
+    <div class="modal-card">
+      <h4 id="manual-title" class="modal-title">Manual timing</h4>
+      <p class="modal-help">Enter start/end times (local) for this rider.</p>
+      <label class="modal-field modal-field-compact">
+        <span class="modal-field-label">Start time</span>
+        <input id="manual-start" type="datetime-local" />
       </label>
-      <label style="display:block; margin-bottom:.75rem;">
-        <span style="display:block; font-weight:600; margin-bottom:.25rem;">End time</span>
-        <input id="manual-end" type="datetime-local" style="width:100%; padding:.4rem;" />
+      <label class="modal-field">
+        <span class="modal-field-label">End time</span>
+        <input id="manual-end" type="datetime-local" />
       </label>
-      <label style="display:block; margin-bottom:.75rem;">
-        <span style="display:block; font-weight:600; margin-bottom:.25rem;">TXT log (optional)</span>
-        <input id="manual-log" type="file" accept=".txt,text/plain" style="width:100%; padding:.35rem;" />
-        <span class="muted" style="display:block; margin-top:.35rem;">
+      <label class="modal-field">
+        <span class="modal-field-label">TXT log (optional)</span>
+        <input id="manual-log" type="file" accept=".txt,text/plain" />
+        <span class="muted modal-file-help">
           Upload a raw GNSS text log for this rider's device. The upload will be ingested
           via <code>/api/v1/upload-text</code> and then trimmed to the start/end times above.
         </span>
       </label>
-      <p id="manual-status" class="muted" style="margin:.15rem 0 .75rem 0;"></p>
-      <div style="display:flex; justify-content:flex-end; gap:.5rem;">
+      <p id="manual-status" class="muted manual-status"></p>
+      <div class="modal-actions">
         <button id="manual-cancel" class="btn" type="button">Cancel</button>
         <button id="manual-upload-text" class="btn" type="button">Upload TXT</button>
-        <button id="manual-save" class="btn" type="button" style="background:#d9534f; color:#fff;">Save</button>
+        <button id="manual-save" class="btn btn-danger" type="button">Save</button>
       </div>
     </div>
   </div>
 
-  <script>
-    // Map + track display:
-    // - On load: draw the route GeoJSON for the selected category.
-    // - On toggle: fetch per-race-rider GeoJSON and draw each overlay in its own color.
-    // - Multiple overlays can be active at once, with the most recently selected track on top.
-    // - While the page remains open, selected rider tracks refresh every 5 seconds.
-    const mapNode = document.getElementById('map');
-    const statusNode = document.getElementById('map-status');
-    const mapHeightInput = document.getElementById('map-height');
-    const mapHeightValue = document.getElementById('map-height-value');
-    const mapWidthInput = document.getElementById('map-width');
-    const mapWidthValue = document.getElementById('map-width-value');
-    const layoutNode = document.querySelector('.layout');
-    const ridersTable = document.querySelector('.riders-table');
-    const keyListNode = document.getElementById('track-key-list');
-    const raceId = mapNode?.dataset?.raceId;
-    const categoryLabel = mapNode?.dataset?.category || "";
-    const categoryParam = encodeURIComponent(categoryLabel);
-    const categoryText = categoryLabel ? `category "${categoryLabel}"` : "selected category";
-
-    const BASE_ROUTE_COLOR = '#1f78b4';
-    const TRACK_PALETTE = [
-      '#e31a1c',
-      '#33a02c',
-      '#ff7f00',
-      '#6a3d9a',
-      '#b15928',
-      '#1b9e77',
-      '#d95f02',
-      '#7570b3',
-      '#e7298a',
-      '#66a61e',
-      '#e6ab02',
-      '#a6761d'
-    ];
-    const MAP_HEIGHT_STORAGE_KEY = 'postRaceMapHeightPx';
-    const MAP_WIDTH_STORAGE_KEY = 'postRaceMapWidthPx';
-    const LIVE_TRACK_REFRESH_MS = 5000;
-    const LIVE_TIMING_REFRESH_MS = 5000;
-
-    let map;          // Leaflet map instance for the post-race view.
-    let routeLayer;   // Base category route layer.
-    const trackLayers = new Map();    // race_rider_id -> Leaflet GeoJSON layer.
-    const trackDataCache = new Map(); // race_rider_id -> cached GeoJSON payload.
-    const trackMeta = new Map();      // race_rider_id -> metadata including assigned color.
-    const timingRows = new Map();     // race_rider_id -> table row for live timing refresh.
-    const inFlightTrackRefresh = new Set(); // race_rider_id values currently being refreshed.
-    let layoutCheckHandle = null;     // requestAnimationFrame handle for layout recalculation.
-    let routeKeyRow = null;           // Track key row for the base route.
-    let liveRefreshHandle = null;     // setInterval handle for live track refresh.
-    let liveTimingRefreshHandle = null; // setInterval handle for live RFID timing refresh.
-    let timingRefreshInFlight = false;  // prevents overlapping timing refresh requests.
-
-    // Ensure a Leaflet map exists for the post-race view and return the instance.
-    // This stays lazy so we do not allocate tiles until the DOM is ready.
-    function ensureMap() {
-      if (map) return map;
-      map = L.map('map').setView([0, 0], 2);
-      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '&copy; OSM'
-      }).addTo(map);
-      return map;
-    }
-
-    // Update the small status line with a helpful message, guarding against missing DOM.
-    function updateStatus(message) {
-      if (statusNode) statusNode.textContent = message;
-    }
-
-    // Build the rider-track endpoint URL and optionally request cache-first behavior.
-    // The timestamp query string is a cheap cache-buster so we always read fresh data.
-    function getTrackRequestUrl(raceRiderId, preferCache) {
-      const baseUrl = `/races/${raceId}/race-rider/${encodeURIComponent(raceRiderId)}/track`;
-      const cacheMode = preferCache ? "prefer_cache=1&" : "";
-      return `${baseUrl}?${cacheMode}_ts=${Date.now()}`;
-    }
-
-    // Build the live timing endpoint URL for the selected category.
-    // The timestamp query string is a cache-buster so timing changes show quickly.
-    function getTimingRequestUrl() {
-      return `/races/${raceId}/race-rider-timings?category=${categoryParam}&_ts=${Date.now()}`;
-    }
-
-    // Keep the asterisk explanation visible only while at least one rider is flagged.
-    function updateRfidReviewNote(hasFlaggedTiming) {
-      const note = document.getElementById('rfid-review-note');
-      if (!note) return;
-      note.style.display = hasFlaggedTiming ? "" : "none";
-    }
-
-    // Render the end-time cell text, preserving the asterisk when multiple RFID
-    // timing entries have been detected for that race rider.
-    function renderFinishTimingText(finishTime, multipleRfidFlag) {
-      const display = finishTime || "waiting...";
-      return multipleRfidFlag && finishTime ? `${display}*` : display;
-    }
-
-    // Apply one RaceRider timing payload to the table row and manual-edit button.
-    function applyTimingUpdate(timing) {
-      const raceRiderId = String(timing.race_rider_id || "");
-      const row = timingRows.get(raceRiderId);
-      if (!row) return;
-
-      const startCell = row.querySelector('.timing-start');
-      const finishCell = row.querySelector('.timing-finish');
-      const manualButton = row.querySelector('.manual-edit-btn');
-      const confirmButton = row.querySelector('.confirm-timing-btn');
-
-      if (startCell) startCell.textContent = timing.start_time_rfid || "waiting...";
-      if (finishCell) {
-        finishCell.textContent = renderFinishTimingText(timing.finish_time_rfid, timing.multiple_rfid_flag);
-        finishCell.classList.toggle('rfid-warning', !!timing.multiple_rfid_flag);
-      }
-      if (manualButton) {
-        manualButton.dataset.start = timing.start_time_input || "";
-        manualButton.dataset.end = timing.finish_time_input || "";
-      }
-      if (confirmButton) {
-        const isConfirmed = !!timing.finish_time_rfid_confirmed;
-        const hasFinishTime = !!timing.finish_time_rfid;
-        confirmButton.textContent = isConfirmed ? "Confirmed" : "Confirm";
-        confirmButton.disabled = isConfirmed || !hasFinishTime;
-      }
-    }
-
-    // Poll the current race/category timing values so RFID finishes appear without
-    // forcing the organiser to refresh the post-race page.
-    function refreshRiderTimings() {
-      if (document.hidden || timingRefreshInFlight || !raceId) return;
-      timingRefreshInFlight = true;
-      fetch(getTimingRequestUrl(), { cache: "no-store" })
-        .then(resp => {
-          if (!resp.ok) throw new Error("timing refresh failed");
-          return resp.json();
-        })
-        .then(data => {
-          let hasFlaggedTiming = false;
-          (data.riders || []).forEach(timing => {
-            if (timing.multiple_rfid_flag) hasFlaggedTiming = true;
-            applyTimingUpdate(timing);
-          });
-          updateRfidReviewNote(hasFlaggedTiming);
-          scheduleLayoutCheck();
-        })
-        .catch(() => {
-          // Keep the existing table values if a transient refresh fails.
-        })
-        .finally(() => {
-          timingRefreshInFlight = false;
-        });
-    }
-
-    // Start or restart the 5-second live refresh interval for rider timing cells.
-    function startLiveTimingPolling() {
-      if (liveTimingRefreshHandle) window.clearInterval(liveTimingRefreshHandle);
-      liveTimingRefreshHandle = window.setInterval(refreshRiderTimings, LIVE_TIMING_REFRESH_MS);
-    }
-
-    // Confirm the currently displayed RFID finish time and clear the warning state.
-    function confirmFinishTiming(raceRiderId, button) {
-      if (!raceRiderId || button.disabled) return;
-      const confirmed = window.confirm("Confirm this RFID finish time and ignore further RFID finish reads for this rider?");
-      if (!confirmed) return;
-
-      button.disabled = true;
-      fetch(`/races/${raceId}/race-rider/${encodeURIComponent(raceRiderId)}/confirm-finish`, {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-      })
-        .then(resp => {
-          if (!resp.ok) throw new Error("confirm failed");
-          return resp.json();
-        })
-        .then(data => {
-          if (data.timing) applyTimingUpdate(data.timing);
-          refreshRiderTimings();
-        })
-        .catch(() => {
-          button.disabled = false;
-          alert("Failed to confirm timing. Please try again.");
-        });
-    }
-
-    // Pull the first line coordinate set from a GeoJSON FeatureCollection.
-    // This keeps change detection lightweight for high-frequency refresh polling.
-    function extractLineCoords(geojson) {
-      const features = geojson?.features;
-      if (!Array.isArray(features)) return [];
-      for (const feature of features) {
-        const geometry = feature?.geometry;
-        if (!geometry) continue;
-        if (geometry.type === "LineString" && Array.isArray(geometry.coordinates)) {
-          return geometry.coordinates;
-        }
-        if (geometry.type === "MultiLineString" && Array.isArray(geometry.coordinates)) {
-          return geometry.coordinates.reduce((all, part) => {
-            if (Array.isArray(part)) all.push(...part);
-            return all;
-          }, []);
-        }
-      }
-      return [];
-    }
-
-    // Compare old/new track geometry quickly so we avoid unnecessary layer rebuilds.
-    // We treat length changes or last-point movement as "changed".
-    function trackGeometryChanged(previousGeojson, nextGeojson) {
-      if (!previousGeojson) return true;
-      const prevCoords = extractLineCoords(previousGeojson);
-      const nextCoords = extractLineCoords(nextGeojson);
-      if (prevCoords.length !== nextCoords.length) return true;
-      if (nextCoords.length === 0) return false;
-      const prevLast = prevCoords[prevCoords.length - 1] || [];
-      const nextLast = nextCoords[nextCoords.length - 1] || [];
-      return prevLast[0] !== nextLast[0] || prevLast[1] !== nextLast[1];
-    }
-
-    // Decide if the layout should stack the riders table under the map when widths do not fit.
-    function evaluateLayoutStacking() {
-      if (!layoutNode || !mapNode || !ridersTable) return;
-      ridersTable.classList.add('is-measuring');
-      const layoutWidth = layoutNode.clientWidth;
-      const mapWidth = mapNode.getBoundingClientRect().width;
-      const tableWidth = ridersTable.scrollWidth;
-      ridersTable.classList.remove('is-measuring');
-      const gapPixels = 20;
-      const shouldStack = (mapWidth + tableWidth + gapPixels) > layoutWidth;
-      layoutNode.classList.toggle('is-stacked', shouldStack);
-      ridersTable.classList.toggle('is-stacked', shouldStack);
-    }
-
-    // Schedule a single layout check on the next animation frame.
-    function scheduleLayoutCheck() {
-      if (layoutCheckHandle) return;
-      layoutCheckHandle = window.requestAnimationFrame(() => {
-        layoutCheckHandle = null;
-        evaluateLayoutStacking();
-      });
-    }
-
-    // Apply a new map height and keep Leaflet layout in sync with the resized DOM node.
-    function applyMapHeight(heightPx, shouldPersist) {
-      if (!mapNode) return;
-      mapNode.style.height = `${heightPx}px`;
-      if (mapHeightValue) mapHeightValue.textContent = `${heightPx}px`;
-      if (shouldPersist) localStorage.setItem(MAP_HEIGHT_STORAGE_KEY, String(heightPx));
-      if (map) map.invalidateSize();
-      scheduleLayoutCheck();
-    }
-
-    // Apply a new map width (with a max-width safety clamp) and refresh Leaflet layout.
-    function applyMapWidth(widthPx, shouldPersist) {
-      if (!mapNode) return;
-      mapNode.style.width = `${widthPx}px`;
-      if (mapWidthValue) mapWidthValue.textContent = `${widthPx}px`;
-      if (shouldPersist) localStorage.setItem(MAP_WIDTH_STORAGE_KEY, String(widthPx));
-      if (map) map.invalidateSize();
-      scheduleLayoutCheck();
-    }
-
-    // Initialize the map height slider with a stored preference or a sensible default.
-    (function setupMapHeightControl() {
-      if (!mapHeightInput) return;
-      const storedValue = parseInt(localStorage.getItem(MAP_HEIGHT_STORAGE_KEY) || "", 10);
-      const initialHeight = Number.isFinite(storedValue) ? storedValue : 480;
-      mapHeightInput.value = String(initialHeight);
-      applyMapHeight(initialHeight, false);
-      mapHeightInput.addEventListener('input', () => {
-        const nextValue = parseInt(mapHeightInput.value, 10);
-        if (!Number.isFinite(nextValue)) return;
-        applyMapHeight(nextValue, true);
-      });
-    })();
-
-    // Initialize the map width slider with a stored preference or a sensible default.
-    (function setupMapWidthControl() {
-      if (!mapWidthInput || !mapNode) return;
-      const storedValue = parseInt(localStorage.getItem(MAP_WIDTH_STORAGE_KEY) || "", 10);
-      const fallbackWidth = Math.round(mapNode.getBoundingClientRect().width || 560);
-      const initialWidth = Number.isFinite(storedValue) ? storedValue : fallbackWidth;
-      mapWidthInput.value = String(initialWidth);
-      applyMapWidth(initialWidth, false);
-      mapWidthInput.addEventListener('input', () => {
-        const nextValue = parseInt(mapWidthInput.value, 10);
-        if (!Number.isFinite(nextValue)) return;
-        applyMapWidth(nextValue, true);
-      });
-    })();
-
-    // Choose a stable color for a rider track, falling back to HSL if we exhaust the palette.
-    function assignTrackColor(index) {
-      if (index < TRACK_PALETTE.length) return TRACK_PALETTE[index];
-      const hue = (index * 137.508) % 360;
-      return `hsl(${hue}, 70%, 45%)`;
-    }
-
-    // Apply the assigned color to the checkbox so its background matches the rider track.
-    function applyTrackColorStyles(toggle, color) {
-      toggle.style.setProperty('--track-color', color);
-    }
-
-    // Create rider metadata from a table row so we can render key toggles outside the table.
-    function createTrackMetaFromRow(row, index) {
-      const raceRiderId = (row.dataset.raceRiderId || "").trim();
-      if (!raceRiderId) return null;
-      const riderName = row.dataset.name || 'Unknown rider';
-      const teamName = row.dataset.team || 'No team';
-      const deviceId = (row.dataset.device || "").trim();
-      const color = assignTrackColor(index);
-      const labelParts = [riderName, `ID ${raceRiderId}`];
-      if (teamName && teamName !== 'No team') labelParts.splice(1, 0, teamName);
-      const meta = {
-        raceRiderId,
-        riderName,
-        teamName,
-        deviceId,
-        color,
-        label: labelParts.join(' | '),
-        toggle: null,
-        keyRow: null
-      };
-      trackMeta.set(raceRiderId, meta);
-      return meta;
-    }
-
-    // Build the track key so it always shows the base route and rider toggles.
-    function buildTrackKey() {
-      if (!keyListNode) return;
-      keyListNode.innerHTML = "";
-      const routeLabel = categoryLabel ? `Route (${categoryLabel})` : "Route";
-      routeKeyRow = buildKeyItem(routeLabel, BASE_ROUTE_COLOR, true, false);
-      keyListNode.appendChild(routeKeyRow);
-      trackMeta.forEach(meta => {
-        const row = buildKeyItem(meta.label, meta.color, false, true);
-        meta.keyRow = row;
-        keyListNode.appendChild(row);
-      });
-      updateTrackKeyActiveStates();
-    }
-
-    // Update the active/inactive styling for track key rows without rebuilding the DOM.
-    function updateTrackKeyActiveStates() {
-      trackMeta.forEach(meta => {
-        if (!meta.keyRow) return;
-        const isActive = trackLayers.has(meta.raceRiderId);
-        meta.keyRow.dataset.active = isActive ? 'true' : 'false';
-        if (meta.toggle) meta.toggle.checked = isActive;
-      });
-    }
-
-    // Construct a single track key row with a color swatch and label (optional toggle).
-    function buildKeyItem(label, color, isActive, includeToggle) {
-      const row = document.createElement('div');
-      row.className = 'track-key-item';
-      row.dataset.active = isActive ? 'true' : 'false';
-      let swatch = null;
-      if (includeToggle) {
-        const toggle = document.createElement('input');
-        toggle.type = 'checkbox';
-        toggle.className = 'track-toggle device-track-toggle';
-        applyTrackColorStyles(toggle, color);
-        row.appendChild(toggle);
-        swatch = null;
-      } else {
-        swatch = document.createElement('span');
-        swatch.className = 'track-key-swatch';
-        swatch.style.setProperty('--swatch-color', color);
-        row.appendChild(swatch);
-      }
-      const text = document.createElement('span');
-      text.textContent = label;
-      row.appendChild(text);
-      return row;
-    }
-
-    // Draw the category route (base layer) and keep it behind rider overlays.
-    function drawRoute(geojson) {
-      ensureMap();
-      if (routeLayer) {
-        map.removeLayer(routeLayer);
-        routeLayer = null;
-      }
-      routeLayer = L.geoJSON(geojson, {style: {color: BASE_ROUTE_COLOR, weight: 3}});
-      routeLayer.addTo(map);
-      routeLayer.bringToBack();
-      try {
-        const b = routeLayer.getBounds();
-        if (b.isValid()) map.fitBounds(b, { padding: [10, 10] });
-      } catch (e) {}
-    }
-
-    // Add (or re-add) a rider overlay, keeping it on top of other overlays.
-    function addTrackLayer(raceRiderId, geojson, shouldRefocus) {
-      ensureMap();
-      const meta = trackMeta.get(raceRiderId);
-      if (!meta) return;
-      const existing = trackLayers.get(raceRiderId);
-      if (existing && map) map.removeLayer(existing);
-      const layer = L.geoJSON(geojson, {style: {color: meta.color, weight: 3}});
-      trackLayers.set(raceRiderId, layer);
-      layer.addTo(map);
-      layer.bringToFront();
-      if (routeLayer) routeLayer.bringToBack();
-      if (shouldRefocus) {
-        try {
-          const b = layer.getBounds();
-          if (b.isValid()) map.fitBounds(b, { padding: [10, 10] });
-        } catch (e) {}
-      }
-      updateTrackKeyActiveStates();
-    }
-
-    // Remove a rider overlay from the map while keeping its cached data.
-    function removeTrackLayer(raceRiderId) {
-      const layer = trackLayers.get(raceRiderId);
-      if (layer && map) map.removeLayer(layer);
-      trackLayers.delete(raceRiderId);
-      updateTrackKeyActiveStates();
-    }
-
-    // Fetch stored GeoJSON for a rider and render it if still selected.
-    // Callers can choose cache-first mode and whether failures should clear selection.
-    function fetchAndShowTrack(meta, options = {}) {
-      const {
-        shouldRefocus = true,
-        silent = false,
-        preferCache = false,
-        keepSelectionOnError = true,
-      } = options;
-      const { raceRiderId, riderName, deviceId } = meta;
-      if (!silent) {
-        updateStatus(`Loading stored track for ${riderName} (race rider ${raceRiderId}${deviceId ? `, device ${deviceId}` : ""})...`);
-      }
-      return fetch(getTrackRequestUrl(raceRiderId, preferCache), { cache: "no-store" })
-        .then(resp => {
-          if (!resp.ok) throw new Error("Not found");
-          return resp.json();
-        })
-        .then(gj => {
-          const previousGeojson = trackDataCache.get(raceRiderId);
-          trackDataCache.set(raceRiderId, gj);
-          if (meta.toggle && !meta.toggle.checked) {
-            updateTrackKeyActiveStates();
-            return;
-          }
-          if (trackGeometryChanged(previousGeojson, gj) || !trackLayers.has(raceRiderId)) {
-            addTrackLayer(raceRiderId, gj, shouldRefocus);
-          }
-          if (!silent) {
-            updateStatus(`Showing stored track for ${riderName} (race rider ${raceRiderId}${deviceId ? `, device ${deviceId}` : ""}).`);
-          }
-        })
-        .catch(() => {
-          if (!keepSelectionOnError) {
-            if (meta.toggle) meta.toggle.checked = false;
-            removeTrackLayer(raceRiderId);
-          }
-          if (!silent) {
-            updateStatus("No stored track available for this race rider.");
-          }
-        });
-    }
-
-    // Poll selected riders and refresh from track_cache without changing selection state.
-    function refreshSelectedTracks() {
-      // Skip background-tab polling to reduce unnecessary network and DB load.
-      if (document.hidden) return;
-      trackMeta.forEach(meta => {
-        if (!meta.toggle || !meta.toggle.checked || !meta.raceRiderId) return;
-        if (inFlightTrackRefresh.has(meta.raceRiderId)) return;
-        inFlightTrackRefresh.add(meta.raceRiderId);
-        fetchAndShowTrack(meta, {
-          shouldRefocus: false,
-          silent: true,
-          preferCache: true,
-          keepSelectionOnError: true,
-        }).finally(() => {
-          inFlightTrackRefresh.delete(meta.raceRiderId);
-        });
-      });
-    }
-
-    // Start or restart the 5-second live refresh interval for selected rider tracks.
-    function startLiveTrackPolling() {
-      if (liveRefreshHandle) window.clearInterval(liveRefreshHandle);
-      liveRefreshHandle = window.setInterval(refreshSelectedTracks, LIVE_TRACK_REFRESH_MS);
-    }
-
-    // Kick off initial route fetch for the selected category.
-    if (!mapNode || !raceId) {
-      updateStatus("Map cannot load (missing race metadata).");
-    } else {
-      fetch(`/races/${raceId}/route/geojson?category=${categoryParam}`)
-        .then(r => r.json())
-        .then(gj => {
-          drawRoute(gj);
-          updateStatus(`Showing route for ${categoryText}.`);
-        })
-        .catch(() => {
-          updateStatus("Failed to load route data.");
-        });
-    }
-
-    // Wire up rider toggles in the track key so multiple overlays can be displayed together.
-    document.querySelectorAll('.rider-row').forEach((row, index) => {
-      const raceRiderId = (row.dataset.raceRiderId || "").trim();
-      if (raceRiderId) timingRows.set(raceRiderId, row);
-      createTrackMetaFromRow(row, index);
-    });
-
-    document.querySelectorAll('.confirm-timing-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const raceRiderId = (btn.dataset.raceRiderId || "").trim();
-        confirmFinishTiming(raceRiderId, btn);
-      });
-    });
-
-    // Build the track key UI and attach the toggle behavior.
-    buildTrackKey();
-    trackMeta.forEach(meta => {
-      if (!meta.keyRow) return;
-      const toggle = meta.keyRow.querySelector('.track-toggle');
-      if (!toggle) return;
-      meta.toggle = toggle;
-      toggle.addEventListener('change', () => {
-        if (!meta.raceRiderId) {
-          updateStatus("No race rider id linked for this rider.");
-          toggle.checked = false;
-          return;
-        }
-        if (toggle.checked) {
-          const cached = trackDataCache.get(meta.raceRiderId);
-          if (cached) {
-            addTrackLayer(meta.raceRiderId, cached, true);
-            updateStatus(`Showing stored track for ${meta.riderName} (race rider ${meta.raceRiderId}${meta.deviceId ? `, device ${meta.deviceId}` : ""}).`);
-          }
-          fetchAndShowTrack(meta, {
-            shouldRefocus: !cached,
-            silent: !!cached,
-            preferCache: true,
-            keepSelectionOnError: true,
-          });
-        } else {
-          removeTrackLayer(meta.raceRiderId);
-          updateStatus(`Hid track for ${meta.riderName} (race rider ${meta.raceRiderId}).`);
-        }
-      });
-    });
-
-    // Keep selected riders live while the page stays open.
-    startLiveTrackPolling();
-    startLiveTimingPolling();
-    refreshRiderTimings();
-    // Refresh once immediately when tab becomes active again.
-    document.addEventListener('visibilitychange', () => {
-      if (!document.hidden) {
-        refreshSelectedTracks();
-        refreshRiderTimings();
-      }
-    });
-    updateTrackKeyActiveStates();
-    scheduleLayoutCheck();
-    window.addEventListener('resize', scheduleLayoutCheck);
-
-    // Manual edit: modal with datetime-local inputs for a friendlier UX.
-    (function setupManualModal() {
-      const modal = document.getElementById('manual-modal');
-      if (!modal) return;
-      const startInput = document.getElementById('manual-start');
-      const endInput = document.getElementById('manual-end');
-      const fileInput = document.getElementById('manual-log');
-      const statusLine = document.getElementById('manual-status');
-      const title = document.getElementById('manual-title');
-      const cancelBtn = document.getElementById('manual-cancel');
-      const uploadBtn = document.getElementById('manual-upload-text');
-      const saveBtn = document.getElementById('manual-save');
-
-      let currentRaceRiderId = null;
-      let currentDeviceId = "";
-      let currentRiderName = "";
-
-      // Keep the tiny status line in sync for upload/validation feedback.
-      function setManualStatus(message) {
-        if (!statusLine) return;
-        statusLine.textContent = message || "";
-      }
-
-      function openModal(raceRiderId, riderName, deviceId, startVal, endVal) {
-        currentRaceRiderId = raceRiderId;
-        currentDeviceId = deviceId || "";
-        currentRiderName = riderName || "";
-        title.textContent = `Manual timing for ${riderName}${deviceId ? ` (device ${deviceId})` : ""}`;
-        startInput.value = startVal || "";
-        endInput.value = endVal || "";
-        if (fileInput) fileInput.value = "";
-        setManualStatus("");
-        modal.style.display = "flex";
-      }
-
-      function closeModal() {
-        modal.style.display = "none";
-        currentRaceRiderId = null;
-        currentDeviceId = "";
-        currentRiderName = "";
-        if (fileInput) fileInput.value = "";
-        setManualStatus("");
-      }
-
-      cancelBtn.addEventListener('click', closeModal);
-      modal.addEventListener('click', (e) => {
-        if (e.target === modal) closeModal();
-      });
-
-      // Build the manual timing payload once (used by both Save and Upload TXT flows).
-      function buildManualTimesPayload() {
-        return {
-          start_time: startInput.value,
-          end_time: endInput.value,
-        };
-      }
-
-      saveBtn.addEventListener('click', () => {
-        if (!currentRaceRiderId) return;
-        const confirmed = window.confirm("Are you sure? This is a permanent change. Original times will be lost.");
-        if (!confirmed) return;
-
-        fetch(`/races/${raceId}/race-rider/${encodeURIComponent(currentRaceRiderId)}/manual-times`, {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify(buildManualTimesPayload()),
-        })
-          .then(resp => {
-            if (!resp.ok) throw new Error("update failed");
-            return resp.json();
-          })
-          .then(() => {
-            refreshRiderTimings();
-            closeModal();
-          })
-          .catch(() => alert("Failed to update times. Please check format and try again."));
-      });
-
-      // Upload a raw TXT log and then re-apply the manual timing window.
-      // This mirrors the Raspberry Pi ingest flow while letting us trim to the chosen times.
-      uploadBtn.addEventListener('click', async () => {
-        if (!currentRaceRiderId) return;
-        if (!currentDeviceId) {
-          alert("This rider has no device id, so a log cannot be ingested.");
-          return;
-        }
-        const file = fileInput?.files?.[0];
-        if (!file) {
-          alert("Select a .txt log file before uploading.");
-          return;
-        }
-        const confirmed = window.confirm("Upload this text log and rebuild track history using the times above?");
-        if (!confirmed) return;
-
-        try {
-          uploadBtn.disabled = true;
-          setManualStatus(`Uploading TXT log for ${currentRiderName || "rider"}...`);
-          updateStatus(`Uploading TXT log for ${currentRiderName || "rider"}...`);
-
-          const rawText = await file.text();
-          if (!rawText.trim()) {
-            throw new Error("Selected file was empty.");
-          }
-
-          const uploadResp = await fetch("/api/v1/upload-text", {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({
-              pid: currentDeviceId,
-              log: rawText,
-            }),
-          });
-
-          if (!uploadResp.ok) {
-            throw new Error("Upload failed.");
-          }
-
-          // After ingesting the raw log, apply the manual timing window to rebuild track_hist.
-          const manualResp = await fetch(`/races/${raceId}/race-rider/${encodeURIComponent(currentRaceRiderId)}/manual-times`, {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify(buildManualTimesPayload()),
-          });
-
-          if (!manualResp.ok) {
-            throw new Error("Timing update failed.");
-          }
-
-          setManualStatus("Upload complete. Refreshing view...");
-          window.location.reload();
-        } catch (err) {
-          setManualStatus("");
-          alert(err?.message || "TXT upload failed. Please try again.");
-        } finally {
-          uploadBtn.disabled = false;
-        }
-      });
-
-      document.querySelectorAll('.manual-edit-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-          const raceRiderId = (btn.dataset.raceRiderId || "").trim();
-          const riderName = btn.dataset.name || 'Unknown rider';
-          const deviceId = (btn.dataset.device || "").trim();
-          const startVal = (btn.dataset.start || "").replace(" ", "T");
-          const endVal = (btn.dataset.end || "").replace(" ", "T");
-          if (!raceRiderId) return;
-          openModal(raceRiderId, riderName, deviceId, startVal, endVal);
-        });
-      });
-    })();
-  </script>
+  <script defer src="{{ url_for('static', filename='js/components/maps.js') }}"></script>
+  <script defer src="{{ url_for('static', filename='js/pages/post-race.js') }}"></script>
   {% endif %}
 </body>
 </html>

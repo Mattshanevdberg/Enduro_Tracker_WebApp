@@ -15,4 +15,4 @@ pg_dump -h localhost -U enduro_tracker -d enduro_tracker > enduro_tracker_$(date
 docker compose exec db psql -U enduro_tracker -d enduro_tracker -c "SELECT * FROM your_table_name ORDER BY id DESC LIMIT 10;"
 for example
 docker compose exec db psql -U enduro_tracker -d enduro_tracker -c "SELECT * FROM ingest_raw ORDER BY id DESC LIMIT 10;"
-docker compose exec db psql -U enduro_tracker -d enduro_tracker -c "SELECT * FROM points ORDER BY id DESC LIMIT 10;"
+docker compose exec db psql -U enduro_tracker -d enduro_tracker -c "SELECT * FROM points ORDER BY id DESC LIMIT 1

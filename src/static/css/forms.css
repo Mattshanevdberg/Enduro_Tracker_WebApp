@@ -1,0 +1,169 @@
+/*
+Shared form component styles.
+
+This file is the shared form layer for the CSS split. It is loaded after
+base.css by pages that need reusable panels, form grids, filter grids, input
+states, status messages, and form action layout.
+
+Depends on:
+- base.css variables for colour, borders, typography, and spacing tone.
+
+Used for:
+- Rider create/edit form.
+- Device create/edit forms.
+- RFID filter form.
+- Race form field rows and rider assignment controls.
+*/
+
+.content-panel {
+  margin-bottom: 1.75rem;
+  padding: 1.1rem;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  background: var(--color-white);
+  box-shadow: var(--shadow-card);
+}
+
+.content-panel h2 {
+  margin: 0 0 1rem;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: minmax(9rem, 1fr) minmax(0, 2fr);
+  gap: 0.75rem 0.9rem;
+  align-items: center;
+}
+
+.form-grid label {
+  font-weight: 700;
+}
+
+.filter-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(150px, 1fr));
+  gap: 0.75rem 0.9rem;
+  align-items: end;
+}
+
+.filter-grid label {
+  display: block;
+  margin-bottom: 0.28rem;
+  font-weight: 700;
+}
+
+.field-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.field-row + .field-row,
+.field-row + label,
+label + .field-row,
+input + label,
+textarea + label,
+select + label {
+  margin-top: 0.85rem;
+}
+
+.field {
+  flex: 1 1 12rem;
+}
+
+.field-wide {
+  flex: 2 1 16rem;
+}
+
+.field-narrow {
+  flex: 1 1 8rem;
+}
+
+.align-end {
+  align-self: end;
+}
+
+.inline-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-weight: 700;
+}
+
+input,
+select,
+textarea {
+  width: 100%;
+  padding: 0.62rem 0.7rem;
+  border: 1px solid var(--color-line);
+  border-radius: 6px;
+  color: var(--color-text);
+  background: var(--color-white);
+  font: inherit;
+}
+
+input[type="checkbox"],
+input[type="file"] {
+  width: auto;
+}
+
+input[type="file"] {
+  max-width: 100%;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--color-forest-600);
+  outline: 3px solid rgba(25, 135, 84, 0.18);
+  outline-offset: 1px;
+}
+
+.msg {
+  margin: 0 0 1rem;
+  padding: 0.75rem 0.9rem;
+  border-radius: 6px;
+  font-weight: 650;
+}
+
+.msg.ok {
+  border: 1px solid rgba(20, 108, 67, 0.35);
+  color: var(--color-forest-700);
+  background: var(--color-forest-100);
+}
+
+.msg.err {
+  border: 1px solid rgba(180, 35, 24, 0.4);
+  color: #8f1d16;
+  background: #fff1f0;
+}
+
+.actions {
+  white-space: nowrap;
+}
+
+.form-grid .actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+  grid-column: 1 / -1;
+  margin-top: 0.4rem;
+}
+
+@media (max-width: 700px) {
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .filter-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .form-grid .actions,
+  .filter-grid .actions {
+    display: grid;
+    white-space: normal;
+  }
+}

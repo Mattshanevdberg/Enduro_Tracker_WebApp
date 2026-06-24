@@ -208,6 +208,116 @@ docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
   - `templates/post_race.html`: "Back to Home" link.
   - `templates/rfid_view.html`: "Back to Home" link.
 
+## CSS Structure
+
+### Recommended combined structure
+- Purpose: Use a combined CSS structure so shared theme and component styles stay reusable while complex pages can keep page-specific layout rules close to their own templates.
+- Structure:
+```text
+src/static/css/
+  base.css
+  forms.css
+  tables.css
+  maps.css
+  home.css
+  race-form.css
+  post-race.css
+  rfid.css
+```
+- Positives: balances reuse and page safety, keeps the navy/white/forest-green theme consistent, reduces duplicated form/table/map styling, and lets behavior-heavy pages such as `templates/race_form.html` and `templates/post_race.html` have targeted layout fixes without destabilising simpler pages.
+- Negatives: requires discipline about where each rule belongs, can create ambiguity for reusable-but-page-flavoured rules such as filter grids, and means some templates may load more than one stylesheet.
+- Rule: put theme tokens, typography, page shell, and baseline buttons in `base.css`.
+- Rule: put reusable form controls, form grids, labels, messages, and input states in `forms.css`.
+- Rule: put reusable table wrappers, wide-table behavior, cells, headings, and table action styling in `tables.css`.
+- Rule: put reusable Leaflet/map containers and map sizing helpers in `maps.css`.
+- Rule: put only home-page refinements in `home.css`.
+- Rule: put only race form layout and behavior-sensitive styling in `race-form.css`.
+- Rule: put only post-race layout, modal, live timing, and live map refinements in `post-race.css`.
+- Rule: put only RFID page refinements in `rfid.css` when they are not reusable enough for `forms.css` or `tables.css`.
+
+### Page stylesheet example
+- Purpose: Load shared styles first and page-specific overrides last so the base theme remains consistent while each page can safely refine its own layout.
+- Example:
+```html
+<link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}" />
+<link rel="stylesheet" href="{{ url_for('static', filename='css/forms.css') }}" />
+<link rel="stylesheet" href="{{ url_for('static', filename='css/tables.css') }}" />
+<link rel="stylesheet" href="{{ url_for('static', filename='css/maps.css') }}" />
+<link rel="stylesheet" href="{{ url_for('static', filename='css/race-form.css') }}" />
+```
+- Notes: stylesheet order matters. Shared files should define the default look, while page files should only add or override what that page genuinely needs.
+
+### Current base.css usage
+- Purpose: Provide the lean shared static stylesheet for the Flask-rendered UI, currently applied to `templates/home.html`, `templates/riders_form.html`, `templates/devices.html`, `templates/device_edit.html`, `templates/rfid_view.html`, `templates/race_form.html`, and `templates/post_race.html`.
+- Reads: CSS custom properties defined in `:root` for navy, white, forest green, neutral surfaces, borders, text, and shadows.
+- Writes: Browser presentation only; no application data is changed.
+- Styles: theme variables, page shell, page header, primary buttons, section titles, muted text, empty state, and mobile layout adjustments.
+- Called from:
+  - `templates/home.html`: linked through `url_for('static', filename='css/base.css')`.
+  - `templates/riders_form.html`: linked through `url_for('static', filename='css/base.css')`.
+  - `templates/devices.html`: linked through `url_for('static', filename='css/base.css')`.
+  - `templates/device_edit.html`: linked through `url_for('static', filename='css/base.css')`.
+  - `templates/rfid_view.html`: linked through `url_for('static', filename='css/base.css')`.
+  - `templates/race_form.html`: linked through `url_for('static', filename='css/base.css')`.
+  - `templates/post_race.html`: linked through `url_for('static', filename='css/base.css')`.
+- Notes: this CSS split follows the simple Flask web UI direction in `Web Application System Design V4 - 20260224.pdf`. Future work should move broad reusable rules out of `base.css` into component stylesheets and keep complex page-specific rules in their own page files.
+
+### Shared component files
+- Purpose: Provide reusable component stylesheets that are loaded after `base.css` by pages that need them.
+- Current state: `forms.css`, `tables.css`, and `maps.css` exist under `src/static/css`; `templates/home.html`, `templates/riders_form.html`, `templates/devices.html`, `templates/device_edit.html`, `templates/rfid_view.html`, `templates/race_form.html`, and `templates/post_race.html` now load the relevant component files.
+- `forms.css`: contains reusable content panels, form grids, filter grids, field rows, inputs, checkboxes, file inputs, focus states, status messages, and form action layout.
+- `tables.css`: contains reusable table cards, table cells, wide-table behavior, table heading styling, table action buttons, `pre-wrap`, and `code` wrapping helpers.
+- `maps.css`: contains reusable compact map preview container styling plus shared Leaflet map wrapper/canvas styling for route and track maps.
+- Notes: `maps.css` is currently loaded by `templates/race_form.html` for the route preview map and `templates/post_race.html` for the route/track review map; Home, Riders, Devices, and RFID pages do not need it.
+
+## JS Structure
+
+### Recommended shared component and page structure
+- Purpose: Use shared JavaScript components for browser behaviour that is genuinely reused, while keeping each page's DOM wiring and workflow-specific behaviour in a page file.
+- Structure:
+```text
+src/static/js/
+  components/
+    maps.js
+    forms.js
+    polling.js
+  pages/
+    race-form.js
+    post-race.js
+```
+- How it works: A template loads the component files it needs first, then loads its page file last. The page file reads DOM elements and `data-*` attributes, calls shared helpers, and owns event listeners for that page. For example, `race-form.js` can initialise the GPX route preview and rider/device auto-fill, while `post-race.js` can initialise route/track maps, live timing polling, track toggles, and the manual timing modal.
+- How it works: Server-rendered values must remain in the template as HTML `data-*` attributes or `<script type="application/json">` blocks. External `.js` files should read those values from the DOM instead of containing Jinja expressions.
+- Positives: keeps complex pages manageable, prevents duplication when map, form, or polling behaviour is reused, keeps page-specific workflow logic isolated, and follows the existing Flask server-rendered UI direction described in `Web Application System Design V4 - 20260224.pdf`.
+- Negatives: requires clear ownership boundaries, introduces script load-order decisions, and can create unnecessary abstraction if a helper is extracted before a second real use case exists.
+- Rule: put reusable Leaflet setup, GeoJSON rendering helpers, and map resize helpers in `components/maps.js` only when at least two pages need the same behaviour.
+- Rule: put reusable DOM form helpers, input synchronisation helpers, and confirmation helpers in `components/forms.js` only when they are shared by multiple pages.
+- Rule: put reusable interval, visibility, in-flight request, and fetch-refresh helpers in `components/polling.js` only when the behaviour is shared.
+- Rule: put selectors, page initialisation, page-specific endpoint construction, and page-only event listeners in `pages/<page-name>.js`.
+- Rule: load component files before their dependent page file, and use `defer` for local script tags so the DOM is available before initialisation.
+- Rule: do not put Jinja syntax such as `{{ race.id }}` directly in an external `.js` file; expose the value through a `data-*` attribute or JSON data block instead.
+- Rule: replace inline event attributes such as `onchange` and `onsubmit` with `addEventListener` calls in the relevant page file as each page is migrated.
+- Rule: retain external library loading, such as Leaflet, in the template unless a future dependency-management approach is introduced.
+- Rule: create a shared component only after a second page needs the same stable behaviour; otherwise keep the code in the owning page file.
+
+### Page script example
+- Purpose: Load shared helpers first and page-specific behaviour last, matching the same layering used by the CSS structure.
+- Example:
+```html
+<script defer src="{{ url_for('static', filename='js/components/forms.js') }}"></script>
+<script defer src="{{ url_for('static', filename='js/components/maps.js') }}"></script>
+<script defer src="{{ url_for('static', filename='js/pages/race-form.js') }}"></script>
+```
+- Notes: Not every page needs every component file. A page should load only the shared scripts it uses, followed by its own page script. When a shared component is introduced, it must be loaded before the dependent page script.
+
+### Current JS usage
+- Purpose: Record the current incremental JavaScript migration state.
+- Current state: `src/static/js/components/forms.js`, `src/static/js/components/maps.js`, `src/static/js/pages/race-form.js`, and `src/static/js/pages/post-race.js` exist. Templates load their required component files before their page file.
+- `components/forms.js`: contains shared `data-auto-submit` select handling used by the category controls in `templates/race_form.html` and `templates/post_race.html`.
+- `components/maps.js`: contains shared Leaflet map creation, selected-category route fetching, GeoJSON layer creation, and map-bounds fitting used by the race form and post-race pages.
+- `pages/race-form.js`: contains race-form-only GPX upload validation and rider/device auto-fill behaviour. It uses the shared form/map helpers for category auto-submit and route preview. The GPX input uses native required-field validation so an empty upload is blocked before navigation even when JavaScript is unavailable; the script supplies the GPX-specific text for the browser validation popup. The script reads the race id and category from `#map` data attributes and the rider/device mapping from the `#last-device-by-rider-data` JSON data node.
+- `pages/post-race.js`: contains post-race-only live track/timing polling, track overlay controls, map size preferences, finish confirmation, and the manual timing/TXT upload modal. It uses the shared form/map helpers for category auto-submit and route-map setup.
+- Notes: `components/polling.js` does not exist yet because polling is currently used only by the post-race page. Move polling code there only when another page needs the same stable behaviour.
+
 ## src/web/devices.py
 
 ### _list_devices
@@ -746,6 +856,7 @@ docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
 ### home.html
 - General: Home/landing page and navigation hub.
 - Displays: Races table (name, start, website, active).
+- Styles: Uses `src/static/css/base.css` for the lean shared base theme and `src/static/css/tables.css` for the race-list table.
 - UI actions: "Input Rider Details", "Manage Devices", "Add New Race", "View RFID Records", "Edit", "Post Race".
 - Linked pages (buttons):
   - "Input Rider Details" → `/riders/new` (riders form page).
@@ -762,6 +873,7 @@ docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
 ### devices.html
 - General: Device list and create form.
 - Displays: Device ID, RFID EPC, Device Info.
+- Styles: Uses `src/static/css/base.css` for the lean shared base theme, `src/static/css/forms.css` for the device form panel and messages, and `src/static/css/tables.css` for the device table.
 - UI actions: "Save" (create), "Edit", "Back to Home".
 - Linked pages (buttons):
   - "Back to Home" → `/` (home page).
@@ -774,6 +886,7 @@ docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
 ### device_edit.html
 - General: Edit a single device's info and RFID EPC.
 - Displays: Device ID (read-only), Device Info, RFID EPC.
+- Styles: Uses `src/static/css/base.css` for the lean shared base theme and `src/static/css/forms.css` for the edit form panel, inputs, status messages, and form action layout.
 - UI actions: "Save", "Back to Devices", "Home".
 - Linked pages (buttons):
   - "Back to Devices" → `/devices/` (devices list page).
@@ -786,6 +899,7 @@ docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
 ### rfid_view.html
 - General: RFID ingest records viewer with server-side filters.
 - Displays: RFID row id, EPC, RSSI, average RSSI, antenna, reader id, reader time, and received time.
+- Styles: Uses `src/static/css/base.css` for the lean shared base theme, `src/static/css/forms.css` for the filter panel, filter grid, messages, and filter actions, and `src/static/css/tables.css` for the wide RFID records table.
 - UI actions: "Filter", "Clear", "Back to Home".
 - Linked pages (buttons):
   - "Back to Home" → `/` (home page).
@@ -798,6 +912,7 @@ docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
 ### riders_form.html
 - General: Create/edit rider form with riders list.
 - Displays: Rider fields and riders table.
+- Styles: Uses `src/static/css/base.css` for the lean shared base theme, `src/static/css/forms.css` for the rider form panel and messages, and `src/static/css/tables.css` for the riders table.
 - UI actions: "Save", "Edit", "Back to Home".
 - Linked pages (buttons/links):
   - "Back to Home" → `/` (home page).
@@ -810,6 +925,7 @@ docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
 ### race_form.html
 - General: Create/edit race, upload route GPX, manage category riders.
 - Displays: Race fields, category selector, route map preview, rider/device tables.
+- Styles: Uses `src/static/css/base.css` for the lean shared base theme, `src/static/css/forms.css` for form controls and row actions, `src/static/css/tables.css` for the rider assignment table, `src/static/css/maps.css` for the Leaflet route preview container, and `src/static/css/race-form.css` for race-form-only layout.
 - UI actions: "Save Changes", category dropdown (reload), "Upload GPX", "Remove GPX", "Save" (add rider), "Edit" (update rider entry), "Remove" (delete entry), "Back".
 - Linked pages (buttons/links):
   - "Back" → `/` (home page).
@@ -818,12 +934,14 @@ docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
 - Pushes: POST save race, upload/remove GPX, add/edit/remove riders.
 - Routes called: `/races/save`, `/races/<id>/edit?category=...`, `/races/<id>/route/upload`, `/races/<id>/route/remove`, `/races/<id>/route/geojson`, `/races/<id>/riders/add`, `/races/<id>/riders/<entry_id>/edit`, `/races/<id>/riders/<entry_id>/remove`.
 - Embedded scripts:
-  - Map preview: fetches route GeoJSON and renders via Leaflet.
+  - GPX upload validation: native required-field validation blocks an empty file submission with a browser popup; JavaScript supplies the GPX-specific popup text.
+  - Shared form/map scripts: auto-submit the category selector and fetch/render the route GeoJSON through `components/forms.js` and `components/maps.js`.
   - Rider add helper: auto-fills device based on `last_device_by_rider` mapping.
 
 ### post_race.html
 - General: Post-race review with route map and rider tracks.
 - Displays: Race metadata, category route map, riders list with timing, ambiguous RFID finish-time highlights with an asterisk review note, finish confirmation state, manual timing modal with optional TXT log upload.
+- Styles: Uses `src/static/css/base.css` for the lean shared base theme, `src/static/css/forms.css` for category/manual timing controls, `src/static/css/tables.css` for the riders timing table, `src/static/css/maps.css` for the Leaflet route/track map canvas, and `src/static/css/post-race.css` for post-race-only layout, track key, RFID warning, and modal styles.
 - UI actions: Category dropdown (reload), "Show Track", "Manual Edit", "Confirm" timing, modal "Save/Cancel/Upload TXT".
 - Linked pages (buttons/links):
   - "Back to Home" → `/` (home page).
@@ -831,8 +949,8 @@ docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
 - Pushes: Fetch route GeoJSON, fetch stored rider track (cache-first for live polling), fetch live rider timing values, POST manual timing edits, POST finish timing confirmation, POST TXT log ingest.
 - Routes called: `/races/<id>/post?category=...`, `/races/<id>/route/geojson?category=...`, `/races/<id>/race-rider/<id>/track`, `/races/<id>/race-rider/<id>/track?prefer_cache=1`, `/races/<id>/race-rider-timings?category=...`, `/races/<id>/race-rider/<id>/manual-times`, `/races/<id>/race-rider/<id>/confirm-finish`, `/api/v1/upload-text`.
 - Embedded scripts:
-  - Route map load/render (Leaflet).
-  - "Show Track" overlay fetch + render.
+  - Shared form/map scripts: auto-submit the category selector and initialise the Leaflet route map through `components/forms.js` and `components/maps.js`.
+  - "Show Track" overlay fetch + render (page-specific).
   - 5-second polling refresh for selected rider tracks (preserves selected toggles and layer state).
   - 5-second polling refresh for start/end timing cells, multiple-RFID asterisk state, and confirmation button state.
   - Manual timing modal + POST update + TXT log upload.
