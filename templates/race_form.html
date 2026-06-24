@@ -66,7 +66,7 @@
     <form method="get" action="{{ url_for('races.edit_race', race_id=race.id if race else 0) }}" class="row">
       <!-- If a user switches category, reload the page with the chosen one -->
       <label for="category">Category</label>
-      <select id="category" name="category" onchange="this.form.submit()">
+      <select id="category" name="category" data-auto-submit>
         {% for c in categories %}
           <option value="{{ c }}" {{ 'selected' if c == selected_category else '' }}>{{ c }}</option>
         {% endfor %}
@@ -78,13 +78,10 @@
 
     {% if race %}
       <!-- Upload GPX for current category -->
-      <form method="post" action="{{ url_for('races.upload_gpx', race_id=race.id) }}" enctype="multipart/form-data" class="row race-gpx-upload">
+      <form id="gpx-upload-form" method="post" action="{{ url_for('races.upload_gpx', race_id=race.id) }}" enctype="multipart/form-data" class="row race-gpx-upload">
         <input type="hidden" name="category" value="{{ selected_category }}"/>
-        <input type="file" name="gpx_file" accept=".gpx" />
+        <input id="gpx-file" type="file" name="gpx_file" accept=".gpx" required />
         <button class="btn" type="submit">Upload GPX</button>
-        <form method="post" action="{{ url_for('races.remove_gpx', race_id=race.id) }}">
-          <input type="hidden" name="category" value="{{ selected_category }}"/>
-        </form>
       </form>
 
       <!-- Remove GPX -->
@@ -190,70 +187,11 @@
   </div>
 </div>
 
+<script defer src="{{ url_for('static', filename='js/components/forms.js') }}"></script>
+
 {% if race %}
-<script>
-  // --- Map preview logic -----------------------------------------------------
-  // This loads the GeoJSON for the selected category and draws it on a Leaflet map.
-
-  // Grab race metadata directly from the map container to keep JS free of templating syntax.
-  const mapElement = document.getElementById('map');
-  const raceId = mapElement?.dataset?.raceId || '';
-  const category = encodeURIComponent(mapElement?.dataset?.category || '');
-  if (!mapElement || !raceId) {
-    console.warn('Missing map metadata; skipping map preview setup.');
-  } else {
-    const map = L.map('map').setView([0, 0], 2);
-    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; OSM'
-    }).addTo(map);
-
-    fetch(`/races/${raceId}/route/geojson?category=${category}`)
-      .then(r => r.json())
-      .then(gj => {
-        const layer = L.geoJSON(gj);
-        layer.addTo(map);
-        try { map.fitBounds(layer.getBounds(), {padding:[10,10]}); } catch(e) {}
-      });
-  }
-
-  // --- Rider add row: make the "device" auto-fill when a rider is chosen -----
-  // The server passed us a mapping from rider_id -> last device used via a JSON payload node.
-  let lastDeviceByRider = {};
-  const lastDeviceDataNode = document.getElementById('last-device-by-rider-data');
-  if (lastDeviceDataNode && lastDeviceDataNode.textContent) {
-    try {
-      lastDeviceByRider = JSON.parse(lastDeviceDataNode.textContent);
-    } catch (err) {
-      console.error('Failed to parse last-device mapping:', err);
-    }
-  }
-  const riderInput = document.getElementById('rider_id_input');
-  const riderHidden = document.getElementById('rider_id_hidden');
-  const deviceInput = document.getElementById('device_id_input');
-  const deviceHidden = document.getElementById('device_id_hidden');
-
-  // When the user finishes typing a rider (expects "id - name"), extract the id
-  riderInput.addEventListener('change', () => {
-    const val = riderInput.value.trim();
-    const idPart = val.split('-')[0].trim();
-    riderHidden.value = idPart;
-
-    // If we know a last device for this rider, pre-fill device field
-    if (lastDeviceByRider[idPart]) {
-      deviceInput.value = lastDeviceByRider[idPart];
-      deviceHidden.value = lastDeviceByRider[idPart];
-    } else {
-      // When no stored device is found, wipe any stale selection from previous riders.
-      deviceInput.value = '';
-      deviceHidden.value = '';
-    }
-  });
-
-  // Keep hidden device_id in sync with visible device input
-  deviceInput.addEventListener('change', () => {
-    deviceHidden.value = deviceInput.value.trim();
-  });
-</script>
+<script defer src="{{ url_for('static', filename='js/components/maps.js') }}"></script>
+<script defer src="{{ url_for('static', filename='js/pages/race-form.js') }}"></script>
 {% endif %}
 </body>
 </html>

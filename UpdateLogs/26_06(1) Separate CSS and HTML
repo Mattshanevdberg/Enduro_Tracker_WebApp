@@ -1,0 +1,5 @@
+OK so we are going to do this piece by piece. We will start with the race form, we will take the race form and we will separate the JS code and put it in the previously mentioned.JS pages/raceform.Js. Then we will not be creating the components js files yet. In the future when we create the post race form anything that gets reused we'll put in a components folder in the relevant js files. So just create the race-form.js for now. Keeping in mind that in the future certain functions may be pulled out of the race form JS and put in a components (maps JS or forms JS or polling JS, etc) 
+
+There is one issue with the. Edit race page. When the Upload GPX button is pushed but there is no file selected, it opens a new window that says Please choose a new GPX file. This should be a small pop up instead.
+
+OK, let's now do the same For post race form. Remember to remove the same functions that are used in both the race form and post race form js files. And place them in a js/Components/specificFunctionsFile. So we are creating a Post race.JS file but We are taking reusable functions from race form and post race and putting them in relevant component JS files. 
