@@ -24,6 +24,7 @@ because they currently belong only to the post-race page.
   const raceId = mapNode?.dataset?.raceId || '';
   const categoryLabel = mapNode?.dataset?.category || '';
   const categoryText = categoryLabel ? `category "${categoryLabel}"` : 'selected category';
+  const mapConfigNode = document.getElementById('post-race-map-config');
 
   const BASE_ROUTE_COLOR = '#1f78b4';
   const TRACK_PALETTE = [
@@ -46,18 +47,41 @@ because they currently belong only to the post-race page.
   const trackMeta = new Map();
   const timingRows = new Map();
   const inFlightTrackRefresh = new Set();
+  let publicMapConfig = null;
+  let basemapAttached = false;
+
+  // Read the server-rendered public Esri configuration from JSON rather than
+  // embedding Jinja expressions in this static page script. Invalid or absent
+  // configuration remains safe because the shared helper will use OSM instead.
+  if (mapConfigNode?.textContent) {
+    try {
+      publicMapConfig = JSON.parse(mapConfigNode.textContent);
+    } catch (error) {
+      console.error('Failed to parse post-race map configuration:', error);
+    }
+  }
 
   // Update the status line without requiring every page state to include one.
   function updateStatus(message) {
     if (statusNode) statusNode.textContent = message;
   }
 
-  // Create the Leaflet map only when a post-race map interaction needs it.
+  // Create an empty Leaflet map only when a post-race interaction needs it. The
+  // selected route or track sets the view before a basemap can request tiles.
   function ensureMap() {
     if (map) return map;
     if (!maps || !mapNode) return null;
-    map = maps.createMap(mapNode);
+    map = maps.createMap(mapNode, { basemap: 'none' });
     return map;
+  }
+
+  // Attach satellite imagery only after valid bounds are visible. A later
+  // server-backed usage guard will change satelliteAllowed to false, causing
+  // this same helper to select the retained OpenStreetMap fallback instead.
+  function attachPostRaceBasemap() {
+    if (!map || !maps || basemapAttached) return;
+    const result = maps.attachConfiguredBasemap(map, publicMapConfig);
+    basemapAttached = !!result?.layer;
   }
 
   // Build cache-busted endpoints for live rider tracks and timing refreshes.
@@ -308,7 +332,10 @@ because they currently belong only to the post-race page.
     if (routeLayer) currentMap.removeLayer(routeLayer);
     routeLayer = maps.addGeojsonLayer(currentMap, geojson, { style: { color: BASE_ROUTE_COLOR, weight: 3 } });
     routeLayer?.bringToBack();
-    maps.fitMapToLayer(currentMap, routeLayer);
+    if (maps.fitMapToLayer(currentMap, routeLayer)) {
+      maps.setMapBoundsLimit(currentMap, routeLayer, 0.25);
+      attachPostRaceBasemap();
+    }
   }
 
   function addTrackLayer(raceRiderId, geojson, shouldRefocus) {
@@ -322,7 +349,7 @@ because they currently belong only to the post-race page.
     trackLayers.set(raceRiderId, layer);
     layer.bringToFront();
     routeLayer?.bringToBack();
-    if (shouldRefocus) maps.fitMapToLayer(currentMap, layer);
+    if (shouldRefocus && maps.fitMapToLayer(currentMap, layer)) attachPostRaceBasemap();
     updateTrackKeyActiveStates();
   }
 

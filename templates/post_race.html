@@ -12,6 +12,9 @@
   <!-- Leaflet: lightweight map renderer for the route preview -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <!-- Esri Leaflet Vector: loaded only for the post-race satellite basemap. -->
+  <script src="https://unpkg.com/esri-leaflet@3.0.19/dist/esri-leaflet.js"></script>
+  <script src="https://unpkg.com/esri-leaflet-vector@4.3.2/dist/esri-leaflet-vector.js"></script>
 </head>
 <body class="post-race-page">
   <div class="post-race-nav">
@@ -61,6 +64,8 @@
         <div class="map-wrapper">
           <div id="map" class="map-canvas" data-race-id="{{ race.id }}" data-category="{{ selected_category or '' }}"></div>
         </div>
+        {# This API key is a referrer-restricted public browser credential, not a server secret. #}
+        <script id="post-race-map-config" type="application/json">{{ public_map_config | tojson }}</script>
         <div class="map-toolbar">
           <div class="map-size-control">
             <label for="map-height">Map height</label>

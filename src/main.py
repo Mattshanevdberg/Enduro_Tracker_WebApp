@@ -41,8 +41,19 @@ def create_app():
     app = Flask(
         __name__, 
         template_folder="../templates" # point Flask to your templates folder (repo root/templates)
-        )
+    )
     app.config["SECRET_KEY"] = os.environ["FLASK_SECRET_KEY"]
+    # Keep map-provider configuration in Flask rather than in committed client
+    # code. The ArcGIS API key is intentionally a browser-facing API key, so the
+    # post-race route will expose it only when satellite imagery is configured.
+    app.config["MAP_PROVIDER"] = os.environ.get("MAP_PROVIDER", "").strip().lower()
+    app.config["MAP_STYLE"] = os.environ.get("MAP_STYLE", "").strip()
+    app.config["ARCGIS_API_KEY"] = os.environ.get("ARCGIS_API_KEY", "").strip()
+    app.config["MAP_TILE_MONTHLY_LIMIT"] = os.environ.get("MAP_TILE_MONTHLY_LIMIT", "").strip()
+    app.config["MAP_TILE_WARNING_THRESHOLD"] = os.environ.get("MAP_TILE_WARNING_THRESHOLD", "").strip()
+    app.config["MAP_TILE_HARD_STOP_THRESHOLD"] = os.environ.get("MAP_TILE_HARD_STOP_THRESHOLD", "").strip()
+    app.config["MAP_TILE_USER_LIMIT"] = os.environ.get("MAP_TILE_USER_LIMIT", "").strip()
+    app.config["MAP_USER_LIMIT_TIMEOUT_MIN"] = os.environ.get("MAP_USER_LIMIT_TIMEOUT_MIN", "").strip()
     CORS(app) # enables Cross-Origin Resource Sharing on the app so browsers from other origins can call the API
 
     # Root endpoint - decorates the following function, telling Flask to invoke it for GET requests to the root path

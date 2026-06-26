@@ -25,7 +25,7 @@ POST /races/<race_id>/riders/<entry_id>/remove       -> Delete an existing RaceR
 from datetime import datetime, timezone
 from typing import Optional
 
-from flask import Blueprint, request, render_template, redirect, url_for, Response, jsonify
+from flask import Blueprint, current_app, request, render_template, redirect, url_for, Response, jsonify
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -48,6 +48,28 @@ bp_races = Blueprint("races", __name__, url_prefix="/races")
 
 # Helper: read allowed categories from config.yaml
 ALLOWED_CATEGORIES = app_config.get("categories", ["Professional", "Open", "Junior"])
+
+
+def _post_race_public_map_config() -> dict:
+    """
+    Build the browser-safe map configuration for the post-race page.
+
+    Only the Esri API key is intentionally exposed because it authenticates a
+    public browser basemap request. Billing limits and future administrative
+    controls remain server-side; a later usage guard will set satellite_allowed
+    to False when it must force the OpenStreetMap fallback.
+    """
+    provider = current_app.config.get("MAP_PROVIDER", "")
+    style = current_app.config.get("MAP_STYLE", "")
+    api_key = current_app.config.get("ARCGIS_API_KEY", "")
+    is_esri_satellite_configured = provider == "esri" and style == "arcgis/imagery" and bool(api_key)
+
+    return {
+        "provider": provider,
+        "style": style,
+        "apiKey": api_key if is_esri_satellite_configured else "",
+        "satelliteAllowed": is_esri_satellite_configured,
+    }
 
 
 def _find_or_create_route_for_category(session, race_id: int, category_name: str) -> tuple[Route, Category]:
@@ -268,6 +290,7 @@ def post_race(race_id: int):
             geojson=geojson,
             riders=riders_for_category,
             has_multiple_rfid_flag=any(r.get("multiple_rfid_flag") for r in riders_for_category),
+            public_map_config=_post_race_public_map_config(),
         )
     finally:
         session.close()
