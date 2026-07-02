@@ -30,6 +30,14 @@ services:
       MAP_TILE_HARD_STOP_THRESHOLD: ${MAP_TILE_HARD_STOP_THRESHOLD}
       MAP_TILE_USER_LIMIT: ${MAP_TILE_USER_LIMIT}
       MAP_USER_LIMIT_TIMEOUT_MIN: ${MAP_USER_LIMIT_TIMEOUT_MIN}
+      # Password-reset email configuration is read from the selected environment
+      # file. Resend is only used for reset links in this auth phase, not for
+      # signup email verification.
+      RESEND_API_KEY: ${RESEND_API_KEY}
+      MAIL_FROM: ${MAIL_FROM}
+      APP_PUBLIC_BASE_URL: ${APP_PUBLIC_BASE_URL}
+      AUTH_TOKEN_PEPPER: ${AUTH_TOKEN_PEPPER}
+      AUTH_PASSWORD_MIN_LENGTH: ${AUTH_PASSWORD_MIN_LENGTH}
     # Make Compose wait for PostgreSQL to report healthy before the app
     # container starts. This does not fix the current Gunicorn CMD issue, but it
     # does ensure the runtime dependency order is correct for the database move.

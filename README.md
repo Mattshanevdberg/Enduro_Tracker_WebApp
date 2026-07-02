@@ -131,13 +131,14 @@ docker compose -p enduro-prod --env-file .env.prod up -d
 - Public access values: `TUNNEL_TOKEN`, `APP_HOSTNAME`, and `APP_HOST_PORT`.
 - Flask secret values: `FLASK_SECRET_KEY` must be passed into the `server` container explicitly through the Compose `environment` section so Flask can read it through `os.environ`.
 - Map values: `MAP_PROVIDER`, `MAP_STYLE`, `ARCGIS_API_KEY`, and the map-limit variables must also be passed explicitly into the `server` container. Flask uses the provider/style/key only to render the public post-race map configuration; later usage controls will read the limits server-side. The referrer-restricted Esri browser API key is intentionally exposed only on the post-race page and must never be committed.
+- Auth email values: `RESEND_API_KEY`, `MAIL_FROM`, `APP_PUBLIC_BASE_URL`, `AUTH_TOKEN_PEPPER`, and `AUTH_PASSWORD_MIN_LENGTH` are passed into the `server` container for the authentication workstream. Resend is used only for forgot-password reset links in the current plan; signup email verification is intentionally not enabled.
 - Notes: changing PostgreSQL bootstrap variables on an already-initialised volume does not reconfigure an existing database cluster. Clean separation requires a fresh volume name per environment or an explicit manual database/user migration.
 
 ## src/main.py
 
 ### create_app
 - Purpose: Flask application factory that creates the app instance, loads the Flask secret key, registers CORS, and attaches all API and web blueprints.
-- Reads: `FLASK_SECRET_KEY`, the `MAP_*` map configuration values, and `ARCGIS_API_KEY` from the container runtime environment; `config.yaml` for host and port globals.
+- Reads: `FLASK_SECRET_KEY`, the `MAP_*` map configuration values, `ARCGIS_API_KEY`, and the auth email configuration values from the container runtime environment; `config.yaml` for host and port globals.
 - Writes: `app.config["SECRET_KEY"]` plus the map provider, style, browser API key, and map-limit configuration values used by the post-race map workflow.
 - Registers: ingest API routes, home, riders, devices, races, and RFID record viewer blueprints.
 - Called from: module import path `src.main:app` for Gunicorn, and the direct-run block at the bottom of the file.
@@ -818,6 +819,28 @@ src/static/js/
 - Returns: process exit code (`0` success, `1` failure).
 - Called from:
   - Direct script execution: `python tests/download_latest_track_hist_gpx.py <race_rider_id>`.
+
+## tests/test_resend_email.py
+
+### _required_env
+- Purpose: Read a required environment variable for the manual Resend smoke test and fail with a safe error message when it is missing.
+- Reads: one named environment variable.
+- Writes: a missing-variable message to stderr when validation fails.
+- Returns: stripped environment value.
+- Called from:
+  - `tests/test_resend_email.py:main`.
+
+### main
+- Purpose: Send one manual test email through Resend using the same environment-variable pattern as the Flask runtime.
+- Reads: `RESEND_API_KEY`, `TEST_EMAIL_TO`, and optional `MAIL_FROM`.
+- Writes: one test email to the requested destination and prints the Resend response without printing the API key.
+- Returns: process exit code (`0` success, `1` failure through `_required_env`).
+- Called from:
+  - Docker Compose manual smoke test:
+```bash
+docker compose -p enduro-dev --env-file .env.dev run --rm -e TEST_EMAIL_TO=you@example.com server python tests/test_resend_email.py
+```
+- Notes: this script is a manual smoke test for the forgot-password email setup. It is not part of the automated test suite and should not be used to send signup verification emails.
 
 ## tests/migrate_sqlite_to_postgres.py
 
