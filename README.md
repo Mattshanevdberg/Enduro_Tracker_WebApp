@@ -17,7 +17,7 @@ ingest to display.
 ### server
 - Purpose: Existing application service built from the repository Dockerfile.
 - Reads/Writes: receives `DATABASE_URL` and `FLASK_SECRET_KEY` from Compose so the runtime DB connection and Flask secret handling become environment-driven.
-- Depends on: `db` with health condition so PostgreSQL is started before the app container.
+- Depends on: `db` with health condition so PostgreSQL is started before the app container, and `redis` with health condition so authentication rate-limit storage is available before the web app starts.
 - Exposes: host port `${APP_HOST_PORT}` to the Gunicorn web process listening on container port `8000`.
 - Notes: the SQLAlchemy engine already prefers `DATABASE_URL`, so Compose now controls whether the app runs against PostgreSQL and the SQLite runtime path is no longer used. The Dockerfile starts Gunicorn with `src.main:app`, which matches the Flask WSGI entry point used on the remote server. `FLASK_SECRET_KEY` must be passed explicitly into the container because Compose variable substitution alone does not make an env value available to `os.environ` inside the running Flask process.
 
@@ -55,6 +55,13 @@ ingest to display.
 - Exposes: container port `5432` to other Compose services.
 - Healthcheck: uses `pg_isready` with the same env-driven database name and user so Compose can tell when the database is actually ready to accept connections.
 - Notes: this follows the system design direction of SQLite for local development/prototyping and PostgreSQL for the remote/server-style deployment. With `postgres:18`, the working mount target is `/var/lib/postgresql`. Using separate `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_VOLUME_NAME` values for dev and prod keeps the two environments fully isolated, which matches the environment separation expected by `Web Application System Design V4 - 20260224.pdf`.
+
+### redis
+- Purpose: In-memory Redis service used by Flask-Limiter to store short-lived authentication rate-limit counters.
+- Image: `redis:8-alpine`.
+- Exposes: container port `6379` to other Compose services only.
+- Healthcheck: uses `redis-cli ping` so Compose can tell when Redis is ready before starting the web app.
+- Notes: no named persistence volume is configured because these counters are temporary. Losing Redis state restarts the rate-limit windows, but does not lose application data.
 
 ### cloudflared
 - Purpose: run a containerised, remotely-managed Cloudflare Tunnel connector inside the same Compose network as the app stack.
@@ -131,18 +138,44 @@ docker compose -p enduro-prod --env-file .env.prod up -d
 - Public access values: `TUNNEL_TOKEN`, `APP_HOSTNAME`, and `APP_HOST_PORT`.
 - Flask secret values: `FLASK_SECRET_KEY` must be passed into the `server` container explicitly through the Compose `environment` section so Flask can read it through `os.environ`.
 - Map values: `MAP_PROVIDER`, `MAP_STYLE`, `ARCGIS_API_KEY`, and the map-limit variables must also be passed explicitly into the `server` container. Flask uses the provider/style/key only to render the public post-race map configuration; later usage controls will read the limits server-side. The referrer-restricted Esri browser API key is intentionally exposed only on the post-race page and must never be committed.
-- Auth email values: `RESEND_API_KEY`, `MAIL_FROM`, `APP_PUBLIC_BASE_URL`, `AUTH_TOKEN_PEPPER`, and `AUTH_PASSWORD_MIN_LENGTH` are passed into the `server` container for the authentication workstream. Resend is used only for forgot-password reset links in the current plan; signup email verification is intentionally not enabled.
+- Auth email and security values: `RESEND_API_KEY`, `MAIL_FROM`, `APP_PUBLIC_BASE_URL`, `AUTH_TOKEN_PEPPER`, `AUTH_PASSWORD_MIN_LENGTH`, and `AUTH_RATE_LIMIT_STORAGE_URL` are passed into the `server` container for the authentication workstream. Resend is used only for forgot-password reset links in the current plan; signup email verification is intentionally not enabled.
 - Notes: changing PostgreSQL bootstrap variables on an already-initialised volume does not reconfigure an existing database cluster. Clean separation requires a fresh volume name per environment or an explicit manual database/user migration.
+
+## Python Requirements
+
+### Authentication and security packages
+- Purpose: Add the package baseline for the viewer/rider/admin authentication workstream described by `Web Application System Design V4 - 20260224.pdf`.
+- Packages: `Flask-Login` for browser login sessions, `Flask-WTF` for form handling and CSRF protection, `Flask-Limiter` for rate limiting sensitive auth routes, `redis` for shared rate-limit storage, `email-validator` for signup/reset email validation, and `resend` for forgot-password email delivery.
+- Notes: Resend is only used for password-reset emails in the current plan. Signup email verification is intentionally not enabled.
 
 ## src/main.py
 
 ### create_app
 - Purpose: Flask application factory that creates the app instance, loads the Flask secret key, registers CORS, and attaches all API and web blueprints.
-- Reads: `FLASK_SECRET_KEY`, the `MAP_*` map configuration values, `ARCGIS_API_KEY`, and the auth email configuration values from the container runtime environment; `config.yaml` for host and port globals.
-- Writes: `app.config["SECRET_KEY"]` plus the map provider, style, browser API key, and map-limit configuration values used by the post-race map workflow.
+- Reads: `FLASK_SECRET_KEY`, the `MAP_*` map configuration values, `ARCGIS_API_KEY`, and the auth email configuration values from the container runtime environment; `config.yaml` for host and port globals; `src.auth.login.login_manager` for browser session setup.
+- Writes: `app.config["SECRET_KEY"]` plus the map provider, style, browser API key, and map-limit configuration values used by the post-race map workflow; initialises Flask-Login on the app.
 - Registers: ingest API routes, home, riders, devices, races, and RFID record viewer blueprints.
 - Called from: module import path `src.main:app` for Gunicorn, and the direct-run block at the bottom of the file.
 - Notes: the app now expects `FLASK_SECRET_KEY` to exist in the container environment. If Compose does not pass that value into the `server` service, Gunicorn fails during import with `KeyError: 'FLASK_SECRET_KEY'`.
+
+## src/auth/login.py
+
+### login_manager
+- Purpose: Shared Flask-Login manager that configures browser login session handling for the application.
+- Reads: none at definition time.
+- Writes: Flask-Login settings including the future login endpoint `auth.login`, the login-required message, and the login message category.
+- Called from:
+  - `src.main:create_app`, where `login_manager.init_app(app)` attaches the manager to the Flask app.
+- Notes: the actual `/login` route is added in a later auth step. No existing routes are protected by this change yet.
+
+### load_user
+- Purpose: Load the current browser user from the Flask session id.
+- Reads: future `User` model from `src.db.models` when it exists, and `SessionLocal` for a short-lived database lookup.
+- Writes: None.
+- Returns: active User row for a valid session id, otherwise `None`.
+- Called from:
+  - Flask-Login during request handling when a browser session contains a user id.
+- Notes: this loader deliberately returns `None` until the User model is introduced in Step 3, so the application can start safely during the staged implementation.
 
 ### Direct-run debug block
 - Purpose: support direct local execution through `python src/main.py`.

@@ -38,11 +38,14 @@ services:
       APP_PUBLIC_BASE_URL: ${APP_PUBLIC_BASE_URL}
       AUTH_TOKEN_PEPPER: ${AUTH_TOKEN_PEPPER}
       AUTH_PASSWORD_MIN_LENGTH: ${AUTH_PASSWORD_MIN_LENGTH}
+      AUTH_RATE_LIMIT_STORAGE_URL: ${AUTH_RATE_LIMIT_STORAGE_URL}
     # Make Compose wait for PostgreSQL to report healthy before the app
     # container starts. This does not fix the current Gunicorn CMD issue, but it
     # does ensure the runtime dependency order is correct for the database move.
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     # The Dockerfile now starts Gunicorn with src.main:app, so the web service
     # can run in the same WSGI shape that will be used on the remote server.
@@ -113,6 +116,24 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+
+  redis:
+    image: redis:8-alpine
+    restart: always
+    # Redis stores short-lived authentication rate-limit counters for
+    # Flask-Limiter. It does not store application source data, so no named
+    # persistence volume is needed for this MVP auth phase.
+    expose:
+      - 6379
+    # Report healthy only when Redis accepts a PING command. The Flask app waits
+    # for this before starting so login/signup/reset limits have a live backend.
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
   # The clouflare tunnel service 
   cloudflared:
     image: cloudflare/cloudflared:latest

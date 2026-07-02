@@ -14,6 +14,7 @@ if VSCODE_TEST:
 
 from flask import Flask, jsonify
 from flask_cors import CORS
+from src.auth.login import login_manager
 
 # blueprint imports
 from src.api.ingest import bp as ingest_bp
@@ -54,6 +55,13 @@ def create_app():
     app.config["MAP_TILE_HARD_STOP_THRESHOLD"] = os.environ.get("MAP_TILE_HARD_STOP_THRESHOLD", "").strip()
     app.config["MAP_TILE_USER_LIMIT"] = os.environ.get("MAP_TILE_USER_LIMIT", "").strip()
     app.config["MAP_USER_LIMIT_TIMEOUT_MIN"] = os.environ.get("MAP_USER_LIMIT_TIMEOUT_MIN", "").strip()
+
+    # Configure browser login-session support before registering blueprints.
+    # The User model and /login route are added in later auth steps; initialising
+    # Flask-Login here creates the shared session plumbing without changing any
+    # current page permissions yet.
+    login_manager.init_app(app)
+
     CORS(app) # enables Cross-Origin Resource Sharing on the app so browsers from other origins can call the API
 
     # Root endpoint - decorates the following function, telling Flask to invoke it for GET requests to the root path
