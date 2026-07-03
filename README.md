@@ -138,7 +138,7 @@ docker compose -p enduro-prod --env-file .env.prod up -d
 - Public access values: `TUNNEL_TOKEN`, `APP_HOSTNAME`, and `APP_HOST_PORT`.
 - Flask secret values: `FLASK_SECRET_KEY` must be passed into the `server` container explicitly through the Compose `environment` section so Flask can read it through `os.environ`.
 - Map values: `MAP_PROVIDER`, `MAP_STYLE`, `ARCGIS_API_KEY`, and the map-limit variables must also be passed explicitly into the `server` container. Flask uses the provider/style/key only to render the public post-race map configuration; later usage controls will read the limits server-side. The referrer-restricted Esri browser API key is intentionally exposed only on the post-race page and must never be committed.
-- Auth email and security values: `RESEND_API_KEY`, `MAIL_FROM`, `APP_PUBLIC_BASE_URL`, `AUTH_TOKEN_PEPPER`, `AUTH_PASSWORD_MIN_LENGTH`, and `AUTH_RATE_LIMIT_STORAGE_URL` are passed into the `server` container for the authentication workstream. Resend is used only for forgot-password reset links in the current plan; signup email verification is intentionally not enabled.
+- Auth email and security values: `RESEND_API_KEY`, `MAIL_FROM`, `APP_PUBLIC_BASE_URL`, `AUTH_TOKEN_PEPPER`, `AUTH_PASSWORD_MIN_LENGTH`, `AUTH_RATE_LIMIT_STORAGE_URL`, `SESSION_COOKIE_SECURE`, and `SESSION_COOKIE_SAMESITE` are passed into the `server` container for the authentication workstream. Resend is used only for forgot-password reset links in the current plan; signup email verification is intentionally not enabled.
 - Notes: changing PostgreSQL bootstrap variables on an already-initialised volume does not reconfigure an existing database cluster. Clean separation requires a fresh volume name per environment or an explicit manual database/user migration.
 
 ## Python Requirements
@@ -152,11 +152,11 @@ docker compose -p enduro-prod --env-file .env.prod up -d
 
 ### create_app
 - Purpose: Flask application factory that creates the app instance, loads the Flask secret key, registers CORS, and attaches all API and web blueprints.
-- Reads: `FLASK_SECRET_KEY`, the `MAP_*` map configuration values, `ARCGIS_API_KEY`, and the auth email configuration values from the container runtime environment; `config.yaml` for host and port globals; `src.auth.login.login_manager` for browser session setup.
-- Writes: `app.config["SECRET_KEY"]` plus the map provider, style, browser API key, and map-limit configuration values used by the post-race map workflow; initialises Flask-Login on the app.
+- Reads: `FLASK_SECRET_KEY`, the `MAP_*` map configuration values, `ARCGIS_API_KEY`, and the auth email/security configuration values from the container runtime environment; `config.yaml` for host and port globals; `src.auth.login.login_manager` for browser session setup; `src.auth.rate_limits` for Redis-backed rate limiting; `src.auth.csrf` helpers for CSRF setup.
+- Writes: `app.config["SECRET_KEY"]` plus secure session-cookie settings, the map provider, style, browser API key, map-limit configuration values, and `AUTH_RATE_LIMIT_STORAGE_URL`; initialises Flask-Login, Flask-Limiter, and Flask-WTF CSRF protection on the app.
 - Registers: ingest API routes, home, riders, devices, races, and RFID record viewer blueprints.
 - Called from: module import path `src.main:app` for Gunicorn, and the direct-run block at the bottom of the file.
-- Notes: the app now expects `FLASK_SECRET_KEY` to exist in the container environment. If Compose does not pass that value into the `server` service, Gunicorn fails during import with `KeyError: 'FLASK_SECRET_KEY'`.
+- Notes: the app now expects `FLASK_SECRET_KEY` to exist in the container environment. If Compose does not pass that value into the `server` service, Gunicorn fails during import with `KeyError: 'FLASK_SECRET_KEY'`. Existing unconverted management blueprints and tracker ingest are temporarily CSRF-exempt so the current app keeps working until their forms/JavaScript requests receive CSRF tokens.
 
 ## src/auth/login.py
 
@@ -177,12 +177,68 @@ docker compose -p enduro-prod --env-file .env.prod up -d
   - Flask-Login during request handling when a browser session contains a user id.
 - Notes: this loader deliberately returns `None` until the User model is introduced in Step 3, so the application can start safely during the staged implementation.
 
+## src/auth/csrf.py
+
+### csrf
+- Purpose: Shared Flask-WTF `CSRFProtect` instance for protecting browser forms and JSON POST requests from Cross-Site Request Forgery.
+- Reads: Flask app configuration after `init_csrf(app)` is called.
+- Writes: CSRF request hooks and template helpers onto the Flask application.
+- Called from:
+  - `src.auth.csrf:init_csrf`.
+
+### init_csrf
+- Purpose: Attach Flask-WTF CSRF protection to the Flask application.
+- Reads: Flask application instance.
+- Writes: CSRF middleware/hooks onto the Flask app.
+- Returns: None.
+- Called from:
+  - `src.main:create_app`.
+
+### exempt_blueprints
+- Purpose: Temporarily exempt existing unconverted blueprints from CSRF enforcement during the staged auth migration.
+- Reads: Flask Blueprint objects passed by `src.main:create_app`.
+- Writes: CSRF exemption registrations for those blueprints.
+- Returns: None.
+- Called from:
+  - `src.main:create_app`.
+- Notes: new authentication routes should not be added to this exemption list. Current exemptions exist only because the existing race/rider/device forms and tracker ingest routes do not yet send CSRF tokens.
+
+## src/auth/rate_limits.py
+
+### limiter
+- Purpose: Shared Flask-Limiter instance used to decorate authentication and other abuse-sensitive routes.
+- Reads: client identity through Flask-Limiter's `get_remote_address` key function.
+- Writes: rate-limit headers on responses when route limits are active.
+- Called from:
+  - Future auth routes via decorators such as `@limiter.limit(...)`.
+- Notes: no default route limit is applied in the setup step, so existing pages are not throttled until specific limits are added.
+
+### init_limiter
+- Purpose: Attach Flask-Limiter to the Flask application using Redis-backed counter storage.
+- Reads: `AUTH_RATE_LIMIT_STORAGE_URL` from Flask app config.
+- Writes: Flask-Limiter config keys `RATELIMIT_STORAGE_URI` and `RATELIMIT_HEADERS_ENABLED`, then initialises the Limiter extension.
+- Returns: None.
+- Raises: `RuntimeError` when `AUTH_RATE_LIMIT_STORAGE_URL` is missing so the app does not silently fall back to per-process Python memory counters.
+- Called from:
+  - `src.main:create_app`.
+- Notes: the expected storage URL is `redis://redis:6379/0` in Compose. The same Redis service can later support temporary map/tile usage counters.
+
 ### Direct-run debug block
 - Purpose: support direct local execution through `python src/main.py`.
 - Reads: `API_HOST` and `API_PORT` from `config.yaml`.
 - Writes: none.
 - Called from: only when `src/main.py` is executed directly.
 - Notes: the containerised runtime uses Gunicorn from the Dockerfile rather than this `app.run(...)` path, so the production deployment does not depend on Flask's built-in debug server.
+
+## src/utils/env.py
+
+### env_bool
+- Purpose: Parse environment variable strings into booleans for Flask and worker configuration values.
+- Reads: named environment variable.
+- Writes: None.
+- Returns: `True`, `False`, or the provided default when the value is missing/unrecognised.
+- Called from:
+  - `src.main:create_app` for `SESSION_COOKIE_SECURE`.
 
 ## Alembic Migration Workflow
 

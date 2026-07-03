@@ -39,6 +39,8 @@ services:
       AUTH_TOKEN_PEPPER: ${AUTH_TOKEN_PEPPER}
       AUTH_PASSWORD_MIN_LENGTH: ${AUTH_PASSWORD_MIN_LENGTH}
       AUTH_RATE_LIMIT_STORAGE_URL: ${AUTH_RATE_LIMIT_STORAGE_URL}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE}
+      SESSION_COOKIE_SAMESITE: ${SESSION_COOKIE_SAMESITE}
     # Make Compose wait for PostgreSQL to report healthy before the app
     # container starts. This does not fix the current Gunicorn CMD issue, but it
     # does ensure the runtime dependency order is correct for the database move.

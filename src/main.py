@@ -5,6 +5,7 @@ Flask app entrypoint. Registers the ingest blueprint.
 #### for running in vscode (comment out when on Raspberry Pi)
 import sys
 import os
+from datetime import timedelta
 
 VSCODE_TEST = True  # set to False when running on Raspberry Pi
 
@@ -14,7 +15,10 @@ if VSCODE_TEST:
 
 from flask import Flask, jsonify
 from flask_cors import CORS
+from src.auth.csrf import exempt_blueprints, init_csrf
 from src.auth.login import login_manager
+from src.auth.rate_limits import init_limiter
+from src.utils.env import env_bool
 
 # blueprint imports
 from src.api.ingest import bp as ingest_bp
@@ -44,6 +48,15 @@ def create_app():
         template_folder="../templates" # point Flask to your templates folder (repo root/templates)
     )
     app.config["SECRET_KEY"] = os.environ["FLASK_SECRET_KEY"]
+
+    # Harden browser session cookies before any login routes are introduced.
+    # Secure is environment-driven so dev/prod can require HTTPS while a future
+    # plain-localhost workflow can opt out deliberately if needed.
+    app.config["SESSION_COOKIE_HTTPONLY"] = True
+    app.config["SESSION_COOKIE_SAMESITE"] = os.environ.get("SESSION_COOKIE_SAMESITE", "Lax").strip() or "Lax"
+    app.config["SESSION_COOKIE_SECURE"] = env_bool("SESSION_COOKIE_SECURE", default=True)
+    app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=8)
+
     # Keep map-provider configuration in Flask rather than in committed client
     # code. The ArcGIS API key is intentionally a browser-facing API key, so the
     # post-race route will expose it only when satellite imagery is configured.
@@ -55,12 +68,30 @@ def create_app():
     app.config["MAP_TILE_HARD_STOP_THRESHOLD"] = os.environ.get("MAP_TILE_HARD_STOP_THRESHOLD", "").strip()
     app.config["MAP_TILE_USER_LIMIT"] = os.environ.get("MAP_TILE_USER_LIMIT", "").strip()
     app.config["MAP_USER_LIMIT_TIMEOUT_MIN"] = os.environ.get("MAP_USER_LIMIT_TIMEOUT_MIN", "").strip()
+    app.config["AUTH_RATE_LIMIT_STORAGE_URL"] = os.environ.get("AUTH_RATE_LIMIT_STORAGE_URL", "").strip()
 
     # Configure browser login-session support before registering blueprints.
     # The User model and /login route are added in later auth steps; initialising
     # Flask-Login here creates the shared session plumbing without changing any
     # current page permissions yet.
     login_manager.init_app(app)
+
+    # Configure Redis-backed rate-limit storage. No route-specific auth limits
+    # are applied yet; later /login, /signup, and password-reset routes will use
+    # the shared limiter decorators from src.auth.rate_limits.
+    init_limiter(app)
+
+    # Enable CSRF infrastructure now so new browser forms can be protected as
+    # they are introduced. Existing management forms and tracker APIs do not
+    # include CSRF tokens yet, so those blueprints are temporarily exempted
+    # below and will be removed from the exemption list as templates are migrated.
+    init_csrf(app)
+    exempt_blueprints(
+        ingest_bp,
+        bp_riders,
+        bp_devices,
+        bp_races,
+    )
 
     CORS(app) # enables Cross-Origin Resource Sharing on the app so browsers from other origins can call the API
 
