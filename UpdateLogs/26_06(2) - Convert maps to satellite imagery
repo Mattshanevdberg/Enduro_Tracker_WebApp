@@ -6,5 +6,6 @@ Before we move on to step 8. We need to create a user and admin privileges and u
 
 We are going to use three categories of users now. The lowest category are viewers and they can only view the races. Viewers do not need to log in. The second category are riders. Riders must log in. Riders will have more priveledges, such as creating and updating rider profiles. The final category is admin users. These users have no restrictions. Only admin users can create other admin users. So we need to update the landing page to have an option to just be a viewer, this will allow you to go to enter the website without having to login (but you will have very few priviledges) 
 
-
+New category structure: 
+Remove category from riders table. Category will now be kept only in race riders. When creating a race, you'll select a category and then it'll give you an option to select a route that is already been uploaded for (linked to) the specific race. Or you will be able to upload a new route for the specific category. This category will then be linked to the root, which will be linked to a specific race. When a rider enters the race they will select a category ID and therefore be linking themselves to a specific race through category root and then races. 
 

@@ -7,6 +7,8 @@ Tables:
 - points: parsed storage of individual fixes (linked to devices).
 - devices: registry of hardware trackers.
 - riders / race_riders: entrants and their race-specific configuration.
+- users / auth_tokens / auth_audit_events: browser login accounts,
+  password-reset tokens, and security event history.
 - races / route / categories: event structure and course metadata.
 - leaderboard_cache / track_cache: live data surfaces.
 - leaderboard_hist / track_hist: archived snapshots.
@@ -17,6 +19,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Column,
     DateTime,
     Float,
@@ -29,6 +32,7 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker, foreign
+from flask_login import UserMixin
 
 # regular imports 
 import os
@@ -251,6 +255,141 @@ class Rider(Base):
     category = Column(String(64), nullable=True)
 
     race_entries = relationship("RaceRider", back_populates="rider")
+    user_account = relationship("User", back_populates="rider", uselist=False)
+
+
+class User(UserMixin, Base):
+    """
+    Browser login account for rider and admin users.
+
+    Columns:
+      id                  : PK
+      first_name          : user's given name
+      last_name           : user's surname
+      username            : display/login username exactly as last saved
+      username_normalized : lower/trimmed username for case-insensitive uniqueness
+      email               : email address exactly as last saved
+      email_normalized    : lower/trimmed email for case-insensitive uniqueness
+      password_hash       : safely hashed password, never the plaintext password
+      role                : permission level for logged-in users (`rider` or `admin`)
+      rider_id            : optional one-to-one link to the athlete profile row
+      is_active           : false disables login without deleting history
+      auth_version        : session invalidation counter incremented on reset/deactivation
+      created_at          : account creation time (UTC)
+      updated_at          : latest account update time (UTC)
+      last_login_at       : latest successful login time (UTC) [nullable]
+
+    Relationships:
+      - Optional one-to-one link to Rider through rider_id.
+      - One User can have many AuthToken rows for one-time auth flows.
+      - One User can be actor/target for many AuthAuditEvent rows.
+    """
+
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True)
+    first_name = Column(String(128), nullable=False)
+    last_name = Column(String(128), nullable=False)
+    username = Column(String(64), nullable=False)
+    username_normalized = Column(String(64), nullable=False)
+    email = Column(String(256), nullable=False)
+    email_normalized = Column(String(256), nullable=False)
+    password_hash = Column(String(255), nullable=False)
+    role = Column(String(32), nullable=False, default="rider")
+    rider_id = Column(Integer, ForeignKey("riders.id"), nullable=True, index=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    auth_version = Column(Integer, nullable=False, default=1)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+    last_login_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        CheckConstraint("role IN ('rider', 'admin')", name="ck_users_role"),
+        UniqueConstraint("username_normalized", name="ux_users_username_normalized"),
+        UniqueConstraint("email_normalized", name="ux_users_email_normalized"),
+        UniqueConstraint("rider_id", name="ux_users_rider_id"),
+    )
+
+    rider = relationship("Rider", back_populates="user_account")
+    auth_tokens = relationship("AuthToken", back_populates="user")
+    audit_events_as_actor = relationship(
+        "AuthAuditEvent",
+        back_populates="actor_user",
+        foreign_keys=lambda: [AuthAuditEvent.actor_user_id],
+    )
+    audit_events_as_target = relationship(
+        "AuthAuditEvent",
+        back_populates="target_user",
+        foreign_keys=lambda: [AuthAuditEvent.target_user_id],
+    )
+
+
+class AuthToken(Base):
+    """
+    One-time hashed tokens for authentication flows such as password reset.
+
+    Columns:
+      id         : PK
+      user_id    : account this token belongs to
+      purpose    : token purpose, currently `password_reset`
+      token_hash : hashed token value, never the raw email link token
+      expires_at : timestamp after which the token is invalid
+      used_at    : timestamp when the token was consumed [nullable]
+      created_at : token creation time (UTC)
+
+    Relationship:
+      - Belongs to one User.
+    """
+
+    __tablename__ = "auth_tokens"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    purpose = Column(String(32), nullable=False)
+    token_hash = Column(String(255), nullable=False, index=True)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    used_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    user = relationship("User", back_populates="auth_tokens")
+
+
+class AuthAuditEvent(Base):
+    """
+    Security-relevant account event history.
+
+    Columns:
+      id             : PK
+      actor_user_id  : user who performed the action [nullable for public/system events]
+      target_user_id : user affected by the action [nullable when not account-specific]
+      action         : short event name, e.g. signup, password_reset, promote_admin
+      metadata_json  : optional safe JSON details; never store passwords or raw tokens
+      created_at     : event creation time (UTC)
+
+    Relationships:
+      - actor_user points to the User who performed the action.
+      - target_user points to the User affected by the action.
+    """
+
+    __tablename__ = "auth_audit_events"
+
+    id = Column(Integer, primary_key=True)
+    actor_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    target_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    action = Column(String(64), nullable=False, index=True)
+    metadata_json = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    actor_user = relationship(
+        "User",
+        back_populates="audit_events_as_actor",
+        foreign_keys=[actor_user_id],
+    )
+    target_user = relationship(
+        "User",
+        back_populates="audit_events_as_target",
+        foreign_keys=[target_user_id],
+    )
 
 
 class Race(Base):
