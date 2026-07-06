@@ -151,12 +151,18 @@ docker compose -p enduro-prod --env-file .env.prod up -d
 ## src/main.py
 
 ### create_app
-- Purpose: Flask application factory that creates the app instance, loads the Flask secret key, registers CORS, and attaches all API and web blueprints.
+- Purpose: Flask application factory that creates the app instance, loads the Flask secret key, configures browser security helpers, and attaches all API and web blueprints.
 - Reads: `FLASK_SECRET_KEY`, the `MAP_*` map configuration values, `ARCGIS_API_KEY`, and the auth email/security configuration values from the container runtime environment; `config.yaml` for host and port globals; `src.auth.login.login_manager` for browser session setup; `src.auth.rate_limits` for Redis-backed rate limiting; `src.auth.csrf` helpers for CSRF setup.
 - Writes: `app.config["SECRET_KEY"]` plus secure session-cookie settings, the map provider, style, browser API key, map-limit configuration values, and `AUTH_RATE_LIMIT_STORAGE_URL`; initialises Flask-Login, Flask-Limiter, and Flask-WTF CSRF protection on the app.
 - Registers: ingest API routes, home, riders, devices, races, and RFID record viewer blueprints.
 - Called from: module import path `src.main:app` for Gunicorn, and the direct-run block at the bottom of the file.
 - Notes: the app now expects `FLASK_SECRET_KEY` to exist in the container environment. If Compose does not pass that value into the `server` service, Gunicorn fails during import with `KeyError: 'FLASK_SECRET_KEY'`. Existing unconverted management blueprints and tracker ingest are temporarily CSRF-exempt so the current app keeps working until their forms/JavaScript requests receive CSRF tokens.
+
+### CORS policy
+- Purpose: Keep Cross-Origin Resource Sharing disabled by default for the server-rendered web app.
+- Behavior: the application no longer calls global `CORS(app)` and no longer depends on `flask-cors`.
+- Why: current browser requests use same-origin relative URLs, while tracker/device uploads are direct HTTP client calls and do not depend on browser CORS. Removing broad CORS avoids unnecessary cross-origin browser access once cookie-based login is introduced.
+- When to reintroduce: add a narrow CORS helper only if a separate browser frontend on another origin must call selected API endpoints, for example `https://dashboard.kooksnylive.co.za` calling `https://api.kooksnylive.co.za/api/v1/races`. In that case, restrict allowed origins and keep credentials disabled unless there is a deliberate cookie-authenticated cross-origin design.
 
 ## src/auth/login.py
 

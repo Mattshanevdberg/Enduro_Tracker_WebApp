@@ -14,7 +14,6 @@ if VSCODE_TEST:
 ####
 
 from flask import Flask, jsonify
-from flask_cors import CORS
 from src.auth.csrf import exempt_blueprints, init_csrf
 from src.auth.login import login_manager
 from src.auth.rate_limits import init_limiter
@@ -92,8 +91,6 @@ def create_app():
         bp_devices,
         bp_races,
     )
-
-    CORS(app) # enables Cross-Origin Resource Sharing on the app so browsers from other origins can call the API
 
     # Root endpoint - decorates the following function, telling Flask to invoke it for GET requests to the root path
     # @app.route("/")
