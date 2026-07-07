@@ -209,6 +209,92 @@ docker compose -p enduro-prod --env-file .env.prod up -d
   - `src.main:create_app`.
 - Notes: new authentication routes should not be added to this exemption list. Current exemptions exist only because the existing race/rider/device forms and tracker ingest routes do not yet send CSRF tokens.
 
+## src/auth/passwords.py
+
+### validate_password
+- Purpose: Validate password strength and optional confirmation matching for signup and reset-password forms.
+- Reads: raw submitted password and optional confirmation value.
+- Writes: None.
+- Returns: list of validation error strings; an empty list means the password passed.
+- Policy: minimum six characters and at least one number or special character; confirmation must match when supplied.
+- Notes: six characters is intentionally the current MVP policy but should be increased before public release.
+
+### hash_password
+- Purpose: Convert a raw password into a Werkzeug password hash before database storage.
+- Reads: raw submitted password.
+- Writes: None.
+- Returns: hash string suitable for `users.password_hash`.
+- Notes: plaintext passwords must never be stored in the database.
+
+### check_password
+- Purpose: Verify a submitted password against the stored password hash during login.
+- Reads: stored `users.password_hash` value and raw submitted password.
+- Writes: None.
+- Returns: True when the password matches; False otherwise.
+
+## src/auth/tokens.py
+
+### generate_raw_token
+- Purpose: Generate a random URL-safe token for password-reset links.
+- Reads: None.
+- Writes: None.
+- Returns: raw token string to email to the user.
+- Notes: raw tokens must never be stored directly in the database.
+
+### hash_token
+- Purpose: Convert a raw token into a peppered SHA-256 hash for database storage.
+- Reads: raw token and `AUTH_TOKEN_PEPPER` from the environment.
+- Writes: None.
+- Returns: hex digest stored in `auth_tokens.token_hash`.
+
+### create_auth_token
+- Purpose: Create a new one-time auth token row for a user and return the raw token for emailing.
+- Reads: active SQLAlchemy session, target user, token purpose, and expiry duration.
+- Writes: invalidates older unused tokens for the same user/purpose, then inserts a new `AuthToken` row containing only the token hash.
+- Returns: raw token string for the reset link.
+- Notes: currently used for `password_reset`, but the `purpose` field keeps the helper reusable.
+
+### find_valid_token
+- Purpose: Validate a submitted raw token from a reset link.
+- Reads: active SQLAlchemy session, submitted raw token, expected purpose, `auth_tokens`, and `AUTH_TOKEN_PEPPER`.
+- Writes: None.
+- Returns: matching `AuthToken` row when the token exists, has the expected purpose, has not been used, and has not expired; otherwise None.
+
+### mark_token_used
+- Purpose: Consume a token after successful use.
+- Reads: `AuthToken` row.
+- Writes: sets `used_at` to the current UTC time.
+- Returns: None.
+
+### invalidate_existing_tokens
+- Purpose: Cancel older unused tokens for the same user and purpose before issuing a new one.
+- Reads: active SQLAlchemy session, `user_id`, purpose, and `auth_tokens`.
+- Writes: sets `used_at` on matching unused tokens.
+- Returns: number of token rows invalidated.
+
+## src/auth/mail.py
+
+### build_password_reset_url
+- Purpose: Build the public password-reset URL from `APP_PUBLIC_BASE_URL` and the raw reset token.
+- Reads: `APP_PUBLIC_BASE_URL` and raw reset token.
+- Writes: None.
+- Returns: fully-qualified reset URL such as `https://dev.kooksnylive.co.za/reset-password/<token>`.
+- Notes: the URL is built from trusted environment configuration through `src.utils.env:required_env`, not the inbound request host.
+
+### send_email
+- Purpose: Send one transactional email through Resend.
+- Reads: `RESEND_API_KEY`, `MAIL_FROM`, recipient email address, subject, and HTML body.
+- Writes: one email through Resend.
+- Returns: Resend API response.
+- Notes: the API key is never printed.
+
+### send_password_reset_email
+- Purpose: Send a password-reset link to `user.email`.
+- Reads: User row email address and raw reset token.
+- Writes: one password-reset email through `send_email`.
+- Returns: Resend API response.
+- Notes: the current password is never emailed, and callers should not log reset links because they contain the raw token.
+
 ## src/auth/rate_limits.py
 
 ### limiter
@@ -245,6 +331,16 @@ docker compose -p enduro-prod --env-file .env.prod up -d
 - Returns: `True`, `False`, or the provided default when the value is missing/unrecognised.
 - Called from:
   - `src.main:create_app` for `SESSION_COOKIE_SECURE`.
+
+### required_env
+- Purpose: Read required environment variables and fail clearly when they are missing or blank.
+- Reads: named environment variable.
+- Writes: None.
+- Returns: stripped environment value.
+- Raises: `RuntimeError` when the value is missing or blank.
+- Called from:
+  - `src.auth.mail` for `APP_PUBLIC_BASE_URL`, `RESEND_API_KEY`, and `MAIL_FROM`.
+- Notes: shared environment helpers should live here so auth, map, worker, and future admin modules do not each create their own local parsing functions.
 
 ## Alembic Migration Workflow
 
@@ -764,6 +860,23 @@ src/static/js/
 
 ## src/utils/time.py
 
+### utc_now
+- Purpose: Return a timezone-aware UTC datetime for timestamps such as token creation, token expiry, and token consumption.
+- Reads: system clock.
+- Writes: None.
+- Returns: current UTC datetime.
+- Called from:
+  - `src/auth/tokens.py`
+
+### as_aware_utc
+- Purpose: Convert stored datetimes to timezone-aware UTC before comparing expiry values.
+- Reads: datetime value read from the database.
+- Writes: None.
+- Returns: timezone-aware UTC datetime.
+- Called from:
+  - `src/auth/tokens.py`
+- Notes: PostgreSQL preserves timezone-aware values in the target runtime, while lightweight SQLite checks can return naive datetimes. Naive values are treated as UTC.
+
 ### datetime_to_epoch
 - Purpose: Convert a datetime to UTC epoch seconds, honoring the configured local timezone for naive datetimes.
 - Reads: `configs/config.yaml` (`global.timezone`) when `tz_name` is not provided.
@@ -917,19 +1030,11 @@ src/static/js/
 
 ## tests/test_resend_email.py
 
-### _required_env
-- Purpose: Read a required environment variable for the manual Resend smoke test and fail with a safe error message when it is missing.
-- Reads: one named environment variable.
-- Writes: a missing-variable message to stderr when validation fails.
-- Returns: stripped environment value.
-- Called from:
-  - `tests/test_resend_email.py:main`.
-
 ### main
 - Purpose: Send one manual test email through Resend using the same environment-variable pattern as the Flask runtime.
 - Reads: `RESEND_API_KEY`, `TEST_EMAIL_TO`, and optional `MAIL_FROM`.
 - Writes: one test email to the requested destination and prints the Resend response without printing the API key.
-- Returns: process exit code (`0` success, `1` failure through `_required_env`).
+- Returns: process exit code (`0` success, `1` failure through `src.utils.env:required_env` validation).
 - Called from:
   - Docker Compose manual smoke test:
 ```bash

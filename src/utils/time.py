@@ -36,6 +36,39 @@ def _get_timezone(tz_name: str | None) -> timezone:
         return timezone.utc
 
 
+def utc_now() -> datetime:
+    """
+    Return the current UTC datetime.
+
+    Input Args:
+      None.
+
+    Output:
+      Timezone-aware UTC datetime.
+    """
+    return datetime.now(timezone.utc)
+
+
+def as_aware_utc(value: datetime) -> datetime:
+    """
+    Convert a datetime value to timezone-aware UTC.
+
+    Input Args:
+      value: datetime value to normalise.
+
+    Output:
+      Timezone-aware UTC datetime.
+
+    Notes:
+      PostgreSQL preserves timezone-aware values in the target runtime, while
+      lightweight SQLite checks can return naive datetimes. Naive values are
+      treated as UTC.
+    """
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 def datetime_to_epoch(dt: datetime, tz_name: str | None = None) -> int:
     """
     Convert a datetime to UTC epoch seconds.
