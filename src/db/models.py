@@ -283,6 +283,8 @@ class User(UserMixin, Base):
       - Optional one-to-one link to Rider through rider_id.
       - One User can have many AuthToken rows for one-time auth flows.
       - One User can be actor/target for many AuthAuditEvent rows.
+
+      - Unique constraints on the username_normalized and email_normalized
     """
 
     __tablename__ = "users"
@@ -356,7 +358,7 @@ class AuthToken(Base):
 
 class AuthAuditEvent(Base):
     """
-    Security-relevant account event history.
+    Security-relevant account event history. Essentially just a history of who has done what to whom.
 
     Columns:
       id             : PK
