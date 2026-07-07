@@ -178,10 +178,10 @@ docker compose -p enduro-prod --env-file .env.prod up -d
 - Purpose: Load the current browser user from the Flask session id.
 - Reads: future `User` model from `src.db.models` when it exists, and `SessionLocal` for a short-lived database lookup.
 - Writes: None.
-- Returns: active User row for a valid session id, otherwise `None`.
+- Returns: User row for a valid session id, otherwise `None`.
 - Called from:
   - Flask-Login during request handling when a browser session contains a user id.
-- Notes: this loader deliberately returns `None` until the User model is introduced in Step 3, so the application can start safely during the staged implementation.
+- Notes: this loader deliberately returns `None` until the User model is introduced in Step 3, so the application can start safely during the staged implementation. Active-state enforcement is handled by route decorators so a disabled account can be logged out and blocked consistently.
 
 ## src/auth/csrf.py
 
@@ -294,6 +294,50 @@ docker compose -p enduro-prod --env-file .env.prod up -d
 - Writes: one password-reset email through `send_email`.
 - Returns: Resend API response.
 - Notes: the current password is never emailed, and callers should not log reset links because they contain the raw token.
+
+## src/auth/decorators.py
+
+### user_has_role
+- Purpose: Check whether a user object is authenticated, active, and assigned to an allowed role.
+- Reads: user object attributes `is_authenticated`, `is_active`, and `role`.
+- Writes: None.
+- Returns: True when the user has one of the allowed roles; otherwise False.
+- Notes: this helper keeps role comparison logic in one place for rider/admin route decorators.
+
+### _active_user_failure_response
+- Purpose: Centralise anonymous and inactive-user handling for auth route decorators.
+- Reads: Flask-Login `current_user` and the Flask app login manager.
+- Writes: logs out inactive users before blocking access.
+- Returns: None for active authenticated users, or Flask-Login's unauthorized response for anonymous users.
+- Raises: 403 for inactive users.
+- Notes: this helper avoids Flask-Login's `@login_required` shortcut because inactive users should be explicitly logged out and blocked, not silently treated as normal anonymous visitors.
+
+### active_user_required
+- Purpose: Protect routes that require any logged-in active account.
+- Reads: Flask-Login `current_user`.
+- Writes: logs out inactive users before blocking access.
+- Returns: wrapped Flask route function.
+- Called from:
+  - Future account/profile routes that require login but do not care whether the user is a rider or admin.
+- Notes: anonymous users are redirected by Flask-Login to the configured login route. Inactive users receive 403.
+
+### rider_required
+- Purpose: Protect rider-level routes.
+- Reads: Flask-Login `current_user` and the user's `role`.
+- Writes: logs out inactive users before blocking access.
+- Returns: wrapped Flask route function.
+- Called from:
+  - Future rider profile and rider race-entry routes.
+- Notes: allowed roles are `rider` and `admin`, because admins have the highest permission level.
+
+### admin_required
+- Purpose: Protect admin-only routes.
+- Reads: Flask-Login `current_user` and the user's `role`.
+- Writes: logs out inactive users before blocking access.
+- Returns: wrapped Flask route function.
+- Called from:
+  - Future race, rider, device, RFID, manual timing, user-management, and quota-admin routes.
+- Notes: allowed role is `admin` only. Riders receive 403.
 
 ## src/auth/rate_limits.py
 

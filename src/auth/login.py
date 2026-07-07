@@ -27,11 +27,13 @@ def load_user(user_id: str):
       user_id: string user id stored by Flask-Login in the session cookie.
 
     Output:
-      User row when the id is valid and the account is active; otherwise None.
+      User row when the id is valid; otherwise None.
 
     Notes:
       The User model is introduced in the next database step. Until then this
       loader deliberately returns None so Flask can start without an auth table.
+      Active-state enforcement is handled by the route decorators so an account
+      disabled after login can be logged out and blocked consistently.
     """
     User = getattr(db_models, "User", None)
     if User is None:
@@ -46,8 +48,6 @@ def load_user(user_id: str):
     try:
         user = session.get(User, user_pk)
         if not user:
-            return None
-        if not getattr(user, "is_active", False):
             return None
 
         # Detach the user object before the short-lived SQLAlchemy session is
