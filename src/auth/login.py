@@ -1,21 +1,60 @@
 """
 Flask-Login setup for browser user sessions.
 
-This module is intentionally small and import-safe during the current auth
-setup phase. The User table/model is added in Step 3, so the user loader checks
-for that model dynamically and returns None until it exists.
+This module connects Flask-Login's browser session handling to the users table.
+It reloads the current user for each request and keeps a lightweight
+auth-version value in the signed Flask session so old sessions can be rejected
+after password resets or other sensitive account changes.
 """
 
+from flask import session as flask_session
 from flask_login import LoginManager
 
-from src.db import models as db_models
-from src.db.models import SessionLocal
+from src.db.models import SessionLocal, User
 
+
+AUTH_VERSION_SESSION_KEY = "auth_version"
 
 login_manager = LoginManager()
 login_manager.login_view = "auth.login"
-login_manager.login_message = "Please log in to access this page."
+login_manager.login_message = "Please log in as rider to access this page."
 login_manager.login_message_category = "warning"
+
+
+def remember_auth_version(user) -> None:
+    """
+    Store a user's current auth_version in the signed browser session.
+
+    Input Args:
+      user: User row that has just successfully logged in.
+
+    Output:
+      None.
+
+    Notes:
+      The login route should call this immediately after Flask-Login's
+      login_user(user). load_user() later compares this stored value with the
+      database value to invalidate stale sessions after password resets or
+      forced account changes.
+    """
+    flask_session[AUTH_VERSION_SESSION_KEY] = int(getattr(user, "auth_version", 0) or 0)
+
+
+def clear_auth_version() -> None:
+    """
+    Remove the stored auth_version from the signed browser session.
+
+    Input Args:
+      None.
+
+    Output:
+      None.
+
+    Notes:
+      Logout and forced-session-clear flows can call this alongside
+      Flask-Login's logout_user().
+    """
+    flask_session.pop(AUTH_VERSION_SESSION_KEY, None)
 
 
 @login_manager.user_loader
@@ -27,18 +66,14 @@ def load_user(user_id: str):
       user_id: string user id stored by Flask-Login in the session cookie.
 
     Output:
-      User row when the id is valid; otherwise None.
+      Active User row when the id and session auth_version are valid; otherwise
+      None.
 
     Notes:
-      The User model is introduced in the next database step. Until then this
-      loader deliberately returns None so Flask can start without an auth table.
-      Active-state enforcement is handled by the route decorators so an account
-      disabled after login can be logged out and blocked consistently.
+      Returning None makes Flask-Login treat the request as anonymous. That
+      cleanly redirects anonymous, deleted, inactive, or stale-session users to
+      the configured login route when they access protected pages.
     """
-    User = getattr(db_models, "User", None)
-    if User is None:
-        return None
-
     try:
         user_pk = int(user_id)
     except (TypeError, ValueError):
@@ -48,6 +83,17 @@ def load_user(user_id: str):
     try:
         user = session.get(User, user_pk)
         if not user:
+            return None
+        if not getattr(user, "is_active", False):
+            return None
+
+        session_auth_version = flask_session.get(AUTH_VERSION_SESSION_KEY)
+        try:
+            session_auth_version = int(session_auth_version)
+        except (TypeError, ValueError):
+            return None
+
+        if session_auth_version != int(getattr(user, "auth_version", 0) or 0):
             return None
 
         # Detach the user object before the short-lived SQLAlchemy session is

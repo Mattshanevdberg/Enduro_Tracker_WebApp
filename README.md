@@ -152,9 +152,9 @@ docker compose -p enduro-prod --env-file .env.prod up -d
 
 ### create_app
 - Purpose: Flask application factory that creates the app instance, loads the Flask secret key, configures browser security helpers, and attaches all API and web blueprints.
-- Reads: `FLASK_SECRET_KEY`, the `MAP_*` map configuration values, `ARCGIS_API_KEY`, and the auth email/security configuration values from the container runtime environment; `config.yaml` for host and port globals; `src.auth.login.login_manager` for browser session setup; `src.auth.rate_limits` for Redis-backed rate limiting; `src.auth.csrf` helpers for CSRF setup.
+- Reads: `FLASK_SECRET_KEY`, the `MAP_*` map configuration values, `ARCGIS_API_KEY`, and the auth email/security configuration values from the container runtime environment; `config.yaml` for host and port globals; `src.auth.login.login_manager` for browser session setup; `src.auth.rate_limits` for Redis-backed rate limiting; `src.auth.csrf` helpers for CSRF setup; `src.auth.routes.bp_auth` for signup and future auth pages.
 - Writes: `app.config["SECRET_KEY"]` plus secure session-cookie settings, the map provider, style, browser API key, map-limit configuration values, and `AUTH_RATE_LIMIT_STORAGE_URL`; initialises Flask-Login, Flask-Limiter, and Flask-WTF CSRF protection on the app.
-- Registers: ingest API routes, home, riders, devices, races, and RFID record viewer blueprints.
+- Registers: ingest API routes, auth browser routes, home, riders, devices, races, and RFID record viewer blueprints.
 - Called from: module import path `src.main:app` for Gunicorn, and the direct-run block at the bottom of the file.
 - Notes: the app now expects `FLASK_SECRET_KEY` to exist in the container environment. If Compose does not pass that value into the `server` service, Gunicorn fails during import with `KeyError: 'FLASK_SECRET_KEY'`. Existing unconverted management blueprints and tracker ingest are temporarily CSRF-exempt so the current app keeps working until their forms/JavaScript requests receive CSRF tokens.
 
@@ -164,7 +164,26 @@ docker compose -p enduro-prod --env-file .env.prod up -d
 - Why: current browser requests use same-origin relative URLs, while tracker/device uploads are direct HTTP client calls and do not depend on browser CORS. Removing broad CORS avoids unnecessary cross-origin browser access once cookie-based login is introduced.
 - When to reintroduce: add a narrow CORS helper only if a separate browser frontend on another origin must call selected API endpoints, for example `https://dashboard.kooksnylive.co.za` calling `https://api.kooksnylive.co.za/api/v1/races`. In that case, restrict allowed origins and keep credentials disabled unless there is a deliberate cookie-authenticated cross-origin design.
 
+## src/auth/__init__.py
+
+- Purpose: Mark `src.auth` as the authentication helper package for browser users.
+- Reads: None.
+- Writes: None.
+- Functions: None.
+- Notes: auth route modules and helper modules live under this package so the viewer/rider/admin authentication workstream remains grouped together, matching the role split described in `Web Application System Design V4 - 20260224.pdf`.
+- Checks: importing `src.auth` succeeds and has no side effects.
+
 ## src/auth/login.py
+
+### AUTH_VERSION_SESSION_KEY
+- Purpose: Single Flask session key used to store the authenticated user's `auth_version`.
+- Reads: None.
+- Writes: None.
+- Called from:
+  - `src.auth.login:remember_auth_version`.
+  - `src.auth.login:clear_auth_version`.
+  - `src.auth.login:load_user`.
+- Notes: keeping the key centralised avoids mismatches between login, logout, and session-validation code.
 
 ### login_manager
 - Purpose: Shared Flask-Login manager that configures browser login session handling for the application.
@@ -174,14 +193,36 @@ docker compose -p enduro-prod --env-file .env.prod up -d
   - `src.main:create_app`, where `login_manager.init_app(app)` attaches the manager to the Flask app.
 - Notes: the actual `/login` route is added in a later auth step. No existing routes are protected by this change yet.
 
+### remember_auth_version
+- Purpose: Store the user's current database `auth_version` in the signed Flask session after successful login.
+- Reads: `user.auth_version`.
+- Writes: `auth_version` into the Flask session cookie.
+- Returns: None.
+- Called from:
+  - Future login route immediately after Flask-Login's `login_user(user)`.
+- Notes: this enables old browser sessions to be rejected after password resets, forced logouts, or sensitive account changes.
+
+### clear_auth_version
+- Purpose: Remove the stored `auth_version` from the Flask session.
+- Reads: Flask session.
+- Writes: removes the `auth_version` session value when present.
+- Returns: None.
+- Called from:
+  - Future logout and forced-session-clear flows.
+
 ### load_user
 - Purpose: Load the current browser user from the Flask session id.
-- Reads: future `User` model from `src.db.models` when it exists, and `SessionLocal` for a short-lived database lookup.
+- Reads: `User`, `SessionLocal`, and the signed Flask session `auth_version`.
 - Writes: None.
-- Returns: User row for a valid session id, otherwise `None`.
+- Returns: active User row when the id and session `auth_version` are valid, otherwise `None`.
 - Called from:
   - Flask-Login during request handling when a browser session contains a user id.
-- Notes: this loader deliberately returns `None` until the User model is introduced in Step 3, so the application can start safely during the staged implementation. Active-state enforcement is handled by route decorators so a disabled account can be logged out and blocked consistently.
+- Notes: returning `None` makes Flask-Login treat the request as anonymous. That cleanly redirects anonymous, deleted, inactive, or stale-session users to the configured login route when they access protected pages. The actual login route will separately deny inactive-account login attempts with a clear message.
+
+### Checks
+- `load_user()` returns a user for a valid active user with matching `auth_version`.
+- Invalid ids, missing users, inactive users, missing session `auth_version`, and mismatched `auth_version` return None.
+- Anonymous, invalid, inactive, and stale sessions redirect to the configured login route once a protected route is accessed.
 
 ## src/auth/csrf.py
 
@@ -209,6 +250,11 @@ docker compose -p enduro-prod --env-file .env.prod up -d
   - `src.main:create_app`.
 - Notes: new authentication routes should not be added to this exemption list. Current exemptions exist only because the existing race/rider/device forms and tracker ingest routes do not yet send CSRF tokens.
 
+### Checks
+- Flask app starts with CSRF protection initialised.
+- Existing tracker ingest and unconverted management blueprints remain operational while temporarily exempt.
+- Future non-exempt auth forms must include CSRF tokens; CSRF-less submissions should fail once those routes exist.
+
 ## src/auth/passwords.py
 
 ### validate_password
@@ -231,6 +277,15 @@ docker compose -p enduro-prod --env-file .env.prod up -d
 - Reads: stored `users.password_hash` value and raw submitted password.
 - Writes: None.
 - Returns: True when the password matches; False otherwise.
+
+### Checks
+- Valid password passes validation.
+- Too-short password fails.
+- Password without a number or special character fails.
+- Confirmation mismatch fails.
+- Stored hash is not equal to plaintext.
+- Correct password verifies against the stored hash.
+- Wrong password fails verification.
 
 ## src/auth/tokens.py
 
@@ -272,6 +327,14 @@ docker compose -p enduro-prod --env-file .env.prod up -d
 - Writes: sets `used_at` on matching unused tokens.
 - Returns: number of token rows invalidated.
 
+### Checks
+- Raw token is never stored.
+- Token hash is stored.
+- Expired token fails validation.
+- Used token fails validation.
+- Wrong-purpose token fails validation.
+- Creating a new token invalidates earlier unused tokens for the same user and purpose.
+
 ## src/auth/mail.py
 
 ### build_password_reset_url
@@ -295,6 +358,66 @@ docker compose -p enduro-prod --env-file .env.prod up -d
 - Returns: Resend API response.
 - Notes: the current password is never emailed, and callers should not log reset links because they contain the raw token.
 
+### Checks
+- Password-reset URL uses `APP_PUBLIC_BASE_URL` rather than the inbound request host.
+- Missing email configuration fails with a clear `RuntimeError`.
+- Resend API key is not printed.
+- Manual Resend smoke test sends successfully when `RESEND_API_KEY`, `MAIL_FROM`, and `TEST_EMAIL_TO` are configured.
+
+## src/auth/routes.py
+
+### bp_auth
+- Purpose: Flask Blueprint for browser authentication routes.
+- Reads: None at definition time.
+- Writes: route registrations for signup and future login/logout/password-reset pages.
+- Called from:
+  - `src.main:create_app`, where the blueprint is registered on the Flask app.
+- Notes: all auth routes live in this module rather than `src/web` so authentication remains grouped in one place.
+
+### _normalize_auth_value
+- Purpose: Normalise usernames and email addresses for case-insensitive uniqueness checks.
+- Reads: raw submitted username or email value.
+- Writes: None.
+- Returns: lowercase, trimmed string.
+
+### _signup_form_data
+- Purpose: Read signup form fields into a template-friendly dictionary.
+- Reads: `request.form` values for name, surname, username, and email.
+- Writes: None.
+- Returns: dictionary of non-password signup fields.
+- Notes: password values are intentionally not returned to the template after validation errors.
+
+### _validate_signup_form
+- Purpose: Validate required signup fields and password policy.
+- Reads: signup form dictionary, raw password, password confirmation, and `email-validator` format checks.
+- Writes: None.
+- Returns: list of validation error messages.
+- Calls:
+  - `src.auth.passwords:validate_password`.
+
+### _signup_identity_exists
+- Purpose: Check whether the submitted username or email is already registered.
+- Reads: active SQLAlchemy session, `users.username_normalized`, and `users.email_normalized`.
+- Writes: None.
+- Returns: True when either identity value already exists.
+
+### signup
+- Purpose: Render the public rider signup form and create a rider login account on POST.
+- Reads: signup form fields, `User`, `Rider`, password helpers, and the active database session.
+- Writes: one linked `Rider` row and one linked `User` row with `role='rider'`; writes Flask-Login session data and the session `auth_version` after successful signup.
+- Returns: rendered `signup.html` for GET or validation errors; redirects to the existing rider edit form on success.
+- Notes: public signup ignores any submitted role/admin field and always creates a rider account. Later this success redirect should point to a dedicated rider/profile route that only allows the rider to edit their own linked profile.
+
+### Checks
+- Public signup cannot create admin accounts.
+- Successful signup creates a linked `Rider` row immediately.
+- Successful signup creates a linked `User` row with `role='rider'`.
+- Successful signup logs the new user in and stores the session `auth_version`.
+- Successful signup redirects to `/riders/<rider_id>/edit` so the rider can complete their profile.
+- Duplicate username/email submissions return a validation error.
+- Invalid email format returns a validation error.
+- Signup form is CSRF-protected and includes a hidden `csrf_token`.
+
 ## src/auth/decorators.py
 
 ### user_has_role
@@ -304,27 +427,19 @@ docker compose -p enduro-prod --env-file .env.prod up -d
 - Returns: True when the user has one of the allowed roles; otherwise False.
 - Notes: this helper keeps role comparison logic in one place for rider/admin route decorators.
 
-### _active_user_failure_response
-- Purpose: Centralise anonymous and inactive-user handling for auth route decorators.
-- Reads: Flask-Login `current_user` and the Flask app login manager.
-- Writes: logs out inactive users before blocking access.
-- Returns: None for active authenticated users, or Flask-Login's unauthorized response for anonymous users.
-- Raises: 403 for inactive users.
-- Notes: this helper avoids Flask-Login's `@login_required` shortcut because inactive users should be explicitly logged out and blocked, not silently treated as normal anonymous visitors.
-
 ### active_user_required
 - Purpose: Protect routes that require any logged-in active account.
 - Reads: Flask-Login `current_user`.
-- Writes: logs out inactive users before blocking access.
+- Writes: None.
 - Returns: wrapped Flask route function.
 - Called from:
   - Future account/profile routes that require login but do not care whether the user is a rider or admin.
-- Notes: anonymous users are redirected by Flask-Login to the configured login route. Inactive users receive 403.
+- Notes: anonymous, deleted, inactive, and auth-version-stale sessions are redirected by Flask-Login to the configured login route because `load_user()` returns None for those cases.
 
 ### rider_required
 - Purpose: Protect rider-level routes.
 - Reads: Flask-Login `current_user` and the user's `role`.
-- Writes: logs out inactive users before blocking access.
+- Writes: None.
 - Returns: wrapped Flask route function.
 - Called from:
   - Future rider profile and rider race-entry routes.
@@ -333,11 +448,17 @@ docker compose -p enduro-prod --env-file .env.prod up -d
 ### admin_required
 - Purpose: Protect admin-only routes.
 - Reads: Flask-Login `current_user` and the user's `role`.
-- Writes: logs out inactive users before blocking access.
+- Writes: None.
 - Returns: wrapped Flask route function.
 - Called from:
   - Future race, rider, device, RFID, manual timing, user-management, and quota-admin routes.
 - Notes: allowed role is `admin` only. Riders receive 403.
+
+### Checks
+- Anonymous user is redirected to login for protected routes.
+- Rider is blocked from admin-only route with 403.
+- Admin can access admin route.
+- Admin can access rider route.
 
 ## src/auth/rate_limits.py
 
@@ -358,6 +479,12 @@ docker compose -p enduro-prod --env-file .env.prod up -d
 - Called from:
   - `src.main:create_app`.
 - Notes: the expected storage URL is `redis://redis:6379/0` in Compose. The same Redis service can later support temporary map/tile usage counters.
+
+### Checks
+- Flask-Limiter initialises with Redis-backed storage from `AUTH_RATE_LIMIT_STORAGE_URL`.
+- Missing storage URL fails clearly rather than silently falling back to per-process memory.
+- No global route throttling is applied until route-specific limits are added.
+- Future auth routes can apply limits to `/login`, `/signup`, `/forgot-password`, and `/reset-password/<token>`.
 
 ### Direct-run debug block
 - Purpose: support direct local execution through `python src/main.py`.
@@ -441,6 +568,7 @@ docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
   - `templates/devices.html`: "Back to Home" link.
   - `templates/device_edit.html`: "Home" button.
   - `templates/riders_form.html`: "Back to Home" link.
+  - `templates/signup.html`: "Back to Home" link.
   - `templates/race_form.html`: "Back" link.
   - `templates/post_race.html`: "Back to Home" link.
   - `templates/rfid_view.html`: "Back to Home" link.
@@ -485,12 +613,13 @@ src/static/css/
 - Notes: stylesheet order matters. Shared files should define the default look, while page files should only add or override what that page genuinely needs.
 
 ### Current base.css usage
-- Purpose: Provide the lean shared static stylesheet for the Flask-rendered UI, currently applied to `templates/home.html`, `templates/riders_form.html`, `templates/devices.html`, `templates/device_edit.html`, `templates/rfid_view.html`, `templates/race_form.html`, and `templates/post_race.html`.
+- Purpose: Provide the lean shared static stylesheet for the Flask-rendered UI, currently applied to `templates/home.html`, `templates/signup.html`, `templates/riders_form.html`, `templates/devices.html`, `templates/device_edit.html`, `templates/rfid_view.html`, `templates/race_form.html`, and `templates/post_race.html`.
 - Reads: CSS custom properties defined in `:root` for navy, white, forest green, neutral surfaces, borders, text, and shadows.
 - Writes: Browser presentation only; no application data is changed.
 - Styles: theme variables, page shell, page header, primary buttons, section titles, muted text, empty state, and mobile layout adjustments.
 - Called from:
   - `templates/home.html`: linked through `url_for('static', filename='css/base.css')`.
+  - `templates/signup.html`: linked through `url_for('static', filename='css/base.css')`.
   - `templates/riders_form.html`: linked through `url_for('static', filename='css/base.css')`.
   - `templates/devices.html`: linked through `url_for('static', filename='css/base.css')`.
   - `templates/device_edit.html`: linked through `url_for('static', filename='css/base.css')`.
@@ -501,7 +630,7 @@ src/static/css/
 
 ### Shared component files
 - Purpose: Provide reusable component stylesheets that are loaded after `base.css` by pages that need them.
-- Current state: `forms.css`, `tables.css`, and `maps.css` exist under `src/static/css`; `templates/home.html`, `templates/riders_form.html`, `templates/devices.html`, `templates/device_edit.html`, `templates/rfid_view.html`, `templates/race_form.html`, and `templates/post_race.html` now load the relevant component files.
+- Current state: `forms.css`, `tables.css`, and `maps.css` exist under `src/static/css`; `templates/home.html`, `templates/signup.html`, `templates/riders_form.html`, `templates/devices.html`, `templates/device_edit.html`, `templates/rfid_view.html`, `templates/race_form.html`, and `templates/post_race.html` now load the relevant component files.
 - `forms.css`: contains reusable content panels, form grids, filter grids, field rows, inputs, checkboxes, file inputs, focus states, status messages, and form action layout.
 - `tables.css`: contains reusable table cards, table cells, wide-table behavior, table heading styling, table action buttons, `pre-wrap`, and `code` wrapping helpers.
 - `maps.css`: contains reusable compact map preview container styling plus shared Leaflet map wrapper/canvas styling for route and track maps.

@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Kooksnylive — Sign Up</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/forms.css') }}" />
+  </head>
+  <body>
+    <main class="page-shell">
+      <header class="page-header">
+        <h1>Create Rider Account</h1>
+        <p>Sign up as a rider, then complete your linked rider profile.</p>
+      </header>
+
+      {% if message %}
+        <div class="msg {{ 'ok' if success else 'err' }}">{{ message }}</div>
+      {% endif %}
+
+      <section class="content-panel">
+        <form class="form-grid" method="post" action="{{ url_for('auth.signup') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+
+          <label for="first_name">Name *</label>
+          <input
+            id="first_name"
+            name="first_name"
+            autocomplete="given-name"
+            required
+            value="{{ form.first_name or '' }}"
+          />
+
+          <label for="last_name">Surname *</label>
+          <input
+            id="last_name"
+            name="last_name"
+            autocomplete="family-name"
+            required
+            value="{{ form.last_name or '' }}"
+          />
+
+          <label for="username">Username *</label>
+          <input
+            id="username"
+            name="username"
+            autocomplete="username"
+            required
+            value="{{ form.username or '' }}"
+          />
+
+          <label for="email">Email address *</label>
+          <input
+            id="email"
+            name="email"
+            type="email"
+            autocomplete="email"
+            required
+            value="{{ form.email or '' }}"
+          />
+
+          <label for="password">Password *</label>
+          <input
+            id="password"
+            name="password"
+            type="password"
+            autocomplete="new-password"
+            minlength="6"
+            required
+          />
+
+          <label for="password_confirm">Re-enter password *</label>
+          <input
+            id="password_confirm"
+            name="password_confirm"
+            type="password"
+            autocomplete="new-password"
+            minlength="6"
+            required
+          />
+
+          <p class="muted">
+            Passwords must be at least 6 characters and contain a number or special character.
+          </p>
+
+          <div class="actions">
+            <button class="btn" type="submit">Sign Up</button>
+            <a class="btn" href="{{ url_for('home.home_page') }}">Back to Home</a>
+          </div>
+        </form>
+      </section>
+    </main>
+  </body>
+</html>

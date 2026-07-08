@@ -17,6 +17,7 @@ from flask import Flask, jsonify
 from src.auth.csrf import exempt_blueprints, init_csrf
 from src.auth.login import login_manager
 from src.auth.rate_limits import init_limiter
+from src.auth.routes import bp_auth
 from src.utils.env import env_bool
 
 # blueprint imports
@@ -106,6 +107,7 @@ def create_app():
     # Register upload routes
     # attaches the ingest blueprint (with its /api/v1/upload route) to the app; this happens during factory execution so the upload endpoint becomes active.
     app.register_blueprint(ingest_bp) # "/api/v1/upload" endpoint for data ingestion from trackers
+    app.register_blueprint(bp_auth) # "/signup" and future auth browser routes
     app.register_blueprint(bp_home) # "/" home page
     app.register_blueprint(bp_riders) # "/riders/new" rider management pages
     app.register_blueprint(bp_devices)  # /devices device management pages

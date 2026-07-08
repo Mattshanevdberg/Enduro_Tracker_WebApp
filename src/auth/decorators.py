@@ -8,8 +8,8 @@ viewer/rider/admin split described in the system design.
 
 from functools import wraps
 
-from flask import abort, current_app
-from flask_login import current_user, logout_user
+from flask import abort
+from flask_login import current_user, login_required
 
 
 def user_has_role(user, allowed_roles) -> bool:
@@ -38,36 +38,6 @@ def user_has_role(user, allowed_roles) -> bool:
     return user_role in roles
 
 
-def _active_user_failure_response():
-    """
-    Return the correct failure response for non-active access attempts.
-
-    Input Args:
-      None. The check reads Flask-Login's current_user proxy.
-
-    Output:
-      None when the current user is authenticated and active; otherwise a Flask
-      response for anonymous users. Inactive users are logged out and aborted.
-
-    Notes:
-      This helper intentionally does not use Flask-Login's @login_required
-      decorator. Flask-Login treats inactive users as unauthenticated, which
-      would redirect them to login before we can explicitly log them out and
-      return 403.
-    """
-    if getattr(current_user, "is_anonymous", True):
-        return current_app.login_manager.unauthorized()
-
-    if not getattr(current_user, "is_active", False):
-        logout_user()
-        abort(403)
-
-    if not getattr(current_user, "is_authenticated", False):
-        return current_app.login_manager.unauthorized()
-
-    return None
-
-
 def active_user_required(func):
     """
     Require any logged-in active user before allowing a route to run.
@@ -79,15 +49,12 @@ def active_user_required(func):
       Wrapped route function.
 
     Notes:
-      Anonymous users are redirected through Flask-Login. Inactive users are
-      logged out and blocked with 403 so stale browser sessions cannot continue
-      to access protected pages.
+      Anonymous, deleted, inactive, and auth-version-stale users are redirected
+      through Flask-Login because load_user() returns None for invalid sessions.
     """
     @wraps(func)
+    @login_required
     def wrapper(*args, **kwargs):
-        failure_response = _active_user_failure_response()
-        if failure_response is not None:
-            return failure_response
         return func(*args, **kwargs)
 
     return wrapper
@@ -107,10 +74,8 @@ def rider_required(func):
       Admin users are included because admins have the highest permission level.
     """
     @wraps(func)
+    @login_required
     def wrapper(*args, **kwargs):
-        failure_response = _active_user_failure_response()
-        if failure_response is not None:
-            return failure_response
         if not user_has_role(current_user, {"rider", "admin"}):
             abort(403)
         return func(*args, **kwargs)
@@ -129,10 +94,8 @@ def admin_required(func):
       Wrapped route function.
     """
     @wraps(func)
+    @login_required
     def wrapper(*args, **kwargs):
-        failure_response = _active_user_failure_response()
-        if failure_response is not None:
-            return failure_response
         if not user_has_role(current_user, {"admin"}):
             abort(403)
         return func(*args, **kwargs)
