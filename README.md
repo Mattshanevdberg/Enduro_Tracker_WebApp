@@ -401,12 +401,90 @@ docker compose -p enduro-prod --env-file .env.prod up -d
 - Writes: None.
 - Returns: True when either identity value already exists.
 
+### _login_form_data
+- Purpose: Read login form values into a template-friendly dictionary.
+- Reads: `request.form` value for username/email identifier.
+- Writes: None.
+- Returns: dictionary containing the non-password login identifier.
+- Notes: password values are intentionally not returned to the template after validation errors.
+
+### _find_login_user
+- Purpose: Find a login account by username or email.
+- Reads: active SQLAlchemy session, `users.username_normalized`, and `users.email_normalized`.
+- Writes: None.
+- Returns: matching User row when found; otherwise None.
+- Notes: callers must use the same generic error for missing users and wrong passwords so login does not reveal whether an email or username exists.
+
+### _find_active_user_by_email
+- Purpose: Find an active user account by email for password reset.
+- Reads: active SQLAlchemy session and `users.email_normalized`.
+- Writes: None.
+- Returns: active User row when found; otherwise None.
+- Notes: callers always render the same forgot-password response whether this returns a user or None.
+
+### _forgot_password_form_data
+- Purpose: Read forgot-password form values into a template-friendly dictionary.
+- Reads: `request.form` value for recovery email.
+- Writes: None.
+- Returns: dictionary containing the submitted recovery email.
+
+### _reset_password_form_data
+- Purpose: Read reset-password form values.
+- Reads: `request.form` values for password and password confirmation.
+- Writes: None.
+- Returns: dictionary containing the new password and confirmation.
+
+### _render_forgot_password_response
+- Purpose: Render the standard forgot-password response.
+- Reads: template form dictionary.
+- Writes: None.
+- Returns: rendered `forgot_password.html`.
+- Notes: this response is deliberately reused for existing and non-existing email addresses so the route does not reveal whether an account exists.
+
 ### signup
 - Purpose: Render the public rider signup form and create a rider login account on POST.
 - Reads: signup form fields, `User`, `Rider`, password helpers, and the active database session.
 - Writes: one linked `Rider` row and one linked `User` row with `role='rider'`; writes Flask-Login session data and the session `auth_version` after successful signup.
 - Returns: rendered `signup.html` for GET or validation errors; redirects to the existing rider edit form on success.
 - Notes: public signup ignores any submitted role/admin field and always creates a rider account. Later this success redirect should point to a dedicated rider/profile route that only allows the rider to edit their own linked profile.
+
+### login
+- Purpose: Render the login form and authenticate rider/admin users by username or email.
+- Reads: username/email identifier, password, `User`, password hash checker, and the active database session.
+- Writes: `last_login_at` on successful login; writes Flask-Login session data and session `auth_version`.
+- Returns: rendered `login.html` for GET or failed login; redirects to `/dashboard` on success.
+- Rate limit: POST requests are limited through Flask-Limiter.
+- Notes: wrong username/email and wrong password use the same generic message: `Username/email or password is incorrect.` Inactive users are denied with a clear inactive-account message.
+
+### logout
+- Purpose: Clear the current browser login session.
+- Reads: current Flask-Login session.
+- Writes: removes stored session `auth_version` and logs the user out.
+- Returns: redirect to `/login`.
+- Notes: route accepts POST only and remains CSRF-protected.
+
+### forgot_password
+- Purpose: Start the password-reset flow by accepting a recovery email address.
+- Reads: submitted email, active `User` row when present, auth-token helpers, and Resend mail helper.
+- Writes: for active accounts only, invalidates old reset tokens, creates one new hashed 30-minute reset token, and sends a reset email.
+- Returns: rendered `forgot_password.html` with the same success message whether or not the email belongs to an active account.
+- Rate limit: POST requests are limited through Flask-Limiter.
+- Notes: the current password is never emailed, and the raw reset token is never logged or stored directly.
+
+### reset_password
+- Purpose: Complete a one-use password reset from an emailed reset link.
+- Reads: raw reset token from the URL, submitted new password, `AuthToken`, and linked `User`.
+- Writes: new password hash, increments `user.auth_version`, updates `updated_at`, and marks the reset token used.
+- Returns: rendered `reset_password.html` for invalid/expired/reused links or validation errors; redirects to `/login` after a successful reset.
+- Rate limit: POST requests are limited through Flask-Limiter.
+- Notes: incrementing `auth_version` invalidates existing browser sessions for that user.
+
+### dashboard
+- Purpose: Temporary authenticated landing page after login.
+- Reads: Flask-Login `current_user` through `active_user_required`.
+- Writes: None.
+- Returns: simple dashboard placeholder response.
+- Notes: this keeps the `/dashboard` redirect functional until a real rider/admin dashboard is designed.
 
 ### Checks
 - Public signup cannot create admin accounts.
@@ -417,6 +495,16 @@ docker compose -p enduro-prod --env-file .env.prod up -d
 - Duplicate username/email submissions return a validation error.
 - Invalid email format returns a validation error.
 - Signup form is CSRF-protected and includes a hidden `csrf_token`.
+- Login works with either username or email.
+- Login page links to `/forgot-password`.
+- Logout clears the login session and session `auth_version`.
+- Protected pages redirect to login after logout.
+- Login does not reveal whether a username/email exists for wrong credentials.
+- Forgot-password page always shows the same response for existing and non-existing emails.
+- Forgot-password sends a reset link only for active accounts.
+- Reset links are one-use and fail after expiry or reuse.
+- Password reset increments `auth_version` so existing sessions stop working.
+- Reset token is never logged or stored directly.
 
 ## src/auth/decorators.py
 
@@ -568,6 +656,7 @@ docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
   - `templates/devices.html`: "Back to Home" link.
   - `templates/device_edit.html`: "Home" button.
   - `templates/riders_form.html`: "Back to Home" link.
+  - `templates/login.html`: "Back to Home" link.
   - `templates/signup.html`: "Back to Home" link.
   - `templates/race_form.html`: "Back" link.
   - `templates/post_race.html`: "Back to Home" link.
@@ -613,13 +702,16 @@ src/static/css/
 - Notes: stylesheet order matters. Shared files should define the default look, while page files should only add or override what that page genuinely needs.
 
 ### Current base.css usage
-- Purpose: Provide the lean shared static stylesheet for the Flask-rendered UI, currently applied to `templates/home.html`, `templates/signup.html`, `templates/riders_form.html`, `templates/devices.html`, `templates/device_edit.html`, `templates/rfid_view.html`, `templates/race_form.html`, and `templates/post_race.html`.
+- Purpose: Provide the lean shared static stylesheet for the Flask-rendered UI, currently applied to `templates/home.html`, `templates/login.html`, `templates/signup.html`, `templates/forgot_password.html`, `templates/reset_password.html`, `templates/riders_form.html`, `templates/devices.html`, `templates/device_edit.html`, `templates/rfid_view.html`, `templates/race_form.html`, and `templates/post_race.html`.
 - Reads: CSS custom properties defined in `:root` for navy, white, forest green, neutral surfaces, borders, text, and shadows.
 - Writes: Browser presentation only; no application data is changed.
 - Styles: theme variables, page shell, page header, primary buttons, section titles, muted text, empty state, and mobile layout adjustments.
 - Called from:
   - `templates/home.html`: linked through `url_for('static', filename='css/base.css')`.
+  - `templates/login.html`: linked through `url_for('static', filename='css/base.css')`.
   - `templates/signup.html`: linked through `url_for('static', filename='css/base.css')`.
+  - `templates/forgot_password.html`: linked through `url_for('static', filename='css/base.css')`.
+  - `templates/reset_password.html`: linked through `url_for('static', filename='css/base.css')`.
   - `templates/riders_form.html`: linked through `url_for('static', filename='css/base.css')`.
   - `templates/devices.html`: linked through `url_for('static', filename='css/base.css')`.
   - `templates/device_edit.html`: linked through `url_for('static', filename='css/base.css')`.
@@ -630,7 +722,7 @@ src/static/css/
 
 ### Shared component files
 - Purpose: Provide reusable component stylesheets that are loaded after `base.css` by pages that need them.
-- Current state: `forms.css`, `tables.css`, and `maps.css` exist under `src/static/css`; `templates/home.html`, `templates/signup.html`, `templates/riders_form.html`, `templates/devices.html`, `templates/device_edit.html`, `templates/rfid_view.html`, `templates/race_form.html`, and `templates/post_race.html` now load the relevant component files.
+- Current state: `forms.css`, `tables.css`, and `maps.css` exist under `src/static/css`; `templates/home.html`, `templates/login.html`, `templates/signup.html`, `templates/forgot_password.html`, `templates/reset_password.html`, `templates/riders_form.html`, `templates/devices.html`, `templates/device_edit.html`, `templates/rfid_view.html`, `templates/race_form.html`, and `templates/post_race.html` now load the relevant component files.
 - `forms.css`: contains reusable content panels, form grids, filter grids, field rows, inputs, checkboxes, file inputs, focus states, status messages, and form action layout.
 - `tables.css`: contains reusable table cards, table cells, wide-table behavior, table heading styling, table action buttons, `pre-wrap`, and `code` wrapping helpers.
 - `maps.css`: contains reusable compact map preview container styling plus shared Leaflet map wrapper/canvas styling for route and track maps.
