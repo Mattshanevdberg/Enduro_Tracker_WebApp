@@ -152,9 +152,9 @@ docker compose -p enduro-prod --env-file .env.prod up -d
 
 ### create_app
 - Purpose: Flask application factory that creates the app instance, loads the Flask secret key, configures browser security helpers, and attaches all API and web blueprints.
-- Reads: `FLASK_SECRET_KEY`, the `MAP_*` map configuration values, `ARCGIS_API_KEY`, and the auth email/security configuration values from the container runtime environment; `config.yaml` for host and port globals; `src.auth.login.login_manager` for browser session setup; `src.auth.rate_limits` for Redis-backed rate limiting; `src.auth.csrf` helpers for CSRF setup; `src.auth.routes.bp_auth` for signup and future auth pages.
+- Reads: `FLASK_SECRET_KEY`, the `MAP_*` map configuration values, `ARCGIS_API_KEY`, and the auth email/security configuration values from the container runtime environment; `config.yaml` for host and port globals; `src.auth.login.login_manager` for browser session setup; `src.auth.rate_limits` for Redis-backed rate limiting; `src.auth.csrf` helpers for CSRF setup; `src.auth.routes.bp_auth` for signup and future auth pages; `src.web.rider_profiles.bp_rider_profiles` for the future rider profile page.
 - Writes: `app.config["SECRET_KEY"]` plus secure session-cookie settings, the map provider, style, browser API key, map-limit configuration values, and `AUTH_RATE_LIMIT_STORAGE_URL`; initialises Flask-Login, Flask-Limiter, and Flask-WTF CSRF protection on the app.
-- Registers: ingest API routes, auth browser routes, home, riders, devices, races, and RFID record viewer blueprints.
+- Registers: ingest API routes, auth browser routes, home/dashboard routes, public rider profile routes, rider management, devices, races, and RFID record viewer blueprints.
 - Called from: module import path `src.main:app` for Gunicorn, and the direct-run block at the bottom of the file.
 - Notes: the app now expects `FLASK_SECRET_KEY` to exist in the container environment. If Compose does not pass that value into the `server` service, Gunicorn fails during import with `KeyError: 'FLASK_SECRET_KEY'`. Existing unconverted management blueprints and tracker ingest are temporarily CSRF-exempt so the current app keeps working until their forms/JavaScript requests receive CSRF tokens.
 
@@ -452,7 +452,7 @@ docker compose -p enduro-prod --env-file .env.prod up -d
 - Purpose: Render the login form and authenticate rider/admin users by username or email.
 - Reads: username/email identifier, password, `User`, password hash checker, and the active database session.
 - Writes: `last_login_at` on successful login; writes Flask-Login session data and session `auth_version`.
-- Returns: rendered `login.html` for GET or failed login; redirects to `/dashboard` on success.
+- Returns: rendered `login.html` for GET or failed login; redirects riders to `/dashboard` and admins to `/dashboard-admin` on success.
 - Rate limit: POST requests are limited through Flask-Limiter.
 - Notes: wrong username/email and wrong password use the same generic message: `Username/email or password is incorrect.` Inactive users are denied with a clear inactive-account message.
 
@@ -479,12 +479,13 @@ docker compose -p enduro-prod --env-file .env.prod up -d
 - Rate limit: POST requests are limited through Flask-Limiter.
 - Notes: incrementing `auth_version` invalidates existing browser sessions for that user.
 
-### dashboard
-- Purpose: Temporary authenticated landing page after login.
-- Reads: Flask-Login `current_user` through `active_user_required`.
+### user_management
+- Purpose: Placeholder for future admin user management.
+- Reads: None.
 - Writes: None.
-- Returns: simple dashboard placeholder response.
-- Notes: this keeps the `/dashboard` redirect functional until a real rider/admin dashboard is designed.
+- Returns: rendered `placeholder.html`.
+- Route: `/admin/users`.
+- Notes: later this route will allow admins to view users, update roles, activate/deactivate accounts, and reset relevant account flags.
 
 ### Checks
 - Public signup cannot create admin accounts.
@@ -496,6 +497,7 @@ docker compose -p enduro-prod --env-file .env.prod up -d
 - Invalid email format returns a validation error.
 - Signup form is CSRF-protected and includes a hidden `csrf_token`.
 - Login works with either username or email.
+- Login sends riders to `/dashboard` and admins to `/dashboard-admin`.
 - Login page links to `/forgot-password`.
 - Logout clears the login session and session `auth_version`.
 - Protected pages redirect to login after logout.
@@ -505,6 +507,23 @@ docker compose -p enduro-prod --env-file .env.prod up -d
 - Reset links are one-use and fail after expiry or reuse.
 - Password reset increments `auth_version` so existing sessions stop working.
 - Reset token is never logged or stored directly.
+
+## src/web/rider_profiles.py
+
+### bp_rider_profiles
+- Purpose: Flask Blueprint for public rider profile pages.
+- Reads: None at definition time.
+- Writes: route registration for `/rider`.
+- Called from:
+  - `src.main:create_app`, where the blueprint is registered on the Flask app.
+
+### rider_profiles
+- Purpose: Placeholder for the future public rider profiles page.
+- Reads: None.
+- Writes: None.
+- Returns: rendered `placeholder.html`.
+- Route: `/rider`.
+- Notes: later this page will list rider profiles and expose edit controls only to the linked rider or admins.
 
 ## src/auth/decorators.py
 
@@ -645,22 +664,45 @@ docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
 
 ## src/web/home.py
 
+### _race_display_data
+- Purpose: Load race rows and add display-friendly datetime values for dashboard templates.
+- Reads: `Race`, `starts_at_epoch`, `active`, and configured categories from `config.yaml`.
+- Writes: temporary `starts_at` display attribute on race objects before rendering.
+- Returns: tuple of races and default configured category.
+- Notes: `active_only=True` is used for the public dashboard; `active_only=False` is used for the admin dashboard.
+
 ### home_page (GET `/`)
-- Purpose: Render the home page with navigation and a quick races table.
-- Reads: `Race` (ordered by `starts_at_epoch`), config categories from `config.yaml`.
+- Purpose: Render the public landing page.
+- Reads: None.
 - Writes: None.
-- Renders: `templates/home.html`.
-- Display: converts `starts_at_epoch` to a datetime for the template table.
+- Renders: `templates/landing.html`.
+- Buttons: View Races, Sign Up, Login.
 - Called from:
-  - `templates/home.html`: direct page load at `/`.
-  - `templates/devices.html`: "Back to Home" link.
-  - `templates/device_edit.html`: "Home" button.
-  - `templates/riders_form.html`: "Back to Home" link.
-  - `templates/login.html`: "Back to Home" link.
-  - `templates/signup.html`: "Back to Home" link.
-  - `templates/race_form.html`: "Back" link.
-  - `templates/post_race.html`: "Back to Home" link.
-  - `templates/rfid_view.html`: "Back to Home" link.
+  - Direct public page load at `/`.
+
+### dashboard (GET `/dashboard`)
+- Purpose: Render the public race dashboard with active races only and no management controls.
+- Reads: active `Race` rows and default configured category.
+- Writes: None.
+- Renders: `templates/dashboard.html`.
+- Buttons: Landing, Login, Sign Up, and View Race for each active race.
+- Notes: this is the viewer/rider public dashboard. It intentionally excludes edit race, add race, device, RFID, and other admin controls.
+
+### dashboard_admin (GET `/dashboard-admin`)
+- Purpose: Render the admin operational dashboard with management controls.
+- Reads: all `Race` rows and default configured category.
+- Writes: None.
+- Renders: `templates/dashboard_admin.html`.
+- Access: protected with `admin_required`.
+- Buttons: Public Dashboard, Input Rider Details, Manage Devices, Add New Race, View RFID Records, Edit race, and Post Race.
+- Notes: this page contains the operational controls that previously lived on `/`.
+
+### Checks
+- Anonymous users can load `/` and `/dashboard`.
+- Anonymous users see no management controls on `/dashboard`.
+- Anonymous users are redirected to login for `/dashboard-admin`.
+- Riders are blocked from `/dashboard-admin` with 403.
+- Admins can load `/dashboard-admin`.
 
 ## CSS Structure
 
@@ -702,12 +744,15 @@ src/static/css/
 - Notes: stylesheet order matters. Shared files should define the default look, while page files should only add or override what that page genuinely needs.
 
 ### Current base.css usage
-- Purpose: Provide the lean shared static stylesheet for the Flask-rendered UI, currently applied to `templates/home.html`, `templates/login.html`, `templates/signup.html`, `templates/forgot_password.html`, `templates/reset_password.html`, `templates/riders_form.html`, `templates/devices.html`, `templates/device_edit.html`, `templates/rfid_view.html`, `templates/race_form.html`, and `templates/post_race.html`.
+- Purpose: Provide the lean shared static stylesheet for the Flask-rendered UI, currently applied to `templates/landing.html`, `templates/dashboard.html`, `templates/dashboard_admin.html`, `templates/placeholder.html`, `templates/login.html`, `templates/signup.html`, `templates/forgot_password.html`, `templates/reset_password.html`, `templates/riders_form.html`, `templates/devices.html`, `templates/device_edit.html`, `templates/rfid_view.html`, `templates/race_form.html`, and `templates/post_race.html`.
 - Reads: CSS custom properties defined in `:root` for navy, white, forest green, neutral surfaces, borders, text, and shadows.
 - Writes: Browser presentation only; no application data is changed.
 - Styles: theme variables, page shell, page header, primary buttons, section titles, muted text, empty state, and mobile layout adjustments.
 - Called from:
-  - `templates/home.html`: linked through `url_for('static', filename='css/base.css')`.
+  - `templates/landing.html`: linked through `url_for('static', filename='css/base.css')`.
+  - `templates/dashboard.html`: linked through `url_for('static', filename='css/base.css')`.
+  - `templates/dashboard_admin.html`: linked through `url_for('static', filename='css/base.css')`.
+  - `templates/placeholder.html`: linked through `url_for('static', filename='css/base.css')`.
   - `templates/login.html`: linked through `url_for('static', filename='css/base.css')`.
   - `templates/signup.html`: linked through `url_for('static', filename='css/base.css')`.
   - `templates/forgot_password.html`: linked through `url_for('static', filename='css/base.css')`.
@@ -722,7 +767,7 @@ src/static/css/
 
 ### Shared component files
 - Purpose: Provide reusable component stylesheets that are loaded after `base.css` by pages that need them.
-- Current state: `forms.css`, `tables.css`, and `maps.css` exist under `src/static/css`; `templates/home.html`, `templates/login.html`, `templates/signup.html`, `templates/forgot_password.html`, `templates/reset_password.html`, `templates/riders_form.html`, `templates/devices.html`, `templates/device_edit.html`, `templates/rfid_view.html`, `templates/race_form.html`, and `templates/post_race.html` now load the relevant component files.
+- Current state: `forms.css`, `tables.css`, and `maps.css` exist under `src/static/css`; `templates/landing.html`, `templates/dashboard.html`, `templates/dashboard_admin.html`, `templates/placeholder.html`, `templates/login.html`, `templates/signup.html`, `templates/forgot_password.html`, `templates/reset_password.html`, `templates/riders_form.html`, `templates/devices.html`, `templates/device_edit.html`, `templates/rfid_view.html`, `templates/race_form.html`, and `templates/post_race.html` now load the relevant component files.
 - `forms.css`: contains reusable content panels, form grids, filter grids, field rows, inputs, checkboxes, file inputs, focus states, status messages, and form action layout.
 - `tables.css`: contains reusable table cards, table cells, wide-table behavior, table heading styling, table action buttons, `pre-wrap`, and `code` wrapping helpers.
 - `maps.css`: contains reusable compact map preview container styling plus shared Leaflet map wrapper/canvas styling for route and track maps.
@@ -800,7 +845,7 @@ src/static/js/
 - Writes: `Device` (new row on POST, including optional `epc_id`).
 - Renders: `templates/devices.html`.
 - Called from:
-  - `templates/home.html`: "Manage Devices" button (GET).
+  - `templates/dashboard_admin.html`: "Manage Devices" button (GET).
   - `templates/devices.html`: "Save" button in "Add a new device" form (POST).
   - `templates/device_edit.html`: "Back to Devices" link (GET).
 
@@ -835,7 +880,7 @@ src/static/js/
 - Renders: `templates/rfid_view.html`.
 - Display: converts `time_stamp_epoch` and `received_at_epoch` to datetimes for the template table.
 - Called from:
-  - `templates/home.html`: "View RFID Records" button (GET).
+  - `templates/dashboard_admin.html`: "View RFID Records" button (GET).
   - `templates/rfid_view.html`: filter form and "Clear" link (GET).
 
 ## src/web/riders.py
@@ -851,7 +896,7 @@ src/static/js/
 - Writes: `Rider` (insert or update).
 - Renders: `templates/riders_form.html`.
 - Called from:
-  - `templates/home.html`: "Input Rider Details" button (GET `/riders/new`).
+  - `templates/dashboard_admin.html`: "Input Rider Details" button (GET `/riders/new`).
   - `templates/riders_form.html`: "Edit" link in riders table (GET `/riders/<id>/edit`).
   - `templates/riders_form.html`: "Save" button in the rider form (POST create/update).
 
@@ -890,7 +935,7 @@ src/static/js/
 - Writes: None.
 - Renders: `templates/race_form.html`.
 - Called from:
-  - `templates/home.html`: "Add New Race" button.
+  - `templates/dashboard_admin.html`: "Add New Race" button.
 
 ### post_race (GET `/races/<race_id>/post`)
 - Purpose: Post-race view with route preview and rider list for a category.
@@ -900,8 +945,38 @@ src/static/js/
 - Display: converts rider timing epochs to naive local datetimes for UI controls.
 - UI: map includes multi-select rider track overlays controlled from the compact legend beside race info (toggle state synced to active overlays, reselects replace prior overlays), persisted map height/width sliders, auto-stacking of the riders table under the map when widths clash, 5-second live refresh polling for selected rider tracks (cache-first), 5-second live refresh polling for rider timing cells, and a manual timing modal that can optionally upload a TXT log to `/api/v1/upload-text` before reapplying the chosen start/end window.
 - Called from:
-  - `templates/home.html`: "Post Race" button in races table.
+  - `templates/dashboard.html`: "View Race" button in active races table.
+  - `templates/dashboard_admin.html`: "Post Race" button in races table.
   - `templates/post_race.html`: category `<select>` `onchange` (GET with `?category=`).
+
+### enter_race (GET `/races/<race_id>/enter`)
+- Purpose: Placeholder for future rider/admin race entry.
+- Reads: None.
+- Writes: None.
+- Renders: `templates/placeholder.html`.
+- Called from:
+  - `templates/dashboard.html`: "Enter Race" button.
+  - `templates/dashboard_admin.html`: "Enter Race" button.
+- Notes: later this will allow riders to enter races, choose category, see approval status, and use automatic device assignment.
+
+### post_race_admin (GET `/races/<race_id>/post-admin`)
+- Purpose: Placeholder for future admin post-race controls.
+- Reads: None.
+- Writes: None.
+- Renders: `templates/placeholder.html`.
+- Called from:
+  - `templates/dashboard_admin.html`: "Post Admin" button.
+- Notes: later this should receive the admin timing controls that currently live on the public post-race page.
+
+### race_results (GET `/races/<race_id>/results`)
+- Purpose: Placeholder for future official public race results.
+- Reads: None.
+- Writes: None.
+- Renders: `templates/placeholder.html`.
+- Called from:
+  - `templates/dashboard.html`: "Results" button.
+  - `templates/dashboard_admin.html`: "Results" button.
+- Notes: later this will show official released results and provide rider GPX/result downloads.
 
 ### device_geojson (GET `/races/<race_id>/device/<device_id>/geojson`)
 - Purpose: Build GeoJSON on demand for a device track (no persistence).
@@ -963,7 +1038,7 @@ src/static/js/
 - Writes: `Route`/`Category` if missing for the selected category.
 - Renders: `templates/race_form.html`.
 - Called from:
-  - `templates/home.html`: "Edit" button in races table.
+  - `templates/dashboard_admin.html`: "Edit" button in races table.
   - `templates/race_form.html`: category `<select>` `onchange` (GET with `?category=`).
   - Redirect from `save_race` after a successful save.
 
@@ -1348,73 +1423,125 @@ docker compose -p enduro-dev --env-file .env.dev run --rm -e TEST_EMAIL_TO=you@e
 
 ## Templates (templates/*.html)
 
-### home.html
-- General: Home/landing page and navigation hub.
-- Displays: Races table (name, start, website, active).
-- Styles: Uses `src/static/css/base.css` for the lean shared base theme and `src/static/css/tables.css` for the race-list table.
-- UI actions: "Input Rider Details", "Manage Devices", "Add New Race", "View RFID Records", "Edit", "Post Race".
+### landing.html
+- General: Public landing page.
+- Displays: Kooksnylive entry point and high-level public actions.
+- Styles: Uses `src/static/css/base.css` for the lean shared base theme.
+- UI actions: "View Races", "Sign Up", "Login".
 - Linked pages (buttons):
+  - "View Races" → `/dashboard` (public race dashboard).
+  - "Sign Up" → `/signup` (rider signup).
+  - "Login" → `/login` (rider/admin login).
+- Pulls: none.
+- Pushes: none.
+- Routes called: `/`, `/dashboard`, `/signup`, `/login`.
+- Embedded scripts: none.
+
+### dashboard.html
+- General: Public race dashboard.
+- Displays: Active races table (name, start, website).
+- Styles: Uses `src/static/css/base.css` for the lean shared base theme and `src/static/css/tables.css` for the race-list table.
+- UI actions: "Landing", "Login", "Sign Up", "Rider Profiles", "View Race", "Enter Race", "Results".
+- Linked pages (buttons):
+  - "Landing" → `/`.
+  - "Login" → `/login`.
+  - "Sign Up" → `/signup`.
+  - "Rider Profiles" → `/rider`.
+  - "View Race" → `/races/<id>/post` (public post-race page).
+  - "Enter Race" → `/races/<id>/enter`.
+  - "Results" → `/races/<id>/results`.
+- Pulls: `races`, `default_category`.
+- Pushes: none.
+- Routes called: `/dashboard`, `/`, `/login`, `/signup`, `/rider`, `/races/<id>/post`, `/races/<id>/enter`, `/races/<id>/results`.
+- Embedded scripts: none.
+- Notes: no admin management controls are shown here.
+
+### dashboard_admin.html
+- General: Admin operational dashboard.
+- Displays: All races table (name, start, website, active).
+- Styles: Uses `src/static/css/base.css` for the lean shared base theme and `src/static/css/tables.css` for the race-list table.
+- UI actions: "Public Dashboard", "Input Rider Details", "Manage Devices", "Add New Race", "View RFID Records", "Rider Profiles", "User Management", "Edit", "Post Race", "Post Admin", "Enter Race", "Results".
+- Linked pages (buttons):
+  - "Public Dashboard" → `/dashboard`.
   - "Input Rider Details" → `/riders/new` (riders form page).
   - "Manage Devices" → `/devices/` (devices list page).
   - "Add New Race" → `/races/new` (new race form).
   - "View RFID Records" → `/rfid/` (RFID records page).
+  - "Rider Profiles" → `/rider`.
+  - "User Management" → `/admin/users`.
   - "Edit" → `/races/<id>/edit` (race edit page).
-  - "Post Race" → `/races/<id>/post` (post-race page).
+  - "Post Race" → `/races/<id>/post` (current post-race page).
+  - "Post Admin" → `/races/<id>/post-admin`.
+  - "Enter Race" → `/races/<id>/enter`.
+  - "Results" → `/races/<id>/results`.
 - Pulls: `races`, `default_category`.
 - Pushes: none (links only).
-- Routes called: `/`, `/riders/new`, `/devices/`, `/races/new`, `/rfid/`, `/races/<id>/edit`, `/races/<id>/post`.
+- Routes called: `/dashboard-admin`, `/dashboard`, `/riders/new`, `/devices/`, `/races/new`, `/rfid/`, `/rider`, `/admin/users`, `/races/<id>/edit`, `/races/<id>/post`, `/races/<id>/post-admin`, `/races/<id>/enter`, `/races/<id>/results`.
+- Embedded scripts: none.
+- Notes: protected by admin access.
+
+### placeholder.html
+- General: Shared placeholder page for planned UX routes.
+- Displays: title, route, target access level, and placeholder note.
+- Styles: Uses `src/static/css/base.css` for the lean shared base theme and `src/static/css/forms.css` for the content panel.
+- UI actions: one configurable back button.
+- Linked pages (buttons):
+  - Back button target is supplied by each route.
+- Pulls: `title`, `description`, `route`, `access`, `back_url`, `back_label`.
+- Pushes: none.
+- Routes called: `/rider`, `/races/<id>/enter`, `/races/<id>/post-admin`, `/races/<id>/results`, `/admin/users`.
 - Embedded scripts: none.
 
 ### devices.html
 - General: Device list and create form.
 - Displays: Device ID, RFID EPC, Device Info.
 - Styles: Uses `src/static/css/base.css` for the lean shared base theme, `src/static/css/forms.css` for the device form panel and messages, and `src/static/css/tables.css` for the device table.
-- UI actions: "Save" (create), "Edit", "Back to Home".
+- UI actions: "Save" (create), "Edit", "Back to Admin Dashboard".
 - Linked pages (buttons):
-  - "Back to Home" → `/` (home page).
+  - "Back to Admin Dashboard" → `/dashboard-admin`.
   - "Edit" → `/devices/<id>/edit` (device edit page).
 - Pulls: `devices`, `message`, `success`, `form`.
 - Pushes: POST create device with optional RFID EPC.
-- Routes called: `/devices/` (GET/POST), `/devices/<id>/edit`, `/`.
+- Routes called: `/devices/` (GET/POST), `/devices/<id>/edit`, `/dashboard-admin`.
 - Embedded scripts: none.
 
 ### device_edit.html
 - General: Edit a single device's info and RFID EPC.
 - Displays: Device ID (read-only), Device Info, RFID EPC.
 - Styles: Uses `src/static/css/base.css` for the lean shared base theme and `src/static/css/forms.css` for the edit form panel, inputs, status messages, and form action layout.
-- UI actions: "Save", "Back to Devices", "Home".
+- UI actions: "Save", "Back to Devices", "Admin Dashboard".
 - Linked pages (buttons):
   - "Back to Devices" → `/devices/` (devices list page).
-  - "Home" → `/` (home page).
+  - "Admin Dashboard" → `/dashboard-admin`.
 - Pulls: `device`, `message`, `success`.
 - Pushes: POST update device info and optional RFID EPC.
-- Routes called: `/devices/<id>/edit`, `/devices/`, `/`.
+- Routes called: `/devices/<id>/edit`, `/devices/`, `/dashboard-admin`.
 - Embedded scripts: none.
 
 ### rfid_view.html
 - General: RFID ingest records viewer with server-side filters.
 - Displays: RFID row id, EPC, RSSI, average RSSI, antenna, reader id, reader time, and received time.
 - Styles: Uses `src/static/css/base.css` for the lean shared base theme, `src/static/css/forms.css` for the filter panel, filter grid, messages, and filter actions, and `src/static/css/tables.css` for the wide RFID records table.
-- UI actions: "Filter", "Clear", "Back to Home".
+- UI actions: "Filter", "Clear", "Back to Admin Dashboard".
 - Linked pages (buttons):
-  - "Back to Home" → `/` (home page).
+  - "Back to Admin Dashboard" → `/dashboard-admin`.
   - "Clear" → `/rfid/` (unfiltered RFID records page).
 - Pulls: `rows`, `filters`, `message`, `success`, `max_limit`.
 - Pushes: GET filter query string values only.
-- Routes called: `/rfid/`, `/`.
+- Routes called: `/rfid/`, `/dashboard-admin`.
 - Embedded scripts: none.
 
 ### riders_form.html
 - General: Create/edit rider form with riders list.
 - Displays: Rider fields and riders table.
 - Styles: Uses `src/static/css/base.css` for the lean shared base theme, `src/static/css/forms.css` for the rider form panel and messages, and `src/static/css/tables.css` for the riders table.
-- UI actions: "Save", "Edit", "Back to Home".
+- UI actions: "Save", "Edit", "Back to Admin Dashboard".
 - Linked pages (buttons/links):
-  - "Back to Home" → `/` (home page).
+  - "Back to Admin Dashboard" → `/dashboard-admin`.
   - "Edit" → `/riders/<id>/edit` (loads rider into form).
 - Pulls: `categories`, `riders`, `form`, `editing_rider`, `message`, `success`.
 - Pushes: POST create/update rider.
-- Routes called: `/riders/new`, `/riders/<id>/edit`, `/`.
+- Routes called: `/riders/new`, `/riders/<id>/edit`, `/dashboard-admin`.
 - Embedded scripts: none.
 
 ### race_form.html
@@ -1423,7 +1550,7 @@ docker compose -p enduro-dev --env-file .env.dev run --rm -e TEST_EMAIL_TO=you@e
 - Styles: Uses `src/static/css/base.css` for the lean shared base theme, `src/static/css/forms.css` for form controls and row actions, `src/static/css/tables.css` for the rider assignment table, `src/static/css/maps.css` for the Leaflet route preview container, and `src/static/css/race-form.css` for race-form-only layout.
 - UI actions: "Save Changes", category dropdown (reload), "Upload GPX", "Remove GPX", "Save" (add rider), "Edit" (update rider entry), "Remove" (delete entry), "Back".
 - Linked pages (buttons/links):
-  - "Back" → `/` (home page).
+  - "Back" → `/dashboard-admin`.
   - "Open Website" → external race website URL (if set).
 - Pulls: `race`, `categories`, `selected_category`, `route`, `geojson`, `riders`, `devices`, `race_riders`, `last_device_by_rider`.
 - Pushes: POST save race, upload/remove GPX, add/edit/remove riders.
@@ -1439,7 +1566,7 @@ docker compose -p enduro-dev --env-file .env.dev run --rm -e TEST_EMAIL_TO=you@e
 - Styles: Uses `src/static/css/base.css` for the lean shared base theme, `src/static/css/forms.css` for category/manual timing controls, `src/static/css/tables.css` for the riders timing table, `src/static/css/maps.css` for the Leaflet route/track map canvas, and `src/static/css/post-race.css` for post-race-only layout, track key, RFID warning, and modal styles.
 - UI actions: Category dropdown (reload), "Show Track", "Manual Edit", "Confirm" timing, modal "Save/Cancel/Upload TXT".
 - Linked pages (buttons/links):
-  - "Back to Home" → `/` (home page).
+  - "Back to Dashboard" → `/dashboard`.
 - Pulls: `race`, `categories`, `selected_category`, `geojson`, `riders`, `has_multiple_rfid_flag`.
 - Pushes: Fetch route GeoJSON, fetch stored rider track (cache-first for live polling), fetch live rider timing values, POST manual timing edits, POST finish timing confirmation, POST TXT log ingest.
 - Routes called: `/races/<id>/post?category=...`, `/races/<id>/route/geojson?category=...`, `/races/<id>/race-rider/<id>/track`, `/races/<id>/race-rider/<id>/track?prefer_cache=1`, `/races/<id>/race-rider-timings?category=...`, `/races/<id>/race-rider/<id>/manual-times`, `/races/<id>/race-rider/<id>/confirm-finish`, `/api/v1/upload-text`.

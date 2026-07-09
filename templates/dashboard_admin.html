@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Kooksnylive — Admin Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/tables.css') }}" />
+  </head>
+  <body>
+    <main class="page-shell">
+      <header class="page-header">
+        <h1>Admin Dashboard</h1>
+        <p>Operational controls for races, riders, devices, and RFID records.</p>
+      </header>
+      <div class="stack">
+        <a class="btn" href="{{ url_for('home.dashboard') }}">Public Dashboard</a>
+        <a class="btn" href="{{ url_for('riders.rider_form') }}">Input Rider Details</a>
+        <a class="btn" href="{{ url_for('devices.devices_index') }}">Manage Devices</a>
+        <a class="btn" href="{{ url_for('races.new_race') }}">Add New Race</a>
+        <a class="btn" href="{{ url_for('rfid.rfid_index') }}">View RFID Records</a>
+        <a class="btn" href="{{ url_for('rider_profiles.rider_profiles') }}">Rider Profiles</a>
+        <a class="btn" href="{{ url_for('auth.user_management') }}">User Management</a>
+      </div>
+
+      <h2 class="section-title">Races</h2>
+      {% if races %}
+        <div class="table-card">
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Start</th>
+                <th>Website</th>
+                <th>Active</th>
+                <th class="actions">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for race in races %}
+                <tr>
+                  <td>{{ race.name }}</td>
+                  <td>
+                    {% if race.starts_at %}
+                      {{ race.starts_at.strftime('%Y-%m-%d %H:%M') }}
+                    {% else %}
+                      <span class="muted">Not set</span>
+                    {% endif %}
+                  </td>
+                  <td>
+                    {% if race.website %}
+                      <a href="{{ race.website }}" target="_blank" rel="noopener">{{ race.website }}</a>
+                    {% else %}
+                      <span class="muted">—</span>
+                    {% endif %}
+                  </td>
+                  <td>{{ 'Yes' if race.active else 'No' }}</td>
+                  <td class="actions">
+                    <a class="btn" href="{{ url_for('races.edit_race', race_id=race.id, category=default_category) }}">Edit</a>
+                    <a class="btn" href="{{ url_for('races.post_race', race_id=race.id) }}">Post Race</a>
+                    <a class="btn" href="{{ url_for('races.post_race_admin', race_id=race.id) }}">Post Admin</a>
+                    <a class="btn" href="{{ url_for('races.enter_race', race_id=race.id) }}">Enter Race</a>
+                    <a class="btn" href="{{ url_for('races.race_results', race_id=race.id) }}">Results</a>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <p class="empty-state">No races have been created yet.</p>
+      {% endif %}
+    </main>
+  </body>
+</html>

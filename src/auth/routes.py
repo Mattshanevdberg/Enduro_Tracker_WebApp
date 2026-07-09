@@ -11,7 +11,6 @@ from flask_login import login_user, logout_user
 from email_validator import EmailNotValidError, validate_email
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
-from src.auth.decorators import active_user_required
 from src.auth.login import clear_auth_version, remember_auth_version
 from src.auth.mail import send_password_reset_email
 from src.auth.passwords import check_password, hash_password, validate_password
@@ -251,6 +250,21 @@ def _render_forgot_password_response(form: dict):
     )
 
 
+def _post_login_redirect(user):
+    """
+    Redirect a logged-in user to the correct dashboard for their role.
+
+    Input Args:
+      user: authenticated User row.
+
+    Output:
+      Flask redirect response.
+    """
+    if getattr(user, "role", "") == "admin":
+        return redirect(url_for("home.dashboard_admin"))
+    return redirect(url_for("home.dashboard"))
+
+
 @bp_auth.route("/signup", methods=["GET", "POST"])
 def signup():
     """
@@ -370,7 +384,7 @@ def login():
       status.
       POST inactive account: rendered login.html with inactive-account message
       and 403 status.
-      POST success: redirect to /dashboard.
+      POST success: redirect to the role-appropriate dashboard.
 
     Notes:
       Wrong username/email and wrong password both use the same generic message
@@ -415,7 +429,7 @@ def login():
 
         login_user(user)
         remember_auth_version(user)
-        return redirect("/dashboard")
+        return _post_login_redirect(user)
     except SQLAlchemyError as exc:
         session.rollback()
         return render_template(
@@ -577,20 +591,27 @@ def reset_password(token: str):
         session.close()
 
 
-@bp_auth.route("/dashboard", methods=["GET"])
-@active_user_required
-def dashboard():
+@bp_auth.route("/admin/users", methods=["GET"])
+def user_management():
     """
-    Temporary authenticated landing page after login.
+    Render the future user-management placeholder.
 
     Input Args:
       None.
 
     Output:
-      Simple dashboard placeholder.
+      Placeholder page for admin user management.
 
     Notes:
-      This keeps the login success redirect functional now. A later step can
-      replace this with the real rider/admin dashboard experience.
+      Later this route will let admins view users, update roles, activate or
+      deactivate accounts, and reset relevant account flags.
     """
-    return "Dashboard"
+    return render_template(
+        "placeholder.html",
+        title="User Management",
+        description="Future admin user-management page.",
+        route="/admin/users",
+        access="admin",
+        back_url=url_for("home.dashboard_admin"),
+        back_label="Back to Admin Dashboard",
+    )

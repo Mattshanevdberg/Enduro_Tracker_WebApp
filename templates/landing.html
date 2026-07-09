@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Kooksnylive — Landing</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}" />
+  </head>
+  <body>
+    <main class="page-shell">
+      <header class="page-header">
+        <h1>Kooksnylive</h1>
+        <p>Live race tracking, rider profiles, and official race information.</p>
+      </header>
+
+      <div class="stack">
+        <a class="btn" href="{{ url_for('home.dashboard') }}">View Races</a>
+        <a class="btn" href="{{ url_for('auth.signup') }}">Sign Up</a>
+        <a class="btn" href="{{ url_for('auth.login') }}">Login</a>
+      </div>
+    </main>
+  </body>
+</html>

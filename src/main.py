@@ -24,6 +24,7 @@ from src.utils.env import env_bool
 from src.api.ingest import bp as ingest_bp
 from src.web.home import bp_home
 from src.web.riders import bp_riders
+from src.web.rider_profiles import bp_rider_profiles
 from src.web.devices import bp_devices
 from src.web.races import bp_races
 from src.web.rfid import bp_rfid
@@ -109,6 +110,7 @@ def create_app():
     app.register_blueprint(ingest_bp) # "/api/v1/upload" endpoint for data ingestion from trackers
     app.register_blueprint(bp_auth) # "/signup" and future auth browser routes
     app.register_blueprint(bp_home) # "/" home page
+    app.register_blueprint(bp_rider_profiles) # "/rider" public rider profile placeholder
     app.register_blueprint(bp_riders) # "/riders/new" rider management pages
     app.register_blueprint(bp_devices)  # /devices device management pages
     app.register_blueprint(bp_races)  # /races/* race management pages

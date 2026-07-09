@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>{{ title }} — Kooksnylive</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/forms.css') }}" />
+  </head>
+  <body>
+    <main class="page-shell">
+      <header class="page-header">
+        <h1>{{ title }}</h1>
+        <p>{{ description }}</p>
+      </header>
+
+      <div class="content-panel">
+        <p><strong>Route:</strong> {{ route }}</p>
+        <p><strong>Access target:</strong> {{ access }}</p>
+        <p class="muted">Placeholder only. Full functionality will be built in a later step.</p>
+      </div>
+
+      <div class="stack">
+        <a class="btn" href="{{ back_url }}">{{ back_label }}</a>
+      </div>
+    </main>
+  </body>
+</html>

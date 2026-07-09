@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>Enduro Tracker — Home</title>
+    <title>Kooksnylive — Dashboard</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}" />
     <link rel="stylesheet" href="{{ url_for('static', filename='css/tables.css') }}" />
@@ -10,18 +10,18 @@
   <body>
     <main class="page-shell">
       <header class="page-header">
-        <h1>Kooksnylive</h1>
-        <p>Choose an action:</p>
+        <h1>Race Dashboard</h1>
+        <p>View active races and follow live race pages.</p>
       </header>
+
       <div class="stack">
-        <a class="btn" href="{{ url_for('riders.rider_form') }}">Input Rider Details</a>
-        <a class="btn" href="{{ url_for('devices.devices_index') }}">Manage Devices</a>
-        <a class="btn" href="{{ url_for('races.new_race') }}">Add New Race</a>
-        <a class="btn" href="{{ url_for('rfid.rfid_index') }}">View RFID Records</a>
-        <!-- Add more navigation buttons here later -->
+        <a class="btn" href="{{ url_for('home.home_page') }}">Landing</a>
+        <a class="btn" href="{{ url_for('auth.login') }}">Login</a>
+        <a class="btn" href="{{ url_for('auth.signup') }}">Sign Up</a>
+        <a class="btn" href="{{ url_for('rider_profiles.rider_profiles') }}">Rider Profiles</a>
       </div>
 
-      <h2 class="section-title">Races</h2>
+      <h2 class="section-title">Active Races</h2>
       {% if races %}
         <div class="table-card">
           <table>
@@ -30,7 +30,6 @@
                 <th>Name</th>
                 <th>Start</th>
                 <th>Website</th>
-                <th>Active</th>
                 <th class="actions">Actions</th>
               </tr>
             </thead>
@@ -52,10 +51,10 @@
                       <span class="muted">—</span>
                     {% endif %}
                   </td>
-                  <td>{{ 'Yes' if race.active else 'No' }}</td>
                   <td class="actions">
-                    <a class="btn" href="{{ url_for('races.edit_race', race_id=race.id, category=default_category) }}">Edit</a>
-                    <a class="btn" href="{{ url_for('races.post_race', race_id=race.id) }}">Post Race</a>
+                    <a class="btn" href="{{ url_for('races.post_race', race_id=race.id) }}">View Race</a>
+                    <a class="btn" href="{{ url_for('races.enter_race', race_id=race.id) }}">Enter Race</a>
+                    <a class="btn" href="{{ url_for('races.race_results', race_id=race.id) }}">Results</a>
                   </td>
                 </tr>
               {% endfor %}
@@ -63,7 +62,7 @@
           </table>
         </div>
       {% else %}
-        <p class="empty-state">No races have been created yet.</p>
+        <p class="empty-state">No active races are available yet.</p>
       {% endif %}
     </main>
   </body>

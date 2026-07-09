@@ -6,6 +6,9 @@ Paths (main ones)
 -----------------
 GET  /races/new                               -> Create new race page (empty form)
 GET  /races/<race_id>/post                    -> Post-race view for a selected category
+GET  /races/<race_id>/enter                   -> Placeholder rider/admin race-entry page
+GET  /races/<race_id>/post-admin              -> Placeholder admin post-race controls page
+GET  /races/<race_id>/results                 -> Placeholder official results page
 POST /races/save                              -> Save new or existing race
 GET  /races/<race_id>/edit                    -> Edit page; choose category via ?category=Professional
 POST /races/<race_id>/route/upload            -> Upload GPX for selected category
@@ -294,6 +297,84 @@ def post_race(race_id: int):
         )
     finally:
         session.close()
+
+
+@bp_races.route("/<int:race_id>/enter", methods=["GET"])
+def enter_race(race_id: int):
+    """
+    Render the future race-entry placeholder.
+
+    Input Args:
+      race_id: race id from the route.
+
+    Output:
+      Placeholder page for rider/admin race entry.
+
+    Notes:
+      Later this route will allow riders to enter a race, see approval status,
+      choose a race category, and rely on automatic device assignment.
+    """
+    return render_template(
+        "placeholder.html",
+        title="Enter Race",
+        description="Future rider/admin race entry page.",
+        route=f"/races/{race_id}/enter",
+        access="rider/admin",
+        back_url=url_for("home.dashboard"),
+        back_label="Back to Dashboard",
+    )
+
+
+@bp_races.route("/<int:race_id>/post-admin", methods=["GET"])
+def post_race_admin(race_id: int):
+    """
+    Render the future admin post-race placeholder.
+
+    Input Args:
+      race_id: race id from the route.
+
+    Output:
+      Placeholder page for admin race timing controls.
+
+    Notes:
+      Later this route should receive the manual timing controls that currently
+      live on the public post-race page.
+    """
+    return render_template(
+        "placeholder.html",
+        title="Admin Post Race",
+        description="Future admin race tracking and timing-control page.",
+        route=f"/races/{race_id}/post-admin",
+        access="admin",
+        back_url=url_for("home.dashboard_admin"),
+        back_label="Back to Admin Dashboard",
+    )
+
+
+@bp_races.route("/<int:race_id>/results", methods=["GET"])
+def race_results(race_id: int):
+    """
+    Render the future official results placeholder.
+
+    Input Args:
+      race_id: race id from the route.
+
+    Output:
+      Placeholder page for official race results.
+
+    Notes:
+      Later this route will show released official results and allow approved
+      GPX/result downloads.
+    """
+    return render_template(
+        "placeholder.html",
+        title="Official Race Results",
+        description="Future official race results and rider GPX download page.",
+        route=f"/races/{race_id}/results",
+        access="all viewers",
+        back_url=url_for("home.dashboard"),
+        back_label="Back to Dashboard",
+    )
 
 
 @bp_races.route("/<int:race_id>/race-rider-timings", methods=["GET"])
