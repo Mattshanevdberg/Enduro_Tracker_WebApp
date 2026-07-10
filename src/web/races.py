@@ -4,34 +4,36 @@ and manage the RaceRider assignments for a selected category.
 
 Paths (main ones)
 -----------------
-GET  /races/new                               -> Create new race page (empty form)
+GET  /races/new                               -> Admin-only create new race page (empty form)
 GET  /races/<race_id>/post                    -> Post-race view for a selected category
-GET  /races/<race_id>/enter                   -> Placeholder rider/admin race-entry page
-GET  /races/<race_id>/post-admin              -> Placeholder admin post-race controls page
+GET  /races/<race_id>/enter                   -> Rider/admin placeholder race-entry page
+GET  /races/<race_id>/post-admin              -> Admin-only placeholder admin post-race controls page
 GET  /races/<race_id>/results                 -> Placeholder official results page
-POST /races/save                              -> Save new or existing race
-GET  /races/<race_id>/edit                    -> Edit page; choose category via ?category=Professional
-POST /races/<race_id>/route/upload            -> Upload GPX for selected category
-POST /races/<race_id>/route/remove            -> Remove GPX for selected category
+POST /races/save                              -> Admin-only save new or existing race
+GET  /races/<race_id>/edit                    -> Admin-only edit page; choose category via ?category=Professional
+POST /races/<race_id>/route/upload            -> Admin-only upload GPX for selected category
+POST /races/<race_id>/route/remove            -> Admin-only remove GPX for selected category
 GET  /races/<race_id>/route/geojson           -> Return GeoJSON for selected category (map uses this)
 GET  /races/<race_id>/device/<device_id>/geojson      -> Build GeoJSON on the fly for a device (dynamic)
 GET  /races/<race_id>/race-rider/<race_rider_id>/track -> Return stored GeoJSON from track_hist for a race rider
 GET  /races/<race_id>/race-rider-timings              -> Return live race_riders timing fields for the post-race table
-POST /races/<race_id>/race-rider/<race_rider_id>/manual-times -> Manually overwrite start/finish times
-POST /races/<race_id>/race-rider/<race_rider_id>/confirm-finish -> Confirm RFID finish timing
+POST /races/<race_id>/race-rider/<race_rider_id>/manual-times -> Admin-only manually overwrite start/finish times
+POST /races/<race_id>/race-rider/<race_rider_id>/confirm-finish -> Admin-only confirm RFID finish timing
 
-POST /races/<race_id>/riders/add                     -> Add a RaceRider row for this category
-POST /races/<race_id>/riders/<entry_id>/edit         -> Update an existing RaceRider row
-POST /races/<race_id>/riders/<entry_id>/remove       -> Delete an existing RaceRider row
+POST /races/<race_id>/riders/add                     -> Admin-only add a RaceRider row for this category
+POST /races/<race_id>/riders/<race_rider_id>/edit    -> Rider/admin update an existing RaceRider row
+POST /races/<race_id>/riders/<race_rider_id>/remove  -> Rider/admin delete an existing RaceRider row
 """
 
 from datetime import datetime, timezone
 from typing import Optional
 
 from flask import Blueprint, current_app, request, render_template, redirect, url_for, Response, jsonify
+from flask_login import current_user
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
+from src.auth.decorators import admin_required, require_rider_resource_access, rider_required
 from src.db.models import (
     SessionLocal, init_db,
     Race, Route, Category, Rider, Device, RaceRider, TrackCache, TrackHist
@@ -171,6 +173,7 @@ def _race_rider_timing_payload(race_rider: RaceRider) -> dict:
 
 
 @bp_races.route("/new", methods=["GET"])
+@admin_required
 def new_race():
     """
     Render a blank "New Race" page.
@@ -300,6 +303,7 @@ def post_race(race_id: int):
 
 
 @bp_races.route("/<int:race_id>/enter", methods=["GET"])
+@rider_required
 def enter_race(race_id: int):
     """
     Render the future race-entry placeholder.
@@ -326,6 +330,7 @@ def enter_race(race_id: int):
 
 
 @bp_races.route("/<int:race_id>/post-admin", methods=["GET"])
+@admin_required
 def post_race_admin(race_id: int):
     """
     Render the future admin post-race placeholder.
@@ -471,6 +476,7 @@ def race_rider_track(race_id: int, race_rider_id: int):
 
 
 @bp_races.route("/<int:race_id>/race-rider/<int:race_rider_id>/manual-times", methods=["POST"])
+@admin_required
 def manual_times(race_id: int, race_rider_id: int):
     """
     Manually overwrite start/finish RFID times for a race rider.
@@ -557,6 +563,7 @@ def manual_times(race_id: int, race_rider_id: int):
 
 
 @bp_races.route("/<int:race_id>/race-rider/<int:race_rider_id>/confirm-finish", methods=["POST"])
+@admin_required
 def confirm_finish_time(race_id: int, race_rider_id: int):
     """
     Confirm a race rider's current RFID finish time after organiser review.
@@ -590,6 +597,7 @@ def confirm_finish_time(race_id: int, race_rider_id: int):
 
 
 @bp_races.route("/save", methods=["POST"])
+@admin_required
 def save_race():
     """
     Create or update a race. Only 'name' is required.
@@ -649,6 +657,7 @@ def save_race():
 
 
 @bp_races.route("/<int:race_id>/edit", methods=["GET"])
+@admin_required
 def edit_race(race_id: int):
     """
     Edit page for a race. The UI is scoped to a selected category (via ?category=...).
@@ -718,6 +727,7 @@ def edit_race(race_id: int):
 
 
 @bp_races.route("/<int:race_id>/route/upload", methods=["POST"])
+@admin_required
 def upload_gpx(race_id: int):
     """
     Upload a GPX file for the selected category and store both GPX and GeoJSON on Route.
@@ -755,6 +765,7 @@ def upload_gpx(race_id: int):
 
 
 @bp_races.route("/<int:race_id>/route/remove", methods=["POST"])
+@admin_required
 def remove_gpx(race_id: int):
     """
     Remove the GPX/GeoJSON for the selected category (does not delete the route row entirely).
@@ -805,6 +816,7 @@ def route_geojson(race_id: int):
 
 
 @bp_races.route("/<int:race_id>/riders/add", methods=["POST"])
+@admin_required
 def add_race_rider(race_id: int):
     """
     Add a rider to this race for the selected category. We look up the Category row by name.
@@ -831,10 +843,15 @@ def add_race_rider(race_id: int):
         session.close()
 
 
-@bp_races.route("/<int:race_id>/riders/<int:entry_id>/edit", methods=["POST"])
-def edit_race_rider(race_id: int, entry_id: int):
+@bp_races.route("/<int:race_id>/riders/<int:race_rider_id>/edit", methods=["POST"])
+@rider_required
+def edit_race_rider(race_id: int, race_rider_id: int):
     """
     Update device/flags for an existing RaceRider entry.
+
+    Access:
+      Admins may update any race entry. Riders may update only entries linked
+      to their own current_user.rider_id.
     """
     session = SessionLocal()
     try:
@@ -843,9 +860,16 @@ def edit_race_rider(race_id: int, entry_id: int):
         active = True if request.form.get("active") == "on" else False
         recording = True if request.form.get("recording") == "on" else False
 
-        rr = session.query(RaceRider).get(entry_id)
+        rr = (
+            session.query(RaceRider)
+            .join(Category, RaceRider.category_id == Category.id)
+            .join(Route, Category.route_id == Route.id)
+            .filter(RaceRider.id == race_rider_id, Route.race_id == race_id)
+            .one_or_none()
+        )
         if not rr:
             return Response("RaceRider not found.", status=404)
+        require_rider_resource_access(current_user, rr.rider_id)
 
         rr.device_id = device_id
         rr.active = active
@@ -860,17 +884,29 @@ def edit_race_rider(race_id: int, entry_id: int):
         session.close()
 
 
-@bp_races.route("/<int:race_id>/riders/<int:entry_id>/remove", methods=["POST"])
-def remove_race_rider(race_id: int, entry_id: int):
+@bp_races.route("/<int:race_id>/riders/<int:race_rider_id>/remove", methods=["POST"])
+@rider_required
+def remove_race_rider(race_id: int, race_rider_id: int):
     """
     Delete a RaceRider row.
+
+    Access:
+      Admins may remove any race entry. Riders may remove only entries linked
+      to their own current_user.rider_id.
     """
     session = SessionLocal()
     try:
         category_name = request.form.get("category") or ALLOWED_CATEGORIES[0]
-        rr = session.query(RaceRider).get(entry_id)
+        rr = (
+            session.query(RaceRider)
+            .join(Category, RaceRider.category_id == Category.id)
+            .join(Route, Category.route_id == Route.id)
+            .filter(RaceRider.id == race_rider_id, Route.race_id == race_id)
+            .one_or_none()
+        )
         if not rr:
             return Response("RaceRider not found.", status=404)
+        require_rider_resource_access(current_user, rr.rider_id)
         session.delete(rr)
         session.commit()
         return redirect(url_for("races.edit_race", race_id=race_id, category=category_name))

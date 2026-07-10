@@ -1,18 +1,21 @@
 """
 Devices management: create and edit Device rows.
 
-- GET/POST /devices/           -> list devices + create form / create new device (custom primary key 'id')
-- GET/POST /devices/<id>/edit  -> edit page for device_info / epc_id / save edits
+- GET/POST /devices/           -> admin-only list devices + create form / create new device (custom primary key 'id')
+- GET/POST /devices/<id>/edit  -> admin-only edit page for device_info / epc_id / save edits
 
 Notes
 -----
 * We keep 'id' immutable after creation to avoid breaking references.
 * Minimal validation: require non-empty id, length <= 64, unique id, and unique optional RFID EPC.
+* Device management is admin-only because devices control tracker assignment and
+  RFID timing links.
 """
 
 from flask import Blueprint, request, render_template
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 
+from src.auth.decorators import admin_required
 from src.db.models import SessionLocal, Device
 
 bp_devices = Blueprint("devices", __name__, url_prefix="/devices")
@@ -51,6 +54,7 @@ def _epc_in_use(session, epc_id: str, exclude_device_id: str | None = None) -> b
     return query.first() is not None
 
 @bp_devices.route("/", methods=["GET", "POST"])
+@admin_required
 def devices_index():
     """
     GET: show create form + devices table
@@ -129,6 +133,7 @@ def devices_index():
         session.close()
 
 @bp_devices.route("/<device_id>/edit", methods=["GET", "POST"])
+@admin_required
 def device_edit(device_id: str):
     """
     Edit a device's device_info and RFID EPC. Primary key 'id' is read-only here.

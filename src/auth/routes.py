@@ -4,6 +4,28 @@ Browser routes for authentication flows.
 All authentication pages live in this module so signup, login, logout, and
 password-reset behaviour remains grouped under src.auth rather than spread
 through the general web blueprints.
+
+Routes
+------
+- GET/POST /signup                 -> Create a rider login account and linked Rider profile
+- GET/POST /login                  -> Log a rider or admin into the browser session
+- POST     /logout                 -> Clear the current browser login session
+- GET/POST /forgot-password        -> Request a one-use password-reset email
+- GET/POST /reset-password/<token> -> Validate a reset token and set a new password
+- GET      /admin/users            -> Placeholder admin user-management page
+
+Notes
+-----
+* Viewers are anonymous visitors and do not have User rows.
+* Public signup always creates role='rider'; users cannot self-assign admin.
+* Admin accounts are created or upgraded manually by an existing administrator.
+* Forgot-password responses are deliberately generic so the page does not reveal
+  whether a submitted email address belongs to an account.
+* Password reset sends a reset link only. Existing passwords are never emailed.
+* Raw reset tokens are shown only in the emailed link and are never stored
+  directly in the database.
+* `/admin/users` is an admin-only placeholder route for future user-management
+  functionality.
 """
 
 from flask import Blueprint, redirect, render_template, request, url_for
@@ -11,6 +33,7 @@ from flask_login import login_user, logout_user
 from email_validator import EmailNotValidError, validate_email
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
+from src.auth.decorators import admin_required
 from src.auth.login import clear_auth_version, remember_auth_version
 from src.auth.mail import send_password_reset_email
 from src.auth.passwords import check_password, hash_password, validate_password
@@ -592,6 +615,7 @@ def reset_password(token: str):
 
 
 @bp_auth.route("/admin/users", methods=["GET"])
+@admin_required
 def user_management():
     """
     Render the future user-management placeholder.
@@ -601,6 +625,9 @@ def user_management():
 
     Output:
       Placeholder page for admin user management.
+
+    Access:
+      Requires an active admin account.
 
     Notes:
       Later this route will let admins view users, update roles, activate or

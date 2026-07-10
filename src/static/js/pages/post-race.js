@@ -25,6 +25,7 @@ because they currently belong only to the post-race page.
   const categoryLabel = mapNode?.dataset?.category || '';
   const categoryText = categoryLabel ? `category "${categoryLabel}"` : 'selected category';
   const mapConfigNode = document.getElementById('post-race-map-config');
+  const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
 
   const BASE_ROUTE_COLOR = '#1f78b4';
   const TRACK_PALETTE = [
@@ -49,6 +50,15 @@ because they currently belong only to the post-race page.
   const inFlightTrackRefresh = new Set();
   let publicMapConfig = null;
   let basemapAttached = false;
+
+  // Build headers for browser-originated JSON POST requests that use the
+  // logged-in session cookie. Flask-WTF accepts X-CSRFToken for JSON/fetch
+  // requests where a hidden form field is not available.
+  function csrfJsonHeaders() {
+    const headers = { 'Content-Type': 'application/json' };
+    if (csrfToken) headers['X-CSRFToken'] = csrfToken;
+    return headers;
+  }
 
   // Read the server-rendered public Esri configuration from JSON rather than
   // embedding Jinja expressions in this static page script. Invalid or absent
@@ -172,7 +182,7 @@ because they currently belong only to the post-race page.
     button.disabled = true;
     fetch(`/races/${encodeURIComponent(raceId)}/race-rider/${encodeURIComponent(raceRiderId)}/confirm-finish`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: csrfJsonHeaders(),
     })
       .then(response => {
         if (!response.ok) throw new Error('Finish confirmation failed.');
@@ -514,7 +524,7 @@ because they currently belong only to the post-race page.
     if (!currentRaceRiderId) return;
     if (!window.confirm('Are you sure? This is a permanent change. Original times will be lost.')) return;
     fetch(`/races/${encodeURIComponent(raceId)}/race-rider/${encodeURIComponent(currentRaceRiderId)}/manual-times`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(buildManualTimesPayload()),
+      method: 'POST', headers: csrfJsonHeaders(), body: JSON.stringify(buildManualTimesPayload()),
     })
       .then(response => {
         if (!response.ok) throw new Error('Manual update failed.');
@@ -554,7 +564,7 @@ because they currently belong only to the post-race page.
       if (!uploadResponse.ok) throw new Error('Upload failed.');
 
       const timingResponse = await fetch(`/races/${encodeURIComponent(raceId)}/race-rider/${encodeURIComponent(currentRaceRiderId)}/manual-times`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(buildManualTimesPayload()),
+        method: 'POST', headers: csrfJsonHeaders(), body: JSON.stringify(buildManualTimesPayload()),
       });
       if (!timingResponse.ok) throw new Error('Timing update failed.');
 

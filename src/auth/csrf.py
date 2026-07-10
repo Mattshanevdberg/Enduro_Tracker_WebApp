@@ -2,9 +2,12 @@
 CSRF protection setup for browser form and JSON POST requests.
 
 CSRF means Cross-Site Request Forgery. Flask-WTF provides the protection layer
-that checks a per-session token on state-changing browser requests. Existing
-legacy forms are migrated gradually, so this module also provides a clear helper
-for temporary blueprint exemptions during the staged auth implementation.
+that checks a per-session token on state-changing browser requests. Browser
+forms should include a hidden csrf_token field, while browser JavaScript POST
+requests should send the same token in the X-CSRFToken header.
+
+Device ingest routes are not browser-session routes, so they stay exempt from
+CSRF and should instead be protected with device/API credentials.
 """
 
 from flask import Blueprint
@@ -29,19 +32,20 @@ def init_csrf(app) -> None:
 
 def exempt_blueprints(*blueprints: Blueprint) -> None:
     """
-    Temporarily exempt existing unconverted blueprints from CSRF enforcement.
+    Exempt non-browser-session blueprints from CSRF enforcement.
 
     Input Args:
       blueprints: Flask Blueprint objects whose routes should not be checked by
-        CSRFProtect yet.
+        CSRFProtect.
 
     Output:
       None. The provided blueprints are registered as CSRF-exempt.
 
     Notes:
-      This is a staged migration helper. New authentication routes should not be
-      exempt; existing forms should be removed from this list as their templates
-      and JavaScript POST calls gain CSRF tokens.
+      This should be used sparingly. Browser form blueprints should normally
+      remain protected. Tracker/device API blueprints may be exempt because
+      they do not use browser cookies and should use API/device authentication
+      instead.
     """
     for blueprint in blueprints:
         csrf.exempt(blueprint)

@@ -4,6 +4,12 @@ Landing and dashboard routes.
 The public landing page is separate from the operational dashboards. Viewers can
 reach the public race dashboard without logging in, while the admin dashboard
 keeps the management controls that used to live on the home page.
+
+Paths
+-----
+GET /                -> Public landing page with view races, signup, and login actions
+GET /dashboard       -> Public active-race dashboard for viewers, riders, and admins
+GET /dashboard-admin -> Admin-only operational dashboard with management controls
 """
 
 from flask import Blueprint, render_template

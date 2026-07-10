@@ -156,7 +156,7 @@ docker compose -p enduro-prod --env-file .env.prod up -d
 - Writes: `app.config["SECRET_KEY"]` plus secure session-cookie settings, the map provider, style, browser API key, map-limit configuration values, and `AUTH_RATE_LIMIT_STORAGE_URL`; initialises Flask-Login, Flask-Limiter, and Flask-WTF CSRF protection on the app.
 - Registers: ingest API routes, auth browser routes, home/dashboard routes, public rider profile routes, rider management, devices, races, and RFID record viewer blueprints.
 - Called from: module import path `src.main:app` for Gunicorn, and the direct-run block at the bottom of the file.
-- Notes: the app now expects `FLASK_SECRET_KEY` to exist in the container environment. If Compose does not pass that value into the `server` service, Gunicorn fails during import with `KeyError: 'FLASK_SECRET_KEY'`. Existing unconverted management blueprints and tracker ingest are temporarily CSRF-exempt so the current app keeps working until their forms/JavaScript requests receive CSRF tokens.
+- Notes: the app now expects `FLASK_SECRET_KEY` to exist in the container environment. If Compose does not pass that value into the `server` service, Gunicorn fails during import with `KeyError: 'FLASK_SECRET_KEY'`. Browser form blueprints are CSRF-protected. The tracker ingest blueprint remains CSRF-exempt because it is used by device/API clients rather than browser-session forms.
 
 ### CORS policy
 - Purpose: Keep Cross-Origin Resource Sharing disabled by default for the server-rendered web app.
@@ -242,18 +242,20 @@ docker compose -p enduro-prod --env-file .env.prod up -d
   - `src.main:create_app`.
 
 ### exempt_blueprints
-- Purpose: Temporarily exempt existing unconverted blueprints from CSRF enforcement during the staged auth migration.
+- Purpose: Exempt non-browser-session blueprints from CSRF enforcement.
 - Reads: Flask Blueprint objects passed by `src.main:create_app`.
 - Writes: CSRF exemption registrations for those blueprints.
 - Returns: None.
 - Called from:
   - `src.main:create_app`.
-- Notes: new authentication routes should not be added to this exemption list. Current exemptions exist only because the existing race/rider/device forms and tracker ingest routes do not yet send CSRF tokens.
+- Notes: browser form blueprints should normally stay protected. The current exemption is for tracker/device ingest, which should use device/API authentication instead of CSRF.
 
 ### Checks
 - Flask app starts with CSRF protection initialised.
-- Existing tracker ingest and unconverted management blueprints remain operational while temporarily exempt.
-- Future non-exempt auth forms must include CSRF tokens; CSRF-less submissions should fail once those routes exist.
+- Browser POST forms include hidden `csrf_token` values.
+- Browser JavaScript POST requests to protected race routes send `X-CSRFToken`.
+- Tracker ingest remains operational while CSRF-exempt.
+- CSRF-less submissions to protected browser routes fail.
 
 ## src/auth/passwords.py
 
@@ -365,6 +367,20 @@ docker compose -p enduro-prod --env-file .env.prod up -d
 - Manual Resend smoke test sends successfully when `RESEND_API_KEY`, `MAIL_FROM`, and `TEST_EMAIL_TO` are configured.
 
 ## src/auth/routes.py
+
+Module header documents:
+- `GET/POST /signup`
+- `GET/POST /login`
+- `POST /logout`
+- `GET/POST /forgot-password`
+- `GET/POST /reset-password/<token>`
+- `GET /admin/users`
+
+Module notes:
+- Viewers remain anonymous and do not have `User` rows.
+- Public signup always creates `role='rider'`.
+- Forgot-password and reset-password flows do not reveal whether an email exists and never email/store the existing password.
+- `/admin/users` is currently an admin-only placeholder route protected with `admin_required`.
 
 ### bp_auth
 - Purpose: Flask Blueprint for browser authentication routes.
@@ -485,6 +501,7 @@ docker compose -p enduro-prod --env-file .env.prod up -d
 - Writes: None.
 - Returns: rendered `placeholder.html`.
 - Route: `/admin/users`.
+- Access: active admin account through `admin_required`.
 - Notes: later this route will allow admins to view users, update roles, activate/deactivate accounts, and reset relevant account flags.
 
 ### Checks
@@ -510,6 +527,9 @@ docker compose -p enduro-prod --env-file .env.prod up -d
 
 ## src/web/rider_profiles.py
 
+Module header documents:
+- `GET /rider`
+
 ### bp_rider_profiles
 - Purpose: Flask Blueprint for public rider profile pages.
 - Reads: None at definition time.
@@ -533,6 +553,26 @@ docker compose -p enduro-prod --env-file .env.prod up -d
 - Writes: None.
 - Returns: True when the user has one of the allowed roles; otherwise False.
 - Notes: this helper keeps role comparison logic in one place for rider/admin route decorators.
+
+### user_can_access_rider_resource
+- Purpose: Check whether a user can access a resource owned by a Rider row.
+- Reads: current user role, active/authenticated state, and linked `user.rider_id`.
+- Writes: None.
+- Returns: True for admins, or for riders whose linked Rider id matches the requested resource owner id.
+- Called from:
+  - `src.web.riders:_can_edit_rider`
+  - `src.auth.decorators:require_rider_resource_access`
+- Notes: this generic helper supports Rider profile ownership, RaceRider entry ownership, and future Rider-owned resources.
+
+### require_rider_resource_access
+- Purpose: Abort unless a user can access a Rider-owned resource.
+- Reads: current user role and linked `user.rider_id`.
+- Writes: None.
+- Returns: None when allowed.
+- Raises: 403 Forbidden when the user is not an admin and does not own the linked Rider resource.
+- Called from:
+  - `src.web.races:edit_race_rider`
+  - `src.web.races:remove_race_rider`
 
 ### active_user_required
 - Purpose: Protect routes that require any logged-in active account.
@@ -663,6 +703,11 @@ docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
 - For risky or destructive migrations, test against a disposable PostgreSQL database before applying them to the main runtime database.
 
 ## src/web/home.py
+
+Module header documents:
+- `GET /`
+- `GET /dashboard`
+- `GET /dashboard-admin`
 
 ### _race_display_data
 - Purpose: Load race rows and add display-friendly datetime values for dashboard templates.
@@ -844,6 +889,7 @@ src/static/js/
 - Reads: `Device` (list view).
 - Writes: `Device` (new row on POST, including optional `epc_id`).
 - Renders: `templates/devices.html`.
+- Access: active admin account through `admin_required`.
 - Called from:
   - `templates/dashboard_admin.html`: "Manage Devices" button (GET).
   - `templates/devices.html`: "Save" button in "Add a new device" form (POST).
@@ -854,6 +900,7 @@ src/static/js/
 - Reads: `Device` (by id).
 - Writes: `Device.device_info` and `Device.epc_id` (on POST).
 - Renders: `templates/device_edit.html`.
+- Access: active admin account through `admin_required`.
 - Called from:
   - `templates/devices.html`: "Edit" link in devices table (GET).
   - `templates/device_edit.html`: "Save" button (POST).
@@ -878,6 +925,7 @@ src/static/js/
 - Reads: `IngestRfid` rows filtered by optional `id`, `epc`, `reader_id`, `ant`, reader datetime range, received datetime range, and `limit`.
 - Writes: None.
 - Renders: `templates/rfid_view.html`.
+- Access: active admin account through `admin_required`.
 - Display: converts `time_stamp_epoch` and `received_at_epoch` to datetimes for the template table.
 - Called from:
   - `templates/dashboard_admin.html`: "View RFID Records" button (GET).
@@ -890,11 +938,35 @@ src/static/js/
 - Reads/Writes: None.
 - Called from: `rider_form` only (internal helper).
 
+### _is_rider_user
+- Purpose: Check whether the current account is a rider account.
+- Reads: current user role.
+- Writes: None.
+- Returns: True for rider users; otherwise False.
+- Called from: `_rider_already_exists`, `_can_edit_rider`, and `rider_form`.
+
+### _rider_already_exists
+- Purpose: Check whether a rider user already has a linked Rider profile.
+- Reads: `current_user.rider_id`.
+- Writes: None.
+- Returns: True when a rider account already has a linked Rider row.
+- Called from: `rider_form`.
+- Notes: this prevents normal riders from using `/riders/new` to create multiple Rider rows for the same login account.
+
+### _can_edit_rider
+- Purpose: Check whether the current user can edit a requested Rider row.
+- Reads: current user role and `current_user.rider_id` through `user_can_access_rider_resource`.
+- Writes: None.
+- Returns: True for admins, or for riders editing their own linked Rider row.
+- Called from: `rider_form`.
+
 ### rider_form (GET/POST `/riders/new` and `/riders/<rider_id>/edit`)
 - Purpose: Create a new rider or edit an existing rider.
-- Reads: `Rider` (list and optional row for editing).
-- Writes: `Rider` (insert or update).
+- Reads: `Rider` (list and optional row for editing), current login user, and linked `User.rider_id` when a rider creates their first profile.
+- Writes: `Rider` (insert or update). When a rider creates their first profile, also writes `User.rider_id` and `User.updated_at`.
 - Renders: `templates/riders_form.html`.
+- Access: active rider or admin account through `rider_required`.
+- Notes: admins can create and edit any Rider row. Riders can create one linked Rider row only, and can edit only their own linked Rider row. A rider who already has a linked profile is redirected from `GET /riders/new` to their own edit page.
 - Called from:
   - `templates/dashboard_admin.html`: "Input Rider Details" button (GET `/riders/new`).
   - `templates/riders_form.html`: "Edit" link in riders table (GET `/riders/<id>/edit`).
@@ -934,6 +1006,7 @@ src/static/js/
 - Reads: Config categories.
 - Writes: None.
 - Renders: `templates/race_form.html`.
+- Access: active admin account through `admin_required`.
 - Called from:
   - `templates/dashboard_admin.html`: "Add New Race" button.
 
@@ -954,6 +1027,7 @@ src/static/js/
 - Reads: None.
 - Writes: None.
 - Renders: `templates/placeholder.html`.
+- Access: active rider or admin account through `rider_required`.
 - Called from:
   - `templates/dashboard.html`: "Enter Race" button.
   - `templates/dashboard_admin.html`: "Enter Race" button.
@@ -964,6 +1038,7 @@ src/static/js/
 - Reads: None.
 - Writes: None.
 - Renders: `templates/placeholder.html`.
+- Access: active admin account through `admin_required`.
 - Called from:
   - `templates/dashboard_admin.html`: "Post Admin" button.
 - Notes: later this should receive the admin timing controls that currently live on the public post-race page.
@@ -1011,6 +1086,7 @@ src/static/js/
 - Reads: `RaceRider`, latest `TrackHist` (for raw text).
 - Writes: `RaceRider.start_time_rfid_epoch`, `RaceRider.finish_time_rfid_epoch`, `RaceRider.finish_time_rfid_confirmed`, `RaceRider.multiple_rfid_flag`, new `TrackHist` row with `updated_at_epoch`.
 - Returns: JSON status.
+- Access: active admin account through `admin_required`.
 - Timezone: inputs must be timezone-naive; values are assumed to be in the configured local timezone (`config.yaml` → `global.timezone`) and converted to UTC before saving.
 - Called from:
   - `templates/post_race.html`: "Manual Edit" button opens modal, modal "Save" and "Upload TXT" trigger JS `fetch`.
@@ -1020,6 +1096,7 @@ src/static/js/
 - Reads: `RaceRider`, `Category`, `Route`.
 - Writes: `RaceRider.finish_time_rfid_confirmed=True` and `RaceRider.multiple_rfid_flag=False`.
 - Returns: JSON status with the refreshed timing payload.
+- Access: active admin account through `admin_required`.
 - Called from:
   - `templates/post_race.html`: "Confirm" timing button next to manual edit.
 
@@ -1028,6 +1105,7 @@ src/static/js/
 - Reads: `Race` (when updating).
 - Writes: `Race` (insert/update).
 - Behavior: parses date/time inputs and converts them to epoch seconds using the configured timezone for naive input.
+- Access: active admin account through `admin_required`.
 - Redirects: to edit page for the saved race.
 - Called from:
   - `templates/race_form.html`: "Save Changes" button.
@@ -1037,6 +1115,7 @@ src/static/js/
 - Reads: `Race`, `Route`, `Category`, `Rider`, `Device`, `RaceRider`.
 - Writes: `Route`/`Category` if missing for the selected category.
 - Renders: `templates/race_form.html`.
+- Access: active admin account through `admin_required`.
 - Called from:
   - `templates/dashboard_admin.html`: "Edit" button in races table.
   - `templates/race_form.html`: category `<select>` `onchange` (GET with `?category=`).
@@ -1046,6 +1125,7 @@ src/static/js/
 - Purpose: Upload a GPX file and store both GPX and GeoJSON on `Route`.
 - Reads: Uploaded file.
 - Writes: `Route.gpx`, `Route.geojson`.
+- Access: active admin account through `admin_required`.
 - Redirects: back to edit page.
 - Called from:
   - `templates/race_form.html`: "Upload GPX" button (file upload form).
@@ -1054,6 +1134,7 @@ src/static/js/
 - Purpose: Remove GPX/GeoJSON for the selected category.
 - Reads: `Route`.
 - Writes: `Route.gpx = None`, `Route.geojson = None`.
+- Access: active admin account through `admin_required`.
 - Redirects: back to edit page.
 - Called from:
   - `templates/race_form.html`: "Remove GPX" button.
@@ -1071,22 +1152,27 @@ src/static/js/
 - Purpose: Add a rider/device entry to a race category.
 - Reads: `Category` (via helper lookup).
 - Writes: `RaceRider` (new row).
+- Access: active admin account through `admin_required`.
 - Redirects: back to edit page.
 - Called from:
   - `templates/race_form.html`: "Save" button in the "Add new rider" row.
 
-### edit_race_rider (POST `/races/<race_id>/riders/<entry_id>/edit`)
+### edit_race_rider (POST `/races/<race_id>/riders/<race_rider_id>/edit`)
 - Purpose: Update device assignment and flags for a race rider entry.
-- Reads: `RaceRider`.
+- Reads: `RaceRider`, `Category`, `Route`, and current login user.
 - Writes: `RaceRider.device_id`, `RaceRider.active`, `RaceRider.recording`.
+- Access: active rider or admin account through `rider_required`. Admins can edit any race entry; riders can edit only entries linked to their own `current_user.rider_id`.
+- Notes: the route verifies that the `race_rider_id` belongs to the requested `race_id` before applying the ownership check.
 - Redirects: back to edit page.
 - Called from:
   - `templates/race_form.html`: "Edit" button in the riders table.
 
-### remove_race_rider (POST `/races/<race_id>/riders/<entry_id>/remove`)
+### remove_race_rider (POST `/races/<race_id>/riders/<race_rider_id>/remove`)
 - Purpose: Remove a rider from the race category.
-- Reads: `RaceRider`.
+- Reads: `RaceRider`, `Category`, `Route`, and current login user.
 - Writes: `RaceRider` (delete).
+- Access: active rider or admin account through `rider_required`. Admins can remove any race entry; riders can remove only entries linked to their own `current_user.rider_id`.
+- Notes: the route verifies that the `race_rider_id` belongs to the requested `race_id` before applying the ownership check.
 - Redirects: back to edit page.
 - Called from:
   - `templates/race_form.html`: "Remove" button (with confirm dialog) in the riders table.
@@ -1554,7 +1640,7 @@ docker compose -p enduro-dev --env-file .env.dev run --rm -e TEST_EMAIL_TO=you@e
   - "Open Website" → external race website URL (if set).
 - Pulls: `race`, `categories`, `selected_category`, `route`, `geojson`, `riders`, `devices`, `race_riders`, `last_device_by_rider`.
 - Pushes: POST save race, upload/remove GPX, add/edit/remove riders.
-- Routes called: `/races/save`, `/races/<id>/edit?category=...`, `/races/<id>/route/upload`, `/races/<id>/route/remove`, `/races/<id>/route/geojson`, `/races/<id>/riders/add`, `/races/<id>/riders/<entry_id>/edit`, `/races/<id>/riders/<entry_id>/remove`.
+- Routes called: `/races/save`, `/races/<id>/edit?category=...`, `/races/<id>/route/upload`, `/races/<id>/route/remove`, `/races/<id>/route/geojson`, `/races/<id>/riders/add`, `/races/<id>/riders/<race_rider_id>/edit`, `/races/<id>/riders/<race_rider_id>/remove`.
 - Embedded scripts:
   - GPX upload validation: native required-field validation blocks an empty file submission with a browser popup; JavaScript supplies the GPX-specific popup text.
   - Shared form/map scripts: auto-submit the category selector and fetch/render the route GeoJSON through `components/forms.js` and `components/maps.js`.

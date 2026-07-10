@@ -38,6 +38,56 @@ def user_has_role(user, allowed_roles) -> bool:
     return user_role in roles
 
 
+def user_can_access_rider_resource(user, rider_id) -> bool:
+    """
+    Check whether a user can access a resource owned by a Rider row.
+
+    Input Args:
+      user: Flask-Login current user object or a User model row.
+      rider_id: Rider primary key that owns the requested resource.
+
+    Output:
+      True when the user is an active admin, or when the user is an active
+      rider whose linked user.rider_id matches the requested rider_id.
+
+    Notes:
+      This helper is intentionally generic. It can protect direct Rider profile
+      edits, RaceRider entries, and any future resource that is owned through a
+      riders.id value.
+    """
+    if user_has_role(user, {"admin"}):
+        return True
+
+    if not user_has_role(user, {"rider"}):
+        return False
+
+    try:
+        requested_rider_id = int(rider_id)
+    except (TypeError, ValueError):
+        return False
+
+    return getattr(user, "rider_id", None) == requested_rider_id
+
+
+def require_rider_resource_access(user, rider_id) -> None:
+    """
+    Abort unless a user can access a Rider-owned resource.
+
+    Input Args:
+      user: Flask-Login current user object or a User model row.
+      rider_id: Rider primary key that owns the requested resource.
+
+    Output:
+      None when access is allowed.
+
+    Raises:
+      403 Forbidden when the user is not an admin and does not own the linked
+      Rider resource.
+    """
+    if not user_can_access_rider_resource(user, rider_id):
+        abort(403)
+
+
 def active_user_required(func):
     """
     Require any logged-in active user before allowing a route to run.

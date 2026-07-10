@@ -4,6 +4,10 @@ Public rider profile routes.
 This module currently provides placeholder routing for the future rider profile
 index. The full page will later show rider profiles and expose edit actions only
 to the linked rider or admins.
+
+Paths
+-----
+GET /rider -> Public rider profile index placeholder
 """
 
 from flask import Blueprint, render_template, url_for

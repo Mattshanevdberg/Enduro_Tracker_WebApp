@@ -82,16 +82,13 @@ def create_app():
     # the shared limiter decorators from src.auth.rate_limits.
     init_limiter(app)
 
-    # Enable CSRF infrastructure now so new browser forms can be protected as
-    # they are introduced. Existing management forms and tracker APIs do not
-    # include CSRF tokens yet, so those blueprints are temporarily exempted
-    # below and will be removed from the exemption list as templates are migrated.
+    # Enable CSRF infrastructure for browser forms and browser-originated JSON
+    # POST requests. The tracker ingest blueprint stays exempt because devices
+    # do not use browser sessions; device/API authentication should be handled
+    # with device tokens rather than CSRF.
     init_csrf(app)
     exempt_blueprints(
         ingest_bp,
-        bp_riders,
-        bp_devices,
-        bp_races,
     )
 
     # Root endpoint - decorates the following function, telling Flask to invoke it for GET requests to the root path

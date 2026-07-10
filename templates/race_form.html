@@ -27,6 +27,7 @@
   <!-- Left: Race fields -->
   <div class="race-panel">
     <form method="post" action="{{ url_for('races.save_race') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
       {% if race %}<input type="hidden" name="race_id" value="{{ race.id }}"/>{% endif %}
 
       <label for="name">Race Name *</label>
@@ -79,6 +80,7 @@
     {% if race %}
       <!-- Upload GPX for current category -->
       <form id="gpx-upload-form" method="post" action="{{ url_for('races.upload_gpx', race_id=race.id) }}" enctype="multipart/form-data" class="row race-gpx-upload">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
         <input type="hidden" name="category" value="{{ selected_category }}"/>
         <input id="gpx-file" type="file" name="gpx_file" accept=".gpx" required />
         <button class="btn" type="submit">Upload GPX</button>
@@ -86,6 +88,7 @@
 
       <!-- Remove GPX -->
       <form method="post" action="{{ url_for('races.remove_gpx', race_id=race.id) }}" class="row race-gpx-remove">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
         <input type="hidden" name="category" value="{{ selected_category }}"/>
         <button class="btn" type="submit">Remove GPX</button>
       </form>
@@ -112,6 +115,7 @@
     {% if race %}
       <!-- Add new rider to this race/category -->
       <form method="post" action="{{ url_for('races.add_race_rider', race_id=race.id) }}" class="row race-rider-add">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
         <input type="hidden" name="category" value="{{ selected_category }}"/>
 
         <!-- Rider selection with datalist auto-complete -->
@@ -158,7 +162,8 @@
         <tbody>
           {% for row in race_riders %}
             <tr>
-              <form method="post" action="{{ url_for('races.edit_race_rider', race_id=race.id, entry_id=row.id) }}">
+              <form method="post" action="{{ url_for('races.edit_race_rider', race_id=race.id, race_rider_id=row.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
                 <td>{{ row.rider.name }}</td>
                 <td>
                   <input name="device_id" value="{{ row.device_id }}" list="device_list"/>
@@ -171,7 +176,8 @@
                 </td>
               </form>
               <td>
-                <form method="post" action="{{ url_for('races.remove_race_rider', race_id=race.id, entry_id=row.id) }}" onsubmit="return confirm('Remove rider from race?');">
+                <form method="post" action="{{ url_for('races.remove_race_rider', race_id=race.id, race_rider_id=row.id) }}" onsubmit="return confirm('Remove rider from race?');">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
                   <input type="hidden" name="category" value="{{ selected_category }}"/>
                   <button class="btn" type="submit">Remove</button>
                 </form>
