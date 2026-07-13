@@ -741,7 +741,14 @@ class TrackHist(Base):
 
 def init_db() -> None:
     """
-    Create tables if they do not exist.
+    Manually create tables if they do not exist.
+
+    Notes:
+      This is a legacy/manual development helper only. Normal application,
+      worker, and production startup must not call this function because schema
+      changes are managed by Alembic migrations. Calling create_all() during
+      runtime can create tables outside migration history and make Alembic
+      autogenerate miss required migrations.
     """
 
     Base.metadata.create_all(bind=engine)

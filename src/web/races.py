@@ -35,7 +35,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from src.auth.decorators import admin_required, require_rider_resource_access, rider_required
 from src.db.models import (
-    SessionLocal, init_db,
+    SessionLocal,
     Race, Route, Category, Rider, Device, RaceRider, TrackCache, TrackHist
 )
 from src.db.models import config as app_config  # already loaded from config.yaml
