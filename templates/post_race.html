@@ -65,7 +65,7 @@
         <div class="map-wrapper">
           <div id="map" class="map-canvas" data-race-id="{{ race.id }}" data-category="{{ selected_category or '' }}"></div>
         </div>
-        {# This API key is a referrer-restricted public browser credential, not a server secret. #}
+        {# Safe bootstrap only. Esri config/key must come from /api/map/config-status after quota checks. #}
         <script id="post-race-map-config" type="application/json">{{ public_map_config | tojson }}</script>
         <div class="map-toolbar">
           <div class="map-size-control">

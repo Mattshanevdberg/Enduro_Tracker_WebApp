@@ -28,7 +28,7 @@ POST /races/<race_id>/riders/<race_rider_id>/remove  -> Rider/admin delete an ex
 from datetime import datetime, timezone
 from typing import Optional
 
-from flask import Blueprint, current_app, request, render_template, redirect, url_for, Response, jsonify
+from flask import Blueprint, request, render_template, redirect, url_for, Response, jsonify
 from flask_login import current_user
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
@@ -55,25 +55,27 @@ bp_races = Blueprint("races", __name__, url_prefix="/races")
 ALLOWED_CATEGORIES = app_config.get("categories", ["Professional", "Open", "Junior"])
 
 
-def _post_race_public_map_config() -> dict:
+def _post_race_map_bootstrap_config(race_id: int) -> dict:
     """
-    Build the browser-safe map configuration for the post-race page.
+    Build browser-safe map bootstrap configuration for the post-race page.
 
-    Only the Esri API key is intentionally exposed because it authenticates a
-    public browser basemap request. Billing limits and future administrative
-    controls remain server-side; a later usage guard will set satellite_allowed
-    to False when it must force the OpenStreetMap fallback.
+    Input Args:
+      race_id: race id for the page being rendered.
+
+    Output:
+      Dictionary containing only safe frontend wiring values.
+
+    Notes:
+      This deliberately does not include the Esri API key, provider, or style.
+      The browser must call /api/map/config-status to receive Esri config, and
+      that route only returns the browser-facing key when quota checks allow it.
     """
-    provider = current_app.config.get("MAP_PROVIDER", "")
-    style = current_app.config.get("MAP_STYLE", "")
-    api_key = current_app.config.get("ARCGIS_API_KEY", "")
-    is_esri_satellite_configured = provider == "esri" and style == "arcgis/imagery" and bool(api_key)
-
     return {
-        "provider": provider,
-        "style": style,
-        "apiKey": api_key if is_esri_satellite_configured else "",
-        "satelliteAllowed": is_esri_satellite_configured,
+        "configStatusUrl": url_for("map_tile_quota.map_config_status"),
+        "tileUsageUrl": url_for("map_tile_quota.map_tile_usage"),
+        "raceId": race_id,
+        "pagePath": request.path,
+        "satelliteUnavailableMessage": "Satellite view is currently unavailable for this account, please try again later.",
     }
 
 
@@ -296,7 +298,7 @@ def post_race(race_id: int):
             geojson=geojson,
             riders=riders_for_category,
             has_multiple_rfid_flag=any(r.get("multiple_rfid_flag") for r in riders_for_category),
-            public_map_config=_post_race_public_map_config(),
+            public_map_config=_post_race_map_bootstrap_config(race_id),
         )
     finally:
         session.close()

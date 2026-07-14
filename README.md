@@ -137,7 +137,7 @@ docker compose -p enduro-prod --env-file .env.prod up -d
 - Core PostgreSQL values: `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_VOLUME_NAME`.
 - Public access values: `TUNNEL_TOKEN`, `APP_HOSTNAME`, and `APP_HOST_PORT`.
 - Flask secret values: `FLASK_SECRET_KEY` must be passed into the `server` container explicitly through the Compose `environment` section so Flask can read it through `os.environ`.
-- Map values: `MAP_PROVIDER`, `MAP_STYLE`, `ARCGIS_API_KEY`, and the map-limit variables must also be passed explicitly into the `server` container. Flask uses the provider/style/key only to render the public post-race map configuration; later usage controls will read the limits server-side. The referrer-restricted Esri browser API key is intentionally exposed only on the post-race page and must never be committed.
+- Map values: `MAP_PROVIDER`, `MAP_STYLE`, `ARCGIS_API_KEY`, and the map-limit variables must also be passed explicitly into the `server` container. Flask uses the provider/style/key in the map quota API only; the post-race HTML receives a safe bootstrap config and must not render the Esri key directly. The referrer-restricted Esri browser API key is returned only by `/api/map/config-status` when quota checks allow satellite imagery.
 - Auth email and security values: `RESEND_API_KEY`, `MAIL_FROM`, `APP_PUBLIC_BASE_URL`, `AUTH_TOKEN_PEPPER`, `AUTH_PASSWORD_MIN_LENGTH`, `AUTH_RATE_LIMIT_STORAGE_URL`, `SESSION_COOKIE_SECURE`, and `SESSION_COOKIE_SAMESITE` are passed into the `server` container for the authentication workstream. Resend is used only for forgot-password reset links in the current plan; signup email verification is intentionally not enabled.
 - Notes: changing PostgreSQL bootstrap variables on an already-initialised volume does not reconfigure an existing database cluster. Clean separation requires a fresh volume name per environment or an explicit manual database/user migration.
 
@@ -152,9 +152,9 @@ docker compose -p enduro-prod --env-file .env.prod up -d
 
 ### create_app
 - Purpose: Flask application factory that creates the app instance, loads the Flask secret key, configures browser security helpers, and attaches all API and web blueprints.
-- Reads: `FLASK_SECRET_KEY`, the `MAP_*` map configuration values, `ARCGIS_API_KEY`, and the auth email/security configuration values from the container runtime environment; `config.yaml` for host and port globals; `src.auth.login.login_manager` for browser session setup; `src.auth.rate_limits` for Redis-backed rate limiting; `src.auth.csrf` helpers for CSRF setup; `src.auth.routes.bp_auth` for signup and future auth pages; `src.web.rider_profiles.bp_rider_profiles` for the future rider profile page.
+- Reads: `FLASK_SECRET_KEY`, the `MAP_*` map configuration values, `ARCGIS_API_KEY`, and the auth email/security configuration values from the container runtime environment; `config.yaml` for host and port globals; `src.auth.login.login_manager` for browser session setup; `src.auth.rate_limits` for Redis-backed rate limiting; `src.auth.csrf` helpers for CSRF setup; `src.auth.routes.bp_auth` for signup and future auth pages; `src.web.rider_profiles.bp_rider_profiles` for the future rider profile page; `src.web.map_tile_quota.bp_map_tile_quota` for map tile quota admin/config routes.
 - Writes: `app.config["SECRET_KEY"]` plus secure session-cookie settings, the map provider, style, browser API key, map-limit configuration values, and `AUTH_RATE_LIMIT_STORAGE_URL`; initialises Flask-Login, Flask-Limiter, and Flask-WTF CSRF protection on the app.
-- Registers: ingest API routes, auth browser routes, home/dashboard routes, public rider profile routes, rider management, devices, races, and RFID record viewer blueprints.
+- Registers: ingest API routes, auth browser routes, home/dashboard routes, public rider profile routes, rider management, devices, races, RFID record viewer, and map tile quota blueprints.
 - Called from: module import path `src.main:app` for Gunicorn, and the direct-run block at the bottom of the file.
 - Notes: the app now expects `FLASK_SECRET_KEY` to exist in the container environment. If Compose does not pass that value into the `server` service, Gunicorn fails during import with `KeyError: 'FLASK_SECRET_KEY'`. Browser form blueprints are CSRF-protected. The tracker ingest blueprint remains CSRF-exempt because it is used by device/API clients rather than browser-session forms. Runtime table creation is intentionally disabled; run Alembic migrations before starting the server or workers.
 
@@ -660,6 +660,400 @@ Module header documents:
   - `src.auth.mail` for `APP_PUBLIC_BASE_URL`, `RESEND_API_KEY`, and `MAIL_FROM`.
 - Notes: shared environment helpers should live here so auth, map, worker, and future admin modules do not each create their own local parsing functions.
 
+## Python Layering Rule
+
+### utils / services / web separation
+- Purpose: keep helper logic organised by responsibility so route files stay thin and reusable logic does not become tied to Flask.
+- `src/utils/*`: pure or low-level reusable helpers. These should avoid Flask route concerns and should not render templates. Good examples: Redis key construction, browser cookie id mechanics, time parsing, GPX conversion, and validation helpers.
+- `src/services/*`: business/application logic that coordinates models, durable state, and domain rules. Good examples: billing-cycle calculation, current quota row creation, quota payload building, and block-reason decisions.
+- `src/web/*`: Flask route/controller layer only. This layer should parse requests, call services/utils, enforce decorators, return `render_template()` or `jsonify()`, and keep route-specific HTTP glue.
+- Notes: when adding new map tile quota functions, first check whether the function belongs in an existing utility or service module before adding another route-local helper. This keeps the Esri quota work aligned with the system design goal of controlling tile-provider costs without mixing provider logic into every route.
+
+## src/utils/map_tile_quota.py
+
+### Overall description
+- Purpose: Provide shared helper logic for Esri/satellite map tile quota enforcement, browser identification, Redis short-term counters, Redis temporary blocks, monthly quota state, and database usage summaries.
+- Contains:
+  - `_timeout_seconds`: convert timeout minutes to seconds for Redis expiry.
+  - `_normalise_tile_delta`: validate tile deltas before counting them.
+  - `_minute_bucket`: round a datetime down to its minute bucket.
+  - `_window_bucket_times`: list the minute buckets in the rolling usage window.
+  - `_is_safe_browser_cookie_id`: check browser cookie ids before reusing them.
+  - `generate_browser_cookie_id`: create a new anonymous browser identifier.
+  - `get_or_create_browser_cookie_id`: read or create the anonymous browser cookie.
+  - `browser_count_key`: build the Redis key for one browser/minute tile bucket.
+  - `browser_block_key`: build the Redis key for a browser's temporary block flag.
+  - `_redis_value_to_int`: safely parse Redis values into integers.
+  - `get_browser_tile_count`: sum browser tile buckets inside the rolling window.
+  - `increment_browser_tile_count`: add a tile delta to the current minute bucket.
+  - `is_browser_over_tile_limit`: compare rolling browser usage against the tile limit.
+  - `_browser_window_count_keys`: build current rolling-window Redis count keys.
+  - `is_browser_blocked`: check whether a browser currently has a block flag.
+  - `set_browser_block`: set a temporary browser block in Redis.
+  - `reset_browser_block`: remove a browser block and optionally current window counters.
+  - `_override_is_current`: check whether a monthly quota override is still active.
+  - `is_monthly_blocked`: decide whether monthly/global quota state blocks satellite use.
+  - `set_monthly_hard_stop`: set or clear the monthly hard-stop flag.
+  - `reset_monthly_hard_stop`: clear the monthly hard-stop flag.
+  - `record_tile_delta`: apply one tile delta to session and monthly DB rows.
+- Notes: this matches the system design requirement to control tile-provider cost exposure while still allowing GPX/race viewing to continue with fallback map behavior.
+
+### get_or_create_browser_cookie_id
+- Purpose: Read an existing anonymous browser id cookie or create a new one.
+- Reads: Flask request cookies.
+- Writes: browser cookie on the response when a new id is needed.
+- Returns: browser cookie id.
+- Called from:
+  - Future map config/status and tile usage routes.
+- Notes: the cookie stores only an identifier; usage counts remain server-side in Redis/database stores.
+
+### browser_count_key
+- Purpose: Build the Redis key for one browser/minute tile count bucket.
+- Reads: browser cookie id and optional bucket datetime.
+- Writes: None.
+- Returns: Redis key string.
+- Called from: `get_browser_tile_count`, `increment_browser_tile_count`, and `reset_browser_block`.
+
+### browser_block_key
+- Purpose: Build the Redis key for a browser's temporary satellite block.
+- Reads: browser cookie id.
+- Writes: None.
+- Returns: Redis key string.
+- Called from: `is_browser_blocked`, `set_browser_block`, and `reset_browser_block`.
+
+### get_browser_tile_count
+- Purpose: Sum the Redis browser tile buckets inside the rolling usage window.
+- Reads: Redis count keys for the current minute and previous minutes inside `MAP_USER_LIMIT_TIMEOUT_MIN`.
+- Writes: None.
+- Returns: integer count for the rolling window.
+- Notes: this is minute-granularity rolling-window counting, not one counter that resets after inactivity.
+
+### increment_browser_tile_count
+- Purpose: Add a browser-reported tile delta to the current minute Redis bucket.
+- Reads: current minute bucket key and the other bucket keys inside the rolling window.
+- Writes: current minute bucket key and expiry.
+- Returns: updated browser count inside the rolling window.
+- Notes: each bucket expires after `MAP_USER_LIMIT_TIMEOUT_MIN` plus a small buffer. Enforcement is based on the sum of buckets inside the current window, so older usage naturally stops counting once it falls outside the window.
+
+### is_browser_over_tile_limit
+- Purpose: Compare rolling browser usage against `MAP_TILE_USER_LIMIT`.
+- Reads: browser bucket keys inside the current rolling window.
+- Writes: None.
+- Returns: boolean.
+- Notes: this is the preferred browser-limit check for automatic Esri fallback because it allows satellite usage again once the rolling-window total falls below the limit.
+
+### is_browser_blocked
+- Purpose: Check whether the browser currently has a Redis block key.
+- Reads: Redis block key.
+- Writes: None.
+- Returns: boolean.
+
+### set_browser_block
+- Purpose: Set a temporary Redis block key for a browser.
+- Reads: configured timeout minutes.
+- Writes: Redis block key with expiry and reason value.
+- Returns: None.
+
+### reset_browser_block
+- Purpose: Manually release a browser block.
+- Reads: browser cookie id.
+- Writes: deletes Redis block key and optionally deletes current rolling-window bucket keys.
+- Returns: None.
+- Called from:
+  - Future admin map tile quota reset route.
+
+### is_monthly_blocked
+- Purpose: Decide whether monthly/global quota state should prevent Esri config release.
+- Reads: `MapTileMonthlyQuota`-like row, current role, admin flag, and optional current time.
+- Writes: None.
+- Returns: boolean.
+- Notes: missing quota state fails closed for non-admin users.
+
+### set_monthly_hard_stop
+- Purpose: Set or clear the monthly hard-stop flag.
+- Reads: `MapTileMonthlyQuota`-like row and optional current time.
+- Writes: `hard_stop_active`, `hard_stop_triggered_at`, and `updated_at`.
+- Returns: None.
+
+### reset_monthly_hard_stop
+- Purpose: Clear the monthly hard-stop flag.
+- Reads: `MapTileMonthlyQuota`-like row and optional current time.
+- Writes: `hard_stop_active` and `updated_at`.
+- Returns: None.
+
+### record_tile_delta
+- Purpose: Apply one accepted browser tile delta to both the usage-session row and monthly quota row.
+- Reads: `MapTileUsageSession`-like row, `MapTileMonthlyQuota`-like row, tile delta, and optional current time.
+- Writes: `usage_session.estimated_tiles_loaded`, `usage_session.session_last_seen_at`, `monthly_quota.estimated_tiles_used`, and `updated_at` fields.
+- Returns: normalised tile delta.
+- Notes: callers should pass deltas, not cumulative totals, to avoid double counting.
+
+### Checks
+- Browser count bucket keys expire using `MAP_USER_LIMIT_TIMEOUT_MIN` plus a small cleanup buffer.
+- Browser block keys expire using `MAP_USER_LIMIT_TIMEOUT_MIN`.
+- Browser tile counts are calculated from the current rolling window, not from one inactivity-refreshed counter.
+- Tile deltas increment Redis count and database summary totals once.
+- Reset removes the block key and, by default, current rolling-window count bucket keys.
+- Monthly hard stop blocks satellite unless an active override is present.
+
+## src/services/__init__.py
+
+- Purpose: Mark `src.services` as the business-service package for application/domain logic.
+- Reads: None.
+- Writes: None.
+- Functions: None.
+- Notes: service modules sit between Flask routes and low-level utilities/database models. They should contain business rules but should not render templates or define routes.
+
+## src/services/map_tile_quota.py
+
+### Overall description
+- Purpose: Provide map tile quota business/service helpers for Esri billing-cycle, durable quota state, usage summaries, browser block history, and quota audit events.
+- Contains:
+  - `current_billing_month`: calculate the 25th-to-25th billing-cycle key.
+  - `quota_defaults_from_config`: convert map-limit config values into quota defaults.
+  - `get_or_create_current_quota`: load/create the current billing-cycle quota row.
+  - `generate_usage_session_key`: create a public usage-session identifier.
+  - `get_or_create_usage_session`: load/create a summarized browser/page usage row.
+  - `update_quota_threshold_flags`: set warning/hard-stop timestamps and flags.
+  - `apply_tile_usage_delta`: apply a tile delta and update threshold flags.
+  - `record_browser_block`: record a browser block for admin visibility.
+  - `release_browser_blocks`: mark active browser block rows released.
+  - `set_viewers_only_blocked`: block/unblock anonymous viewer satellite access.
+  - `set_global_hard_stop`: manually set/clear global hard-stop state.
+  - `set_monthly_override`: enable a temporary monthly hard-stop override.
+  - `clear_monthly_override`: disable a monthly hard-stop override.
+  - `record_quota_audit_event`: write admin/system quota actions to auth_audit_events.
+  - `monthly_block_reason`: convert quota state into a frontend-safe block reason.
+  - `quota_payload`: convert a quota row into JSON/admin display data.
+- Notes: Redis rolling-window mechanics remain in `src.utils.map_tile_quota`; Flask request/response handling remains in `src.web.map_tile_quota`.
+
+### current_billing_month
+- Purpose: Calculate the current Esri billing-cycle month key.
+- Reads: current UTC date, or supplied test datetime.
+- Writes: None.
+- Returns: `YYYY-MM` key for the cycle starting on the 25th.
+- Notes: dates from the 1st to the 24th belong to the previous cycle-start month.
+
+### quota_defaults_from_config
+- Purpose: Convert map-limit configuration into defaults for a new monthly quota row.
+- Reads: config dictionary values for `monthly_limit`, `warning_threshold`, and `hard_stop_threshold`.
+- Writes: None.
+- Returns: dictionary of normalised quota defaults.
+
+### get_or_create_current_quota
+- Purpose: Load or create the `MapTileMonthlyQuota` row for the active 25th-to-25th billing cycle.
+- Reads: `map_tile_monthly_quota` through the provided SQLAlchemy session.
+- Writes: a new `MapTileMonthlyQuota` row when one does not exist for the current cycle/provider.
+- Returns: `MapTileMonthlyQuota` row.
+- Notes: this keeps config-status fail-safe decisions tied to durable monthly quota state.
+
+### generate_usage_session_key
+- Purpose: Create a browser/page usage-session identifier.
+- Reads: secure random source.
+- Writes: None.
+- Returns: URL-safe token.
+
+### get_or_create_usage_session
+- Purpose: Load an existing usage session by `session_key`, or create a summarized browser/page usage row.
+- Reads: `map_tile_usage_sessions` through the provided SQLAlchemy session.
+- Writes: a new `MapTileUsageSession` row when no valid session exists.
+- Returns: `MapTileUsageSession` row.
+
+### update_quota_threshold_flags
+- Purpose: Set warning and hard-stop flags after monthly usage changes.
+- Reads: `estimated_tiles_used`, `warning_threshold`, and `hard_stop_threshold`.
+- Writes: `warning_triggered_at`, `hard_stop_active`, `hard_stop_triggered_at`, and `updated_at` when thresholds are crossed.
+- Returns: None.
+
+### apply_tile_usage_delta
+- Purpose: Apply one tile delta to session/monthly totals and update threshold flags.
+- Reads: `MapTileUsageSession`, `MapTileMonthlyQuota`, and tile delta.
+- Writes: usage-session total, monthly estimated total, last-seen/update timestamps, warning state, and hard-stop state.
+- Returns: normalised tile delta.
+
+### record_browser_block
+- Purpose: Record browser over-limit state for admin visibility.
+- Reads: active `map_tile_browser_blocks` rows for the browser/reason.
+- Writes: new or updated `MapTileBrowserBlock` row.
+- Returns: `MapTileBrowserBlock` row.
+- Notes: Redis rolling-window counting remains the enforcement source; this DB row gives admins something visible/resettable.
+
+### release_browser_blocks
+- Purpose: Mark active browser block rows as released.
+- Reads: active `map_tile_browser_blocks` rows for the browser.
+- Writes: `released_at`, `released_by_user_id`, `release_reason`, and `updated_at`.
+- Returns: count of released rows.
+
+### set_viewers_only_blocked
+- Purpose: Block/unblock anonymous viewer satellite access.
+- Reads: desired boolean state.
+- Writes: `viewers_only_blocked` and `updated_at`.
+- Returns: None.
+
+### set_global_hard_stop
+- Purpose: Manually set or clear global hard-stop state.
+- Reads: desired boolean state.
+- Writes: `hard_stop_active`, optionally `hard_stop_triggered_at`, and `updated_at`.
+- Returns: None.
+
+### set_monthly_override
+- Purpose: Enable a temporary monthly hard-stop override.
+- Reads: override duration and optional reason.
+- Writes: `override_active`, `override_until`, `override_reason`, and `updated_at`.
+- Returns: None.
+
+### clear_monthly_override
+- Purpose: Disable the active monthly override.
+- Reads: current quota row.
+- Writes: `override_active`, `override_until`, `override_reason`, and `updated_at`.
+- Returns: None.
+
+### record_quota_audit_event
+- Purpose: Write map quota admin/system actions to `auth_audit_events`.
+- Reads: actor user id, action name, and safe JSON metadata.
+- Writes: `AuthAuditEvent` row.
+- Returns: `AuthAuditEvent` row.
+
+### monthly_block_reason
+- Purpose: Convert monthly quota state into a frontend-safe fallback reason.
+- Reads: current quota row, role, and admin flag.
+- Writes: None.
+- Returns: reason string such as `monthly_limit` or `viewers_disabled`, or None when not blocked.
+
+### quota_payload
+- Purpose: Convert a monthly quota row into JSON/admin display data.
+- Reads: `MapTileMonthlyQuota` row fields.
+- Writes: None.
+- Returns: dictionary safe to expose to the browser.
+
+### Checks
+- Billing cycle uses the 25th-to-25th rule.
+- Missing quota rows are created with environment-derived limits.
+- Tile deltas update usage session and monthly quota totals once.
+- Monthly hard-stop is activated when the hard-stop threshold is crossed.
+- Browser block rows are visible/releasable for admins.
+- Admin quota actions are captured in `auth_audit_events`.
+
+## src/web/map_tile_quota.py
+
+Module header documents:
+- `GET /admin/map_tile_quota`
+- `GET /api/map/config-status`
+- `POST /api/map/tile-usage`
+- `POST /admin/map_tile_quota/browser/<browser_cookie_id>/reset`
+- `POST /admin/map_tile_quota/global-toggle`
+- `POST /admin/map_tile_quota/monthly-override`
+- `POST /admin/map_tile_quota/monthly-override/clear`
+
+### bp_map_tile_quota
+- Purpose: Flask Blueprint for map tile quota admin and browser map configuration routes.
+- Reads: None at definition time.
+- Writes: route registration for all map quota routes.
+- Called from:
+  - `src.main:create_app`, where the blueprint is registered on the Flask app.
+- Notes: admin routes use `admin_required`; public config/usage routes remain anonymous so viewer maps can load and report usage.
+
+### _config_int
+- Purpose: Read integer map-limit values from Flask app configuration.
+- Reads: Flask `current_app.config`.
+- Writes: None.
+- Returns: parsed integer or a safe default.
+
+### _map_quota_config
+- Purpose: Gather map quota defaults from Flask configuration for the service layer.
+- Reads: `MAP_TILE_MONTHLY_LIMIT`, `MAP_TILE_WARNING_THRESHOLD`, and `MAP_TILE_HARD_STOP_THRESHOLD` from Flask config.
+- Writes: None.
+- Returns: dictionary containing quota default values.
+
+### _get_redis_client
+- Purpose: Create/reuse the Redis client used for browser block checks.
+- Reads: `AUTH_RATE_LIMIT_STORAGE_URL` from Flask app config.
+- Writes: `current_app.extensions["map_tile_quota_redis"]` when the client is first created.
+- Returns: Redis client.
+- Raises: `RuntimeError` if Redis configuration is missing.
+- Notes: this stays in the web layer because it uses Flask `current_app` extension storage.
+
+### _current_browser_role
+- Purpose: Convert Flask-Login state into a quota role snapshot.
+- Reads: `current_user`.
+- Writes: None.
+- Returns: tuple of role string and admin boolean.
+
+### _current_user_id
+- Purpose: Return the current logged-in user id for usage analytics/admin audit events.
+- Reads: `current_user`.
+- Writes: None.
+- Returns: user id or None.
+
+### _safe_int
+- Purpose: Parse optional integer request values.
+- Reads: submitted request value.
+- Writes: None.
+- Returns: parsed integer or default.
+
+### _hash_request_value
+- Purpose: Hash request metadata before storing it in usage analytics.
+- Reads: raw metadata such as user-agent or IP.
+- Writes: None.
+- Returns: SHA-256 hex digest or None.
+
+### admin_map_tile_quota (GET `/admin/map_tile_quota`)
+- Purpose: Render the admin map tile quota management page.
+- Reads: current quota row through `src.services.map_tile_quota`, recent unreleased `MapTileBrowserBlock` rows, and Redis connectivity status.
+- Writes: creates the current billing-cycle quota row if missing.
+- Renders: `templates/map_tile_quota.html`.
+- Access: protected with `admin_required`.
+
+### map_config_status (GET `/api/map/config-status`)
+- Purpose: Tell the frontend whether Esri satellite config may be released or whether it must fall back to OpenStreetMap.
+- Reads: browser cookie, Redis browser block/rolling-window state, current quota row through `src.services.map_tile_quota`, current role, and map provider config.
+- Writes: anonymous browser id cookie when missing; creates the current billing-cycle quota row if missing.
+- Returns: JSON containing `satelliteAllowed`, provider/fallback info, reason, role, rolling browser count, quota status, and Esri config only when allowed.
+
+### map_tile_usage (POST `/api/map/tile-usage`)
+- Purpose: Record browser tile deltas and enforce browser/monthly quota state.
+- Reads: JSON `tiles_delta`, optional `race_id`, optional `page_path`, optional `session_key`, browser cookie, Redis rolling-window state, current quota row, current role, and map limits.
+- Rate limit: `120 per minute` through Flask-Limiter/Redis.
+- Writes: browser id cookie when missing, Redis minute bucket count, `MapTileUsageSession`, `MapTileMonthlyQuota`, `MapTileBrowserBlock` when browser limit is exceeded, and threshold flags when crossed.
+- Returns: JSON containing updated satellite/fallback state, usage session key, rolling browser count, and quota payload.
+- Notes: this route expects browser JavaScript to send the CSRF token because it is a browser POST.
+
+### reset_browser_quota (POST `/admin/map_tile_quota/browser/<browser_cookie_id>/reset`)
+- Purpose: Admin reset for one browser's rolling-window quota state.
+- Reads: browser cookie id path parameter and current admin user.
+- Writes: clears Redis rolling-window bucket keys, releases active DB block rows, and records an audit event.
+- Returns: redirect to `/admin/map_tile_quota`.
+- Access: protected with `admin_required`.
+
+### global_toggle (POST `/admin/map_tile_quota/global-toggle`)
+- Purpose: Admin update for viewer-only block and global hard-stop flags.
+- Reads: submitted form values and current quota row.
+- Writes: quota flags and audit event.
+- Returns: redirect to `/admin/map_tile_quota`.
+- Access: protected with `admin_required`.
+
+### monthly_override (POST `/admin/map_tile_quota/monthly-override`)
+- Purpose: Admin enables a temporary monthly hard-stop override.
+- Reads: submitted duration/reason and current quota row.
+- Writes: override fields and audit event.
+- Returns: redirect to `/admin/map_tile_quota`.
+- Access: protected with `admin_required`.
+
+### clear_monthly_override_route (POST `/admin/map_tile_quota/monthly-override/clear`)
+- Purpose: Admin clears the active monthly hard-stop override.
+- Reads: current quota row.
+- Writes: override fields and audit event.
+- Returns: redirect to `/admin/map_tile_quota`.
+- Access: protected with `admin_required`.
+
+### Checks
+- All seven map quota routes are registered.
+- Admin routes are protected by `admin_required`.
+- Config-status sets the anonymous browser id cookie when missing.
+- Config-status does not release Esri config when Redis, quota, monthly, browser, or provider checks block satellite usage.
+- Tile usage POST updates Redis rolling-window state and DB usage/quota state.
+- Billing cycle uses the 25th-to-25th service-layer rule.
+
 ## Alembic Migration Workflow
 
 ### Current baseline
@@ -862,10 +1256,10 @@ src/static/js/
 - Purpose: Record the current incremental JavaScript migration state.
 - Current state: `src/static/js/components/forms.js`, `src/static/js/components/maps.js`, `src/static/js/pages/race-form.js`, and `src/static/js/pages/post-race.js` exist. Templates load their required component files before their page file.
 - `components/forms.js`: contains shared `data-auto-submit` select handling used by the category controls in `templates/race_form.html` and `templates/post_race.html`.
-- `components/maps.js`: contains shared Leaflet map creation, selected-category route fetching, GeoJSON layer creation, and map-bounds fitting used by the race form and post-race pages.
-- `components/maps.js`: retains the OpenStreetMap base-layer helper and adds Esri satellite attach/remove helpers. The race form uses the existing OSM default. The post-race page creates an empty map, fits its selected route or rider track first, then attaches the configured basemap so it requests only tiles near the visible course. After fitting the selected route it limits panning and minimum zoom to bounds padded by 25% on every side. It will use the retained OSM layer whenever the supplied configuration does not allow satellite imagery.
+- `components/maps.js`: contains shared Leaflet map creation, selected-category route fetching, GeoJSON layer creation, map-bounds fitting, basemap switching, and Esri tile-usage reporting helpers used by the race form and post-race pages.
+- `components/maps.js`: retains the OpenStreetMap base-layer helper and adds Esri satellite attach/remove helpers. The race form uses the existing OSM default. The post-race page creates an empty map, fits its selected route or rider track first, then attaches the backend-approved basemap so it requests only tiles near the visible course. After fitting the selected route it limits panning and minimum zoom to bounds padded by 25% on every side. It will use the retained OSM layer whenever `/api/map/config-status` does not allow satellite imagery. When Esri is attached, `createEsriTileUsageReporter` counts newly observed Esri tile resources and posts batched `tiles_delta` values to `/api/map/tile-usage`.
 - `pages/race-form.js`: contains race-form-only GPX upload validation and rider/device auto-fill behaviour. It uses the shared form/map helpers for category auto-submit and route preview. The GPX input uses native required-field validation so an empty upload is blocked before navigation even when JavaScript is unavailable; the script supplies the GPX-specific text for the browser validation popup. The script reads the race id and category from `#map` data attributes and the rider/device mapping from the `#last-device-by-rider-data` JSON data node.
-- `pages/post-race.js`: contains post-race-only live track/timing polling, track overlay controls, map size preferences, finish confirmation, and the manual timing/TXT upload modal. It reads its browser-safe map configuration from `#post-race-map-config`, fits the route before attaching the base layer, and uses the shared provider helper for the satellite/OSM decision.
+- `pages/post-race.js`: contains post-race-only live track/timing polling, track overlay controls, map size preferences, finish confirmation, Esri tile-usage reporter startup, and the manual timing/TXT upload modal. It reads safe bootstrap endpoint/page configuration from `#post-race-map-config`, fits the route before attaching the base layer, fetches `/api/map/config-status`, and only uses Esri satellite imagery when that response allows it. If the backend blocks satellite access, the tile-usage endpoint later returns `satelliteAllowed=false`, or the status request fails, it attaches OpenStreetMap and shows the configured unavailable message.
 - Notes: `components/polling.js` does not exist yet because polling is currently used only by the post-race page. Move polling code there only when another page needs the same stable behaviour.
 - External map dependencies: `templates/post_race.html` loads Leaflet 1.9.4, Esri Leaflet 3.0.19, and Esri Leaflet Vector 4.3.2 in that order. The Esri libraries make `L.esri.Vector.vectorBasemapLayer(...)` available for the later satellite-basemap implementation; loading them alone does not make an Esri request or replace the current OpenStreetMap layer.
 
@@ -1001,6 +1395,14 @@ src/static/js/
 - Returns: timing display strings, datetime-local input values, RFID warning flag suppressed by confirmed finishes, and RFID finish confirmation flag.
 - Called from: `post_race` and `race_rider_timings` only (internal helper).
 
+### _post_race_map_bootstrap_config
+- Purpose: Build safe browser bootstrap configuration for the post-race map.
+- Reads: route names through `url_for`, current request path, and race id.
+- Writes: None.
+- Returns: endpoint URLs, race id, page path, and the satellite-unavailable message.
+- Called from: `post_race` only.
+- Notes: this helper deliberately does not include `ARCGIS_API_KEY`, provider, or style. The browser must call `/api/map/config-status` before Esri satellite imagery can be used.
+
 ### new_race (GET `/races/new`)
 - Purpose: Render the "New Race" page.
 - Reads: Config categories.
@@ -1017,6 +1419,7 @@ src/static/js/
 - Renders: `templates/post_race.html`.
 - Display: converts rider timing epochs to naive local datetimes for UI controls.
 - UI: map includes multi-select rider track overlays controlled from the compact legend beside race info (toggle state synced to active overlays, reselects replace prior overlays), persisted map height/width sliders, auto-stacking of the riders table under the map when widths clash, 5-second live refresh polling for selected rider tracks (cache-first), 5-second live refresh polling for rider timing cells, and a manual timing modal that can optionally upload a TXT log to `/api/v1/upload-text` before reapplying the chosen start/end window.
+- Map config: renders only safe bootstrap values in `#post-race-map-config`; Esri provider/style/key must come from `/api/map/config-status` after quota checks.
 - Called from:
   - `templates/dashboard.html`: "View Race" button in active races table.
   - `templates/dashboard_admin.html`: "Post Race" button in races table.
@@ -1659,10 +2062,11 @@ docker compose -p enduro-dev --env-file .env.dev run --rm -e TEST_EMAIL_TO=you@e
 - Linked pages (buttons/links):
   - "Back to Dashboard" → `/dashboard`.
 - Pulls: `race`, `categories`, `selected_category`, `geojson`, `riders`, `has_multiple_rfid_flag`.
-- Pushes: Fetch route GeoJSON, fetch stored rider track (cache-first for live polling), fetch live rider timing values, POST manual timing edits, POST finish timing confirmation, POST TXT log ingest.
-- Routes called: `/races/<id>/post?category=...`, `/races/<id>/route/geojson?category=...`, `/races/<id>/race-rider/<id>/track`, `/races/<id>/race-rider/<id>/track?prefer_cache=1`, `/races/<id>/race-rider-timings?category=...`, `/races/<id>/race-rider/<id>/manual-times`, `/races/<id>/race-rider/<id>/confirm-finish`, `/api/v1/upload-text`.
+- Pushes: Fetch route GeoJSON, fetch map config status, POST Esri tile-usage deltas, fetch stored rider track (cache-first for live polling), fetch live rider timing values, POST manual timing edits, POST finish timing confirmation, POST TXT log ingest.
+- Routes called: `/races/<id>/post?category=...`, `/races/<id>/route/geojson?category=...`, `/api/map/config-status`, `/api/map/tile-usage`, `/races/<id>/race-rider/<id>/track`, `/races/<id>/race-rider/<id>/track?prefer_cache=1`, `/races/<id>/race-rider-timings?category=...`, `/races/<id>/race-rider/<id>/manual-times`, `/races/<id>/race-rider/<id>/confirm-finish`, `/api/v1/upload-text`.
 - Embedded scripts:
   - Shared form/map scripts: auto-submit the category selector and initialise the Leaflet route map through `components/forms.js` and `components/maps.js`.
+  - Esri quota integration: fetch config-status after route bounds are fitted, count Esri tile resources, POST tile deltas to `/api/map/tile-usage`, and switch to OpenStreetMap when the backend blocks satellite access.
   - "Show Track" overlay fetch + render (page-specific).
   - 5-second polling refresh for selected rider tracks (preserves selected toggles and layer state).
   - 5-second polling refresh for start/end timing cells, multiple-RFID asterisk state, and confirmation button state.

@@ -9,3 +9,5 @@ We are going to use three categories of users now. The lowest category are viewe
 New category structure: 
 Remove category from riders table. Category will now be kept only in race riders. When creating a race, you'll select a category and then it'll give you an option to select a route that is already been uploaded for (linked to) the specific race. Or you will be able to upload a new route for the specific category. This category will then be linked to the root, which will be linked to a specific race. When a rider enters the race they will select a category ID and therefore be linking themselves to a specific race through category root and then races. 
 
+I am worried about this line. What is meant about refreshing redis expiry timeout? How is the MAP_USER_LIMIT_TIMEOUT_MIN being used currently? If the user uses more than the MAP_TILE_USER_LIMIT In the MAP_USER_LIMIT_TIMEOUT_MIN period, then they should not be able to load more tiles until their usage in the last MAP_USER_LIMIT_TIMEOUT_MIN period is less than the MAP_TILE_USER_LIMIT. 
+

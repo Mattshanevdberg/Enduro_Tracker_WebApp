@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Kooksnylive — Map Tile Usage Management</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/forms.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/tables.css') }}" />
+  </head>
+  <body>
+    <main class="page-shell">
+      <header class="page-header">
+        <h1>Map Tile Usage Management</h1>
+        <p>Admin controls and status for Esri satellite tile usage.</p>
+      </header>
+
+      <div class="stack">
+        <a class="btn" href="{{ url_for('home.dashboard_admin') }}">Back to Admin Dashboard</a>
+      </div>
+
+      <h2 class="section-title">Current Billing Cycle</h2>
+      <div class="table-card">
+        <table>
+          <tbody>
+            <tr>
+              <th>Billing cycle key</th>
+              <td>{{ quota.billing_month }}</td>
+            </tr>
+            <tr>
+              <th>Billing cycle rule</th>
+              <td>Runs from the {{ billing_cycle_start_day }}th to the {{ billing_cycle_start_day }}th.</td>
+            </tr>
+            <tr>
+              <th>Provider</th>
+              <td>{{ quota.provider }}</td>
+            </tr>
+            <tr>
+              <th>Estimated tiles used</th>
+              <td>{{ quota.estimated_tiles_used }}</td>
+            </tr>
+            <tr>
+              <th>Monthly limit</th>
+              <td>{{ quota.monthly_limit }}</td>
+            </tr>
+            <tr>
+              <th>Warning threshold</th>
+              <td>{{ quota.warning_threshold }}</td>
+            </tr>
+            <tr>
+              <th>Hard-stop threshold</th>
+              <td>{{ quota.hard_stop_threshold }}</td>
+            </tr>
+            <tr>
+              <th>Hard stop active</th>
+              <td>{{ 'Yes' if quota.hard_stop_active else 'No' }}</td>
+            </tr>
+            <tr>
+              <th>Anonymous viewers blocked</th>
+              <td>{{ 'Yes' if quota.viewers_only_blocked else 'No' }}</td>
+            </tr>
+            <tr>
+              <th>Monthly override active</th>
+              <td>
+                {{ 'Yes' if quota.override_active else 'No' }}
+                {% if quota.override_until %}
+                  until {{ quota.override_until }}
+                {% endif %}
+              </td>
+            </tr>
+            <tr>
+              <th>Redis status</th>
+              <td>{{ redis_status }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 class="section-title">Current/Recent Browser Blocks</h2>
+      {% if active_blocks %}
+        <div class="table-card">
+          <table>
+            <thead>
+              <tr>
+                <th>Browser cookie id</th>
+                <th>Reason</th>
+                <th>Tiles at block</th>
+                <th>Blocked at</th>
+                <th>Blocked until</th>
+                <th class="actions">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for block in active_blocks %}
+                <tr>
+                  <td>{{ block.browser_cookie_id }}</td>
+                  <td>{{ block.reason }}</td>
+                  <td>{{ block.tiles_at_block if block.tiles_at_block is not none else '—' }}</td>
+                  <td>{{ block.blocked_at }}</td>
+                  <td>{{ block.blocked_until }}</td>
+                  <td class="actions">
+                    <form method="post" action="{{ url_for('map_tile_quota.reset_browser_quota', browser_cookie_id=block.browser_cookie_id) }}">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+                      <button class="btn" type="submit">Reset</button>
+                    </form>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <p class="empty-state">No active browser block records.</p>
+      {% endif %}
+
+      <h2 class="section-title">Controls</h2>
+      <div class="content-panel">
+        <form class="form-grid" method="post" action="{{ url_for('map_tile_quota.global_toggle') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+
+          <label>
+            <span>Anonymous viewer satellite access</span>
+            <select name="viewers_only_blocked">
+              <option value="0" {% if not quota.viewers_only_blocked %}selected{% endif %}>Allowed</option>
+              <option value="1" {% if quota.viewers_only_blocked %}selected{% endif %}>Blocked</option>
+            </select>
+          </label>
+
+          <label>
+            <span>Global satellite hard stop</span>
+            <select name="hard_stop_active">
+              <option value="0" {% if not quota.hard_stop_active %}selected{% endif %}>Inactive</option>
+              <option value="1" {% if quota.hard_stop_active %}selected{% endif %}>Active</option>
+            </select>
+          </label>
+
+          <button class="btn" type="submit">Save Global Controls</button>
+        </form>
+      </div>
+
+      <h2 class="section-title">Monthly Override</h2>
+      <div class="content-panel">
+        <form class="form-grid" method="post" action="{{ url_for('map_tile_quota.monthly_override') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+
+          <label>
+            <span>Override duration in minutes</span>
+            <input type="number" min="1" name="duration_minutes" value="60" required />
+          </label>
+
+          <label>
+            <span>Reason</span>
+            <input type="text" name="reason" placeholder="Optional admin note" />
+          </label>
+
+          <button class="btn" type="submit">Set Override</button>
+        </form>
+
+        <form method="post" action="{{ url_for('map_tile_quota.clear_monthly_override_route') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+          <button class="btn" type="submit">Clear Override</button>
+        </form>
+      </div>
+    </main>
+  </body>
+</html>

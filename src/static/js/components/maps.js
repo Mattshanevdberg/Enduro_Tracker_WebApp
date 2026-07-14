@@ -15,6 +15,38 @@ Depends on:
 window.EnduroMaps = (function initialiseEnduroMaps() {
   const basemapLayers = new WeakMap();
 
+  // Identify ArcGIS/Esri tile resources without counting the Esri JavaScript
+  // libraries themselves. Vector and raster basemaps use slightly different
+  // endpoint shapes, so this intentionally recognises the common tile endpoint
+  // path fragments rather than one exact URL.
+  function isEsriTileResource(resourceUrl) {
+    if (!resourceUrl) return false;
+    try {
+      const url = new URL(resourceUrl, window.location.href);
+      const host = url.hostname.toLowerCase();
+      const path = url.pathname.toLowerCase();
+      const isArcgisHost = host.includes('arcgis.com') || host.includes('esri.com');
+      if (!isArcgisHost) return false;
+      return path.includes('/tile/') || path.includes('vectortileserver') || path.includes('mapserver');
+    } catch (error) {
+      return false;
+    }
+  }
+
+  // Use a stable client-only key for de-duplicating tile observations on this
+  // page. The key is never sent to the backend; only numeric deltas are posted.
+  // API-key-like query parameters are stripped before de-duplication so a tile
+  // URL is not retained in memory with credentials attached.
+  function normaliseTileResourceKey(resourceUrl) {
+    try {
+      const url = new URL(resourceUrl, window.location.href);
+      ['apikey', 'apiKey', 'token', 'access_token', 'key'].forEach(param => url.searchParams.delete(param));
+      return url.toString();
+    } catch (error) {
+      return String(resourceUrl || '');
+    }
+  }
+
   // Remove the currently attached base layer before a provider change. Route and
   // rider GeoJSON overlays are not stored here, so switching the imagery never
   // removes the application data shown on top of the map.
@@ -32,7 +64,9 @@ window.EnduroMaps = (function initialiseEnduroMaps() {
     if (!map || typeof L === 'undefined') return null;
     removeBasemap(map);
     const layer = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; OSM'
+      attribution: '&copy; OSM',
+      maxZoom: 22,
+      maxNativeZoom: 19
     }).addTo(map);
     basemapLayers.set(map, layer);
     return layer;
@@ -74,6 +108,181 @@ window.EnduroMaps = (function initialiseEnduroMaps() {
 
     const osmLayer = attachOpenStreetMapBasemap(map);
     return { layer: osmLayer, provider: 'openstreetmap' };
+  }
+
+  // Create a batched Esri tile usage reporter. The reporter counts newly
+  // observed Esri tile resource URLs and sends deltas, not cumulative totals, to
+  // the Flask quota endpoint. It uses PerformanceObserver because Esri Leaflet
+  // Vector does not expose the same tileload surface as a plain Leaflet tile
+  // layer in every browser. If a Leaflet tileload event is available, callers
+  // can attach it too; URL de-duplication prevents double counting.
+  function createEsriTileUsageReporter(options) {
+    const settings = {
+      batchDelayMs: 1500,
+      batchSize: 20,
+      ...options
+    };
+
+    let pendingTiles = 0;
+    let usageSessionKey = settings.sessionKey || '';
+    let flushTimer = null;
+    let performanceScanTimer = null;
+    let observer = null;
+    let isRunning = false;
+    let isSending = false;
+    let startedAt = 0;
+    const countedTileKeys = new Set();
+    const watchedLayers = new WeakMap();
+
+    function buildHeaders() {
+      const headers = { 'Content-Type': 'application/json' };
+      if (settings.csrfToken) headers['X-CSRFToken'] = settings.csrfToken;
+      return headers;
+    }
+
+    function scheduleFlush(delayMs) {
+      if (!isRunning || flushTimer) return;
+      flushTimer = window.setTimeout(() => {
+        flushTimer = null;
+        flush();
+      }, typeof delayMs === 'number' ? delayMs : settings.batchDelayMs);
+    }
+
+    function handleQuotaResponse(data) {
+      if (data?.usageSessionKey) usageSessionKey = data.usageSessionKey;
+      if (data?.satelliteAllowed === false) {
+        stop();
+        if (typeof settings.onBlocked === 'function') settings.onBlocked(data);
+      }
+    }
+
+    function flush() {
+      if (!isRunning || isSending || pendingTiles <= 0 || !settings.tileUsageUrl) return Promise.resolve(null);
+
+      const tilesDelta = pendingTiles;
+      pendingTiles = 0;
+      isSending = true;
+
+      const payload = {
+        tiles_delta: tilesDelta,
+        race_id: settings.raceId || null,
+        page_path: settings.pagePath || window.location.pathname,
+      };
+      if (usageSessionKey) payload.session_key = usageSessionKey;
+
+      return fetch(settings.tileUsageUrl, {
+        method: 'POST',
+        headers: buildHeaders(),
+        body: JSON.stringify(payload),
+        cache: 'no-store',
+        keepalive: true,
+      })
+        .then(response => {
+          if (!response.ok) throw new Error('Tile usage report failed.');
+          return response.json();
+        })
+        .then(data => {
+          handleQuotaResponse(data);
+          return data;
+        })
+        .catch(error => {
+          if (typeof settings.onError === 'function') settings.onError(error);
+          return null;
+        })
+        .finally(() => {
+          isSending = false;
+          if (pendingTiles > 0) scheduleFlush(settings.batchDelayMs);
+        });
+    }
+
+    function recordTileUrl(resourceUrl) {
+      if (!isRunning || !isEsriTileResource(resourceUrl)) return;
+      const key = normaliseTileResourceKey(resourceUrl);
+      if (!key || countedTileKeys.has(key)) return;
+      countedTileKeys.add(key);
+      pendingTiles += 1;
+      if (pendingTiles >= settings.batchSize) {
+        scheduleFlush(0);
+      } else {
+        scheduleFlush(settings.batchDelayMs);
+      }
+    }
+
+    function processPerformanceEntry(entry) {
+      if (!entry || entry.startTime < startedAt || entry.initiatorType === 'script') return;
+      recordTileUrl(entry.name);
+    }
+
+    function scanPerformanceEntries() {
+      if (!isRunning || !performance?.getEntriesByType) return;
+      performance.getEntriesByType('resource').forEach(processPerformanceEntry);
+    }
+
+    function start() {
+      if (isRunning) return;
+      isRunning = true;
+      startedAt = performance.now();
+
+      if ('PerformanceObserver' in window) {
+        observer = new PerformanceObserver(list => {
+          list.getEntries().forEach(processPerformanceEntry);
+        });
+        try {
+          observer.observe({ type: 'resource', buffered: true });
+        } catch (error) {
+          observer.observe({ entryTypes: ['resource'] });
+        }
+      }
+
+      // Some browsers/extensions do not reliably fire PerformanceObserver
+      // callbacks for cross-origin image resources even though the entries are
+      // visible through getEntriesByType(). Poll briefly while the map is active
+      // so Esri tile loads are still counted.
+      scanPerformanceEntries();
+      performanceScanTimer = window.setInterval(scanPerformanceEntries, 1000);
+    }
+
+    function watchLayer(layer) {
+      if (!layer || watchedLayers.has(layer)) return;
+      const handler = event => {
+        const tileUrl = event?.tile?.currentSrc || event?.tile?.src;
+        recordTileUrl(tileUrl);
+      };
+      if (typeof layer.on === 'function') {
+        layer.on('tileload', handler);
+        watchedLayers.set(layer, handler);
+      }
+    }
+
+    function stop() {
+      if (!isRunning) return;
+      isRunning = false;
+      if (flushTimer) {
+        window.clearTimeout(flushTimer);
+        flushTimer = null;
+      }
+      if (observer) {
+        observer.disconnect();
+        observer = null;
+      }
+      if (performanceScanTimer) {
+        window.clearInterval(performanceScanTimer);
+        performanceScanTimer = null;
+      }
+    }
+
+    window.addEventListener('pagehide', () => {
+      if (pendingTiles > 0) flush();
+    }, { once: true });
+
+    return {
+      start,
+      stop,
+      flush,
+      watchLayer,
+      recordTileUrl,
+      getUsageSessionKey: () => usageSessionKey,
+    };
   }
 
   // Create a Leaflet map. Existing callers receive the original OSM behaviour;
@@ -174,6 +383,7 @@ window.EnduroMaps = (function initialiseEnduroMaps() {
     attachOpenStreetMapBasemap,
     attachEsriSatelliteBasemap,
     attachConfiguredBasemap,
+    createEsriTileUsageReporter,
     fetchRouteGeojson,
     addGeojsonLayer,
     fitMapToLayer,

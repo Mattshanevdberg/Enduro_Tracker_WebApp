@@ -1,5 +1,5 @@
 """
-Flask app entrypoint. Registers the ingest blueprint.
+Flask app entrypoint. Registers API, auth, dashboard, admin, and race blueprints.
 """
 
 #### for running in vscode (comment out when on Raspberry Pi)
@@ -28,6 +28,7 @@ from src.web.rider_profiles import bp_rider_profiles
 from src.web.devices import bp_devices
 from src.web.races import bp_races
 from src.web.rfid import bp_rfid
+from src.web.map_tile_quota import bp_map_tile_quota
 
 # regular imports
 import yaml
@@ -112,6 +113,7 @@ def create_app():
     app.register_blueprint(bp_devices)  # /devices device management pages
     app.register_blueprint(bp_races)  # /races/* race management pages
     app.register_blueprint(bp_rfid)  # /rfid RFID ingest record viewer
+    app.register_blueprint(bp_map_tile_quota)  # /admin/map_tile_quota and /api/map/config-status map quota routes
     return app
 
 # For `flask run`

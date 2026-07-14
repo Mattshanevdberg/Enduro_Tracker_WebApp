@@ -48,8 +48,11 @@ because they currently belong only to the post-race page.
   const trackMeta = new Map();
   const timingRows = new Map();
   const inFlightTrackRefresh = new Set();
-  let publicMapConfig = null;
+  let mapBootstrapConfig = null;
   let basemapAttached = false;
+  let basemapAttachInFlight = false;
+  let tileUsageReporter = null;
+  let satelliteFallbackActive = false;
 
   // Build headers for browser-originated JSON POST requests that use the
   // logged-in session cookie. Flask-WTF accepts X-CSRFToken for JSON/fetch
@@ -60,14 +63,15 @@ because they currently belong only to the post-race page.
     return headers;
   }
 
-  // Read the server-rendered public Esri configuration from JSON rather than
-  // embedding Jinja expressions in this static page script. Invalid or absent
-  // configuration remains safe because the shared helper will use OSM instead.
+  // Read the server-rendered map bootstrap configuration from JSON rather than
+  // embedding Jinja expressions in this static page script. This bootstrap must
+  // not contain the Esri key; the key is fetched from /api/map/config-status
+  // only after route/track bounds have been fitted and quota checks pass.
   if (mapConfigNode?.textContent) {
     try {
-      publicMapConfig = JSON.parse(mapConfigNode.textContent);
+      mapBootstrapConfig = JSON.parse(mapConfigNode.textContent);
     } catch (error) {
-      console.error('Failed to parse post-race map configuration:', error);
+      console.error('Failed to parse post-race map bootstrap configuration:', error);
     }
   }
 
@@ -85,13 +89,113 @@ because they currently belong only to the post-race page.
     return map;
   }
 
-  // Attach satellite imagery only after valid bounds are visible. A later
-  // server-backed usage guard will change satelliteAllowed to false, causing
-  // this same helper to select the retained OpenStreetMap fallback instead.
+  // Convert the backend quota/config response into the shape expected by the
+  // shared Leaflet helper. The backend intentionally uses explicit API names
+  // (`arcgisApiKey`, `mapProvider`, `mapStyle`) so the HTML bootstrap never
+  // needs to carry the Esri key.
+  function normaliseBackendMapConfig(configStatus) {
+    return {
+      provider: configStatus?.mapProvider || configStatus?.provider || '',
+      style: configStatus?.mapStyle || '',
+      apiKey: configStatus?.arcgisApiKey || '',
+      satelliteAllowed: configStatus?.satelliteAllowed === true,
+    };
+  }
+
+  function satelliteUnavailableMessage(configStatus) {
+    if (configStatus?.satelliteAllowed === true) return '';
+    return mapBootstrapConfig?.satelliteUnavailableMessage || 'Satellite view is currently unavailable for this account, please try again later.';
+  }
+
+  function stopTileUsageReporter() {
+    if (tileUsageReporter) {
+      tileUsageReporter.stop();
+      tileUsageReporter = null;
+    }
+  }
+
+  // Move the map from Esri imagery to the retained OpenStreetMap fallback after
+  // a quota block. This is intentionally idempotent so repeated blocked
+  // responses do not keep re-attaching the same OSM layer or spamming the
+  // status line. Base layer switching is handled by maps.js and does not touch
+  // route or rider overlays.
+  function switchToOpenStreetMapWithMessage(message) {
+    if (!map || !maps) return;
+    stopTileUsageReporter();
+    if (!satelliteFallbackActive) {
+      const fallbackLayer = maps.attachOpenStreetMapBasemap(map);
+      basemapAttached = !!fallbackLayer;
+      satelliteFallbackActive = !!fallbackLayer;
+    }
+    if (satelliteFallbackActive) {
+      updateStatus(message || mapBootstrapConfig?.satelliteUnavailableMessage || 'Satellite view is currently unavailable for this account, please try again later.');
+    }
+  }
+
+  // Start reporting Esri tile deltas only when the backend has allowed
+  // satellite imagery. The reporter sends deltas to the quota endpoint and
+  // switches this map to OSM if the backend later returns satelliteAllowed=false.
+  function startTileUsageReporter(configStatus) {
+    stopTileUsageReporter();
+    if (!map || !maps || configStatus?.satelliteAllowed !== true || !mapBootstrapConfig?.tileUsageUrl) {
+      return null;
+    }
+
+    tileUsageReporter = maps.createEsriTileUsageReporter({
+      tileUsageUrl: mapBootstrapConfig.tileUsageUrl,
+      raceId: mapBootstrapConfig.raceId || raceId,
+      pagePath: mapBootstrapConfig.pagePath || window.location.pathname,
+      csrfToken,
+      onBlocked: data => switchToOpenStreetMapWithMessage(satelliteUnavailableMessage(data)),
+      onError: () => {
+        // Keep the map usable on transient report failures. The next successful
+        // report or config-status check will enforce quota state again.
+      },
+    });
+    tileUsageReporter.start();
+    return tileUsageReporter;
+  }
+
+  // Ask the backend whether this browser may receive Esri config. This is the
+  // quota gate: if the response is blocked, it should not contain arcgisApiKey
+  // and the shared helper will attach OpenStreetMap instead.
+  function fetchMapConfigStatus() {
+    const configStatusUrl = mapBootstrapConfig?.configStatusUrl || '/api/map/config-status';
+    return fetch(configStatusUrl, { cache: 'no-store' })
+      .then(response => {
+        if (!response.ok) throw new Error('Map config status request failed.');
+        return response.json();
+      });
+  }
+
+  // Attach satellite imagery only after valid bounds are visible. If quota
+  // checks block satellite imagery, or the status request fails, attach the
+  // retained OpenStreetMap fallback without touching route/rider overlays.
   function attachPostRaceBasemap() {
-    if (!map || !maps || basemapAttached) return;
-    const result = maps.attachConfiguredBasemap(map, publicMapConfig);
-    basemapAttached = !!result?.layer;
+    if (!map || !maps || basemapAttached || basemapAttachInFlight) return;
+    basemapAttachInFlight = true;
+
+    fetchMapConfigStatus()
+      .then(configStatus => {
+        const reporter = startTileUsageReporter(configStatus);
+        const result = maps.attachConfiguredBasemap(map, normaliseBackendMapConfig(configStatus));
+        basemapAttached = !!result?.layer;
+        if (result?.provider === 'esri' && reporter) {
+          satelliteFallbackActive = false;
+          reporter.watchLayer(result.layer);
+        } else {
+          stopTileUsageReporter();
+          satelliteFallbackActive = result?.provider === 'openstreetmap';
+        }
+        const message = satelliteUnavailableMessage(configStatus);
+        if (message) updateStatus(message);
+      })
+      .catch(() => {
+        switchToOpenStreetMapWithMessage(mapBootstrapConfig?.satelliteUnavailableMessage);
+      })
+      .finally(() => {
+        basemapAttachInFlight = false;
+      });
   }
 
   // Build cache-busted endpoints for live rider tracks and timing refreshes.
