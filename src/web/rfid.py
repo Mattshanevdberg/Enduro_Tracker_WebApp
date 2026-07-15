@@ -1,18 +1,20 @@
 """
 RFID ingest record viewer.
 
-- GET /rfid/ -> list recent RFID ingest rows with simple column filters.
+- GET /rfid/ -> admin-only list recent RFID ingest rows with simple column filters.
 
 Notes
 -----
 * This page is a lightweight operations view for confirming reader uploads.
 * Filtering is intentionally server-side so large RFID tables do not need to be
   fully loaded into the browser.
+* RFID records are admin-only because they expose operational timing data.
 """
 
 from flask import Blueprint, render_template, request
 from sqlalchemy.exc import SQLAlchemyError
 
+from src.auth.decorators import admin_required
 from src.db.models import SessionLocal, IngestRfid
 from src.utils.time import epoch_to_datetime, iso_to_epoch
 
@@ -78,6 +80,7 @@ def _datetime_filter_to_epoch(value):
 
 
 @bp_rfid.route("/", methods=["GET"])
+@admin_required
 def rfid_index():
     """
     Render RFID ingest rows with optional column filters.

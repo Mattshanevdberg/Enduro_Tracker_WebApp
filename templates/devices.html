@@ -11,7 +11,7 @@
   <body>
     <main class="page-shell">
       <div class="stack">
-        <a class="btn" href="{{ url_for('home.home_page') }}">Back to Home</a>
+        <a class="btn" href="{{ url_for('home.dashboard_admin') }}">Back to Admin Dashboard</a>
       </div>
 
       <header class="page-header">
@@ -26,6 +26,7 @@
       <section class="content-panel">
         <h2>Add a new device</h2>
         <form class="form-grid" method="post" action="{{ url_for('devices.devices_index') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
           <label for="id">Device ID *</label>
           <input id="id" name="id" maxlength="64" value="{{ form.id }}"/>
 

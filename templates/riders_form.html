@@ -21,6 +21,7 @@
 
       <section class="content-panel">
         <form class="form-grid" method="post" action="{{ url_for('riders.rider_form', rider_id=editing_rider.id) if editing_rider else url_for('riders.rider_form') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
           {% if editing_rider %}<input type="hidden" name="rider_id" value="{{ editing_rider.id }}"/>{% endif %}
           <label for="name">Full name *</label>
           <input id="name" name="name" placeholder="Name Surname" required value="{{ form.name or '' }}"/>
@@ -44,7 +45,7 @@
 
           <div class="actions">
             <button class="btn" type="submit">Save</button>
-            <a class="btn" href="{{ url_for('home.home_page') }}">Back to Home</a>
+            <a class="btn" href="{{ url_for('home.dashboard_admin') }}">Back to Admin Dashboard</a>
           </div>
         </form>
       </section>

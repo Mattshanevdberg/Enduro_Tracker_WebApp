@@ -15,6 +15,8 @@ Run:
 Notes:
 - Simple polling; no queue required.
 - Uses an in-memory watermark per device_id to skip rebuilds when no new points arrived.
+- Database schema is managed by Alembic migrations; run `alembic upgrade head`
+  before starting this worker.
 """
 
 #### for running in vscode (comment out when on Raspberry Pi)
@@ -32,7 +34,7 @@ from datetime import datetime, timezone
 from typing import Optional, Tuple
 
 from sqlalchemy import select, func
-from src.db.models import SessionLocal, Point, RaceRider, TrackCache, init_db
+from src.db.models import SessionLocal, Point, RaceRider, TrackCache
 from src.utils.gpx import build_geojson_for_device
 from src.utils.time import datetime_to_epoch
 
@@ -75,7 +77,6 @@ def _latest_race_rider_window(session, device_id: str) -> Tuple[Optional[int], O
     return race_rider_id, start_epoch, finish_epoch
 
 def main():
-    init_db()
     print("[gpx_worker] started (writing track_cache GeoJSON for live race_day)")
 
     # Simple watermark: cache last max(t_epoch) per device_id so we only rebuild

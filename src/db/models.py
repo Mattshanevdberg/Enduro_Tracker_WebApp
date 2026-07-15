@@ -7,6 +7,10 @@ Tables:
 - points: parsed storage of individual fixes (linked to devices).
 - devices: registry of hardware trackers.
 - riders / race_riders: entrants and their race-specific configuration.
+- users / auth_tokens / auth_audit_events: browser login accounts,
+  password-reset tokens, and security event history.
+- map_tile_monthly_quota / map_tile_usage_sessions / map_tile_browser_blocks:
+  Esri tile quota state, summarized browser/page usage, and browser block history.
 - races / route / categories: event structure and course metadata.
 - leaderboard_cache / track_cache: live data surfaces.
 - leaderboard_hist / track_hist: archived snapshots.
@@ -17,6 +21,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Column,
     DateTime,
     Float,
@@ -29,6 +34,7 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker, foreign
+from flask_login import UserMixin
 
 # regular imports 
 import os
@@ -251,6 +257,303 @@ class Rider(Base):
     category = Column(String(64), nullable=True)
 
     race_entries = relationship("RaceRider", back_populates="rider")
+    user_account = relationship("User", back_populates="rider", uselist=False)
+
+
+class User(UserMixin, Base):
+    """
+    Browser login account for rider and admin users.
+
+    Columns:
+      id                  : PK
+      first_name          : user's given name
+      last_name           : user's surname
+      username            : display/login username exactly as last saved
+      username_normalized : lower/trimmed username for case-insensitive uniqueness
+      email               : email address exactly as last saved
+      email_normalized    : lower/trimmed email for case-insensitive uniqueness
+      password_hash       : safely hashed password, never the plaintext password
+      role                : permission level for logged-in users (`rider` or `admin`)
+      rider_id            : optional one-to-one link to the athlete profile row
+      is_active           : false disables login without deleting history
+      auth_version        : session invalidation counter incremented on reset/deactivation
+      created_at          : account creation time (UTC)
+      updated_at          : latest account update time (UTC)
+      last_login_at       : latest successful login time (UTC) [nullable]
+
+    Relationships:
+      - Optional one-to-one link to Rider through rider_id.
+      - One User can have many AuthToken rows for one-time auth flows.
+      - One User can be actor/target for many AuthAuditEvent rows.
+
+      - Unique constraints on the username_normalized and email_normalized
+    """
+
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True)
+    first_name = Column(String(128), nullable=False)
+    last_name = Column(String(128), nullable=False)
+    username = Column(String(64), nullable=False)
+    username_normalized = Column(String(64), nullable=False)
+    email = Column(String(256), nullable=False)
+    email_normalized = Column(String(256), nullable=False)
+    password_hash = Column(String(255), nullable=False)
+    role = Column(String(32), nullable=False, default="rider")
+    rider_id = Column(Integer, ForeignKey("riders.id"), nullable=True, index=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    auth_version = Column(Integer, nullable=False, default=1)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+    last_login_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        CheckConstraint("role IN ('rider', 'admin')", name="ck_users_role"),
+        UniqueConstraint("username_normalized", name="ux_users_username_normalized"),
+        UniqueConstraint("email_normalized", name="ux_users_email_normalized"),
+        UniqueConstraint("rider_id", name="ux_users_rider_id"),
+    )
+
+    rider = relationship("Rider", back_populates="user_account")
+    auth_tokens = relationship("AuthToken", back_populates="user")
+    audit_events_as_actor = relationship(
+        "AuthAuditEvent",
+        back_populates="actor_user",
+        foreign_keys=lambda: [AuthAuditEvent.actor_user_id],
+    )
+    audit_events_as_target = relationship(
+        "AuthAuditEvent",
+        back_populates="target_user",
+        foreign_keys=lambda: [AuthAuditEvent.target_user_id],
+    )
+
+
+class AuthToken(Base):
+    """
+    One-time hashed tokens for authentication flows such as password reset.
+
+    Columns:
+      id         : PK
+      user_id    : account this token belongs to
+      purpose    : token purpose, currently `password_reset`
+      token_hash : hashed token value, never the raw email link token
+      expires_at : timestamp after which the token is invalid
+      used_at    : timestamp when the token was consumed [nullable]
+      created_at : token creation time (UTC)
+
+    Relationship:
+      - Belongs to one User.
+    """
+
+    __tablename__ = "auth_tokens"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    purpose = Column(String(32), nullable=False)
+    token_hash = Column(String(255), nullable=False, index=True)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    used_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    user = relationship("User", back_populates="auth_tokens")
+
+
+class AuthAuditEvent(Base):
+    """
+    Security-relevant account event history. Essentially just a history of who has done what to whom.
+
+    Columns:
+      id             : PK
+      actor_user_id  : user who performed the action [nullable for public/system events]
+      target_user_id : user affected by the action [nullable when not account-specific]
+      action         : short event name, e.g. signup, password_reset, promote_admin
+      metadata_json  : optional safe JSON details; never store passwords or raw tokens
+      created_at     : event creation time (UTC)
+
+    Relationships:
+      - actor_user points to the User who performed the action.
+      - target_user points to the User affected by the action.
+    """
+
+    __tablename__ = "auth_audit_events"
+
+    id = Column(Integer, primary_key=True)
+    actor_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    target_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    action = Column(String(64), nullable=False, index=True)
+    metadata_json = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    actor_user = relationship(
+        "User",
+        back_populates="audit_events_as_actor",
+        foreign_keys=[actor_user_id],
+    )
+    target_user = relationship(
+        "User",
+        back_populates="audit_events_as_target",
+        foreign_keys=[target_user_id],
+    )
+
+
+class MapTileMonthlyQuota(Base):
+    """
+    Durable monthly quota state for browser map tile usage.
+
+    Columns:
+      id                    : PK
+      billing_month         : month key in YYYY-MM format
+      provider              : tile provider name, currently `esri`
+      estimated_tiles_used  : app-estimated tiles used this month
+      monthly_limit         : nominal monthly tile allowance
+      warning_threshold     : usage level that should trigger admin warning state
+      hard_stop_threshold   : usage level that should block satellite release
+      warning_triggered_at  : first time the warning threshold was crossed [nullable]
+      hard_stop_triggered_at: first time the hard-stop threshold was crossed [nullable]
+      hard_stop_active      : true when satellite config should be globally blocked
+      viewers_only_blocked  : emergency flag to block anonymous viewers only
+      override_active       : true when an admin temporarily permits satellite despite block state
+      override_until        : optional end time for the override [nullable]
+      override_reason       : admin note explaining the override [nullable]
+      last_usage_rollup_at  : last time usage was rolled/reconciled [nullable]
+      created_at            : row creation time (UTC)
+      updated_at            : latest row update time (UTC)
+
+    Notes:
+      Usage reports should increment estimated_tiles_used directly using tile
+      deltas so hard-stop decisions can happen immediately. Detailed per-page
+      evidence lives in map_tile_usage_sessions.
+    """
+
+    __tablename__ = "map_tile_monthly_quota"
+
+    id = Column(Integer, primary_key=True)
+    billing_month = Column(String(7), nullable=False, index=True)
+    provider = Column(String(32), nullable=False, default="esri")
+    estimated_tiles_used = Column(Integer, nullable=False, default=0)
+    monthly_limit = Column(Integer, nullable=False)
+    warning_threshold = Column(Integer, nullable=False)
+    hard_stop_threshold = Column(Integer, nullable=False)
+    warning_triggered_at = Column(DateTime(timezone=True), nullable=True)
+    hard_stop_triggered_at = Column(DateTime(timezone=True), nullable=True)
+    hard_stop_active = Column(Boolean, nullable=False, default=False)
+    viewers_only_blocked = Column(Boolean, nullable=False, default=False)
+    override_active = Column(Boolean, nullable=False, default=False)
+    override_until = Column(DateTime(timezone=True), nullable=True)
+    override_reason = Column(Text, nullable=True)
+    last_usage_rollup_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("billing_month", "provider", name="ux_map_tile_monthly_quota_month_provider"),
+    )
+
+
+class MapTileUsageSession(Base):
+    """
+    Summarized browser/page map tile usage session.
+
+    Columns:
+      id                     : PK
+      session_key            : server-generated public identifier for this page/map session
+      browser_cookie_id      : anonymous browser cookie id used for per-browser limits
+      user_id                : logged-in user id when available [nullable]
+      role                   : role snapshot: anonymous, rider, or admin
+      race_id                : race being viewed when available [nullable]
+      billing_month          : month key in YYYY-MM format used for quota attribution
+      page_path              : browser page path that created the map session
+      provider               : tile provider used for this session, e.g. esri or osm
+      session_started_at     : first observed time for this browser/page session
+      session_last_seen_at   : latest report time for this browser/page session
+      estimated_tiles_loaded : total app-estimated Esri tiles reported for this session
+      fallback_used          : true when OpenStreetMap fallback was used
+      blocked_reason         : reason satellite was unavailable [nullable]
+      user_agent_hash        : optional privacy-preserving user-agent hash [nullable]
+      ip_hash                : optional privacy-preserving IP hash [nullable]
+      created_at             : row creation time (UTC)
+      updated_at             : latest row update time (UTC)
+
+    Relationships:
+      - Optionally belongs to one User for logged-in rider/admin analytics.
+      - Optionally belongs to one Race for race/page analytics.
+
+    Notes:
+      The browser should report tile deltas. Each accepted delta increments
+      this row's estimated_tiles_loaded and the matching
+      map_tile_monthly_quota.estimated_tiles_used immediately.
+    """
+
+    __tablename__ = "map_tile_usage_sessions"
+
+    id = Column(Integer, primary_key=True)
+    session_key = Column(String(64), nullable=False, unique=True, index=True)
+    browser_cookie_id = Column(String(64), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    role = Column(String(32), nullable=False, default="anonymous")
+    race_id = Column(Integer, ForeignKey("races.id"), nullable=True, index=True)
+    billing_month = Column(String(7), nullable=False, index=True)
+    page_path = Column(String(512), nullable=False)
+    provider = Column(String(32), nullable=False, default="esri")
+    session_started_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    session_last_seen_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    estimated_tiles_loaded = Column(Integer, nullable=False, default=0)
+    fallback_used = Column(Boolean, nullable=False, default=False)
+    blocked_reason = Column(String(64), nullable=True, index=True)
+    user_agent_hash = Column(String(128), nullable=True)
+    ip_hash = Column(String(128), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+
+    user = relationship("User")
+    race = relationship("Race")
+
+
+class MapTileBrowserBlock(Base):
+    """
+    Browser-level map tile block history for admin visibility and manual release.
+
+    Columns:
+      id                  : PK
+      browser_cookie_id   : anonymous browser cookie id being blocked
+      user_id             : logged-in user id when available [nullable]
+      reason              : block reason, e.g. browser_limit or admin_block
+      tiles_at_block      : estimated browser-window count when blocked [nullable]
+      blocked_at          : time the block started
+      blocked_until       : expected automatic release time
+      released_at         : actual release time when manually released/observed [nullable]
+      released_by_user_id : admin user who manually released the block [nullable]
+      release_reason      : admin note explaining release [nullable]
+      created_at          : row creation time (UTC)
+      updated_at          : latest row update time (UTC)
+
+    Relationships:
+      - Optionally linked to the logged-in User affected by the block.
+      - Optionally linked to the admin User who released the block.
+
+    Notes:
+      Redis remains the enforcement mechanism for short-lived browser blocks.
+      This table records the block so admins can see current/recent blocks and
+      reset them early from the management page.
+    """
+
+    __tablename__ = "map_tile_browser_blocks"
+
+    id = Column(Integer, primary_key=True)
+    browser_cookie_id = Column(String(64), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    reason = Column(String(64), nullable=False, index=True)
+    tiles_at_block = Column(Integer, nullable=True)
+    blocked_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    blocked_until = Column(DateTime(timezone=True), nullable=False, index=True)
+    released_at = Column(DateTime(timezone=True), nullable=True)
+    released_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    release_reason = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+
+    user = relationship("User", foreign_keys=[user_id])
+    released_by_user = relationship("User", foreign_keys=[released_by_user_id])
 
 
 class Race(Base):
@@ -438,7 +741,14 @@ class TrackHist(Base):
 
 def init_db() -> None:
     """
-    Create tables if they do not exist.
+    Manually create tables if they do not exist.
+
+    Notes:
+      This is a legacy/manual development helper only. Normal application,
+      worker, and production startup must not call this function because schema
+      changes are managed by Alembic migrations. Calling create_all() during
+      runtime can create tables outside migration history and make Alembic
+      autogenerate miss required migrations.
     """
 
     Base.metadata.create_all(bind=engine)

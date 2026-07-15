@@ -16,6 +16,8 @@ Run:
 Notes:
 - "RFID time" comes from the reader event timestamp.
 - "Pi time" uses the web app/server received_at_epoch for the same RFID row.
+- Database schema is managed by Alembic migrations; run `alembic upgrade head`
+  before starting this worker.
 """
 
 #### for running in vscode (comment out when on Raspberry Pi)
@@ -35,7 +37,7 @@ from typing import List, Optional, Tuple
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
-from src.db.models import SessionLocal, init_db, IngestRfid, Device, RaceRider, Category, Route, Race
+from src.db.models import SessionLocal, IngestRfid, Device, RaceRider, Category, Route, Race
 from src.utils.time import datetime_to_epoch, epoch_to_datetime
 
 # ---- Configuration ----
@@ -327,7 +329,6 @@ def _process_batch_once() -> int:
 
 def main():
     """Entry point for the background RFID timing worker."""
-    init_db()
     print("[rfid_worker] started (polling IngestRfid)")
     while True:
         n = _process_batch_once()

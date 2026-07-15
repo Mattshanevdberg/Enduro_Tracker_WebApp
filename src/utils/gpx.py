@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 from typing import Tuple, List, Optional, Any
 
 from sqlalchemy import select, asc
-from src.db.models import Point, SessionLocal, init_db # init_db is only for testing here
+from src.db.models import Point, SessionLocal
 from sqlalchemy.orm import Session
 
 # imports for converting GPX to GeoJSON
@@ -444,7 +444,6 @@ def gpx_to_geojson(gpx_text: str) -> Tuple[bool, str]:
     
 # test the function
 # if __name__ == "__main__":
-#     init_db()
 #     session = SessionLocal()
 #     ok, path_or_err = build_gpx_for_device(device_id="pi003", session=session, out_dir="logs")
 #     if ok:

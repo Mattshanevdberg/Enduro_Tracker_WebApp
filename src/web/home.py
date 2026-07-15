@@ -1,22 +1,42 @@
 """
-Home page routes (simple navigation hub).
+Landing and dashboard routes.
+
+The public landing page is separate from the operational dashboards. Viewers can
+reach the public race dashboard without logging in, while the admin dashboard
+keeps the management controls that used to live on the home page.
+
+Paths
+-----
+GET /                -> Public landing page with view races, signup, and login actions
+GET /dashboard       -> Public active-race dashboard for viewers, riders, and admins
+GET /dashboard-admin -> Admin-only operational dashboard with management controls
 """
 
 from flask import Blueprint, render_template
 
+from src.auth.decorators import admin_required
 from src.db.models import SessionLocal, Race, config as app_config
 from src.utils.time import epoch_to_datetime
 
 bp_home = Blueprint("home", __name__)
 
-@bp_home.route("/")
-def home_page():
+
+def _race_display_data(active_only: bool = False):
     """
-    Render the home page with navigation and a quick races table.
+    Load races and add display-friendly datetime fields.
+
+    Input Args:
+      active_only: when True, return only active races.
+
+    Output:
+      Tuple of race list and default configured category.
     """
     session = SessionLocal()
     try:
-        races = session.query(Race).order_by(Race.starts_at_epoch.asc()).all()
+        query = session.query(Race)
+        if active_only:
+            query = query.filter(Race.active.is_(True))
+        races = query.order_by(Race.starts_at_epoch.asc()).all()
     finally:
         session.close()
 
@@ -29,9 +49,39 @@ def home_page():
 
     categories = app_config.get("categories") or ["Professional", "Open", "Junior"]
     default_category = categories[0] if categories else ""
+    return races, default_category
 
+
+@bp_home.route("/")
+def home_page():
+    """
+    Render the public landing page.
+    """
+    return render_template("landing.html")
+
+
+@bp_home.route("/dashboard")
+def dashboard():
+    """
+    Render the public dashboard with active races only.
+    """
+    races, default_category = _race_display_data(active_only=True)
     return render_template(
-        "home.html",
+        "dashboard.html",
+        races=races,
+        default_category=default_category,
+    )
+
+
+@bp_home.route("/dashboard-admin")
+@admin_required
+def dashboard_admin():
+    """
+    Render the admin operational dashboard.
+    """
+    races, default_category = _race_display_data(active_only=False)
+    return render_template(
+        "dashboard_admin.html",
         races=races,
         default_category=default_category,
     )

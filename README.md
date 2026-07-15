@@ -17,7 +17,7 @@ ingest to display.
 ### server
 - Purpose: Existing application service built from the repository Dockerfile.
 - Reads/Writes: receives `DATABASE_URL` and `FLASK_SECRET_KEY` from Compose so the runtime DB connection and Flask secret handling become environment-driven.
-- Depends on: `db` with health condition so PostgreSQL is started before the app container.
+- Depends on: `db` with health condition so PostgreSQL is started before the app container, and `redis` with health condition so authentication rate-limit storage is available before the web app starts.
 - Exposes: host port `${APP_HOST_PORT}` to the Gunicorn web process listening on container port `8000`.
 - Notes: the SQLAlchemy engine already prefers `DATABASE_URL`, so Compose now controls whether the app runs against PostgreSQL and the SQLite runtime path is no longer used. The Dockerfile starts Gunicorn with `src.main:app`, which matches the Flask WSGI entry point used on the remote server. `FLASK_SECRET_KEY` must be passed explicitly into the container because Compose variable substitution alone does not make an env value available to `os.environ` inside the running Flask process.
 
@@ -55,6 +55,13 @@ ingest to display.
 - Exposes: container port `5432` to other Compose services.
 - Healthcheck: uses `pg_isready` with the same env-driven database name and user so Compose can tell when the database is actually ready to accept connections.
 - Notes: this follows the system design direction of SQLite for local development/prototyping and PostgreSQL for the remote/server-style deployment. With `postgres:18`, the working mount target is `/var/lib/postgresql`. Using separate `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_VOLUME_NAME` values for dev and prod keeps the two environments fully isolated, which matches the environment separation expected by `Web Application System Design V4 - 20260224.pdf`.
+
+### redis
+- Purpose: In-memory Redis service used by Flask-Limiter to store short-lived authentication rate-limit counters.
+- Image: `redis:8-alpine`.
+- Exposes: container port `6379` to other Compose services only.
+- Healthcheck: uses `redis-cli ping` so Compose can tell when Redis is ready before starting the web app.
+- Notes: no named persistence volume is configured because these counters are temporary. Losing Redis state restarts the rate-limit windows, but does not lose application data.
 
 ### cloudflared
 - Purpose: run a containerised, remotely-managed Cloudflare Tunnel connector inside the same Compose network as the app stack.
@@ -130,17 +137,501 @@ docker compose -p enduro-prod --env-file .env.prod up -d
 - Core PostgreSQL values: `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_VOLUME_NAME`.
 - Public access values: `TUNNEL_TOKEN`, `APP_HOSTNAME`, and `APP_HOST_PORT`.
 - Flask secret values: `FLASK_SECRET_KEY` must be passed into the `server` container explicitly through the Compose `environment` section so Flask can read it through `os.environ`.
+- Map values: `MAP_PROVIDER`, `MAP_STYLE`, `ARCGIS_API_KEY`, and the map-limit variables must also be passed explicitly into the `server` container. Flask uses the provider/style/key in the map quota API only; the post-race HTML receives a safe bootstrap config and must not render the Esri key directly. The referrer-restricted Esri browser API key is returned only by `/api/map/config-status` when quota checks allow satellite imagery.
+- Auth email and security values: `RESEND_API_KEY`, `MAIL_FROM`, `APP_PUBLIC_BASE_URL`, `AUTH_TOKEN_PEPPER`, `AUTH_PASSWORD_MIN_LENGTH`, `AUTH_RATE_LIMIT_STORAGE_URL`, `SESSION_COOKIE_SECURE`, and `SESSION_COOKIE_SAMESITE` are passed into the `server` container for the authentication workstream. Resend is used only for forgot-password reset links in the current plan; signup email verification is intentionally not enabled.
 - Notes: changing PostgreSQL bootstrap variables on an already-initialised volume does not reconfigure an existing database cluster. Clean separation requires a fresh volume name per environment or an explicit manual database/user migration.
+
+## Python Requirements
+
+### Authentication and security packages
+- Purpose: Add the package baseline for the viewer/rider/admin authentication workstream described by `Web Application System Design V4 - 20260224.pdf`.
+- Packages: `Flask-Login` for browser login sessions, `Flask-WTF` for form handling and CSRF protection, `Flask-Limiter` for rate limiting sensitive auth routes, `redis` for shared rate-limit storage, `email-validator` for signup/reset email validation, and `resend` for forgot-password email delivery.
+- Notes: Resend is only used for password-reset emails in the current plan. Signup email verification is intentionally not enabled.
 
 ## src/main.py
 
 ### create_app
-- Purpose: Flask application factory that creates the app instance, loads the Flask secret key, registers CORS, and attaches all API and web blueprints.
-- Reads: `FLASK_SECRET_KEY` from the container runtime environment, `config.yaml` for host and port globals.
-- Writes: `app.config["SECRET_KEY"]`.
-- Registers: ingest API routes, home, riders, devices, races, and RFID record viewer blueprints.
+- Purpose: Flask application factory that creates the app instance, loads the Flask secret key, configures browser security helpers, and attaches all API and web blueprints.
+- Reads: `FLASK_SECRET_KEY`, the `MAP_*` map configuration values, `ARCGIS_API_KEY`, and the auth email/security configuration values from the container runtime environment; `config.yaml` for host and port globals; `src.auth.login.login_manager` for browser session setup; `src.auth.rate_limits` for Redis-backed rate limiting; `src.auth.csrf` helpers for CSRF setup; `src.auth.routes.bp_auth` for signup and future auth pages; `src.web.rider_profiles.bp_rider_profiles` for the future rider profile page; `src.web.map_tile_quota.bp_map_tile_quota` for map tile quota admin/config routes.
+- Writes: `app.config["SECRET_KEY"]` plus secure session-cookie settings, the map provider, style, browser API key, map-limit configuration values, and `AUTH_RATE_LIMIT_STORAGE_URL`; initialises Flask-Login, Flask-Limiter, and Flask-WTF CSRF protection on the app.
+- Registers: ingest API routes, auth browser routes, home/dashboard routes, public rider profile routes, rider management, devices, races, RFID record viewer, and map tile quota blueprints.
 - Called from: module import path `src.main:app` for Gunicorn, and the direct-run block at the bottom of the file.
-- Notes: the app now expects `FLASK_SECRET_KEY` to exist in the container environment. If Compose does not pass that value into the `server` service, Gunicorn fails during import with `KeyError: 'FLASK_SECRET_KEY'`.
+- Notes: the app now expects `FLASK_SECRET_KEY` to exist in the container environment. If Compose does not pass that value into the `server` service, Gunicorn fails during import with `KeyError: 'FLASK_SECRET_KEY'`. Browser form blueprints are CSRF-protected. The tracker ingest blueprint remains CSRF-exempt because it is used by device/API clients rather than browser-session forms. Runtime table creation is intentionally disabled; run Alembic migrations before starting the server or workers.
+
+### CORS policy
+- Purpose: Keep Cross-Origin Resource Sharing disabled by default for the server-rendered web app.
+- Behavior: the application no longer calls global `CORS(app)` and no longer depends on `flask-cors`.
+- Why: current browser requests use same-origin relative URLs, while tracker/device uploads are direct HTTP client calls and do not depend on browser CORS. Removing broad CORS avoids unnecessary cross-origin browser access once cookie-based login is introduced.
+- When to reintroduce: add a narrow CORS helper only if a separate browser frontend on another origin must call selected API endpoints, for example `https://dashboard.kooksnylive.co.za` calling `https://api.kooksnylive.co.za/api/v1/races`. In that case, restrict allowed origins and keep credentials disabled unless there is a deliberate cookie-authenticated cross-origin design.
+
+## src/auth/__init__.py
+
+- Purpose: Mark `src.auth` as the authentication helper package for browser users.
+- Reads: None.
+- Writes: None.
+- Functions: None.
+- Notes: auth route modules and helper modules live under this package so the viewer/rider/admin authentication workstream remains grouped together, matching the role split described in `Web Application System Design V4 - 20260224.pdf`.
+- Checks: importing `src.auth` succeeds and has no side effects.
+
+## src/auth/login.py
+
+### AUTH_VERSION_SESSION_KEY
+- Purpose: Single Flask session key used to store the authenticated user's `auth_version`.
+- Reads: None.
+- Writes: None.
+- Called from:
+  - `src.auth.login:remember_auth_version`.
+  - `src.auth.login:clear_auth_version`.
+  - `src.auth.login:load_user`.
+- Notes: keeping the key centralised avoids mismatches between login, logout, and session-validation code.
+
+### login_manager
+- Purpose: Shared Flask-Login manager that configures browser login session handling for the application.
+- Reads: none at definition time.
+- Writes: Flask-Login settings including the future login endpoint `auth.login`, the login-required message, and the login message category.
+- Called from:
+  - `src.main:create_app`, where `login_manager.init_app(app)` attaches the manager to the Flask app.
+- Notes: the actual `/login` route is added in a later auth step. No existing routes are protected by this change yet.
+
+### remember_auth_version
+- Purpose: Store the user's current database `auth_version` in the signed Flask session after successful login.
+- Reads: `user.auth_version`.
+- Writes: `auth_version` into the Flask session cookie.
+- Returns: None.
+- Called from:
+  - Future login route immediately after Flask-Login's `login_user(user)`.
+- Notes: this enables old browser sessions to be rejected after password resets, forced logouts, or sensitive account changes.
+
+### clear_auth_version
+- Purpose: Remove the stored `auth_version` from the Flask session.
+- Reads: Flask session.
+- Writes: removes the `auth_version` session value when present.
+- Returns: None.
+- Called from:
+  - Future logout and forced-session-clear flows.
+
+### load_user
+- Purpose: Load the current browser user from the Flask session id.
+- Reads: `User`, `SessionLocal`, and the signed Flask session `auth_version`.
+- Writes: None.
+- Returns: active User row when the id and session `auth_version` are valid, otherwise `None`.
+- Called from:
+  - Flask-Login during request handling when a browser session contains a user id.
+- Notes: returning `None` makes Flask-Login treat the request as anonymous. That cleanly redirects anonymous, deleted, inactive, or stale-session users to the configured login route when they access protected pages. The actual login route will separately deny inactive-account login attempts with a clear message.
+
+### Checks
+- `load_user()` returns a user for a valid active user with matching `auth_version`.
+- Invalid ids, missing users, inactive users, missing session `auth_version`, and mismatched `auth_version` return None.
+- Anonymous, invalid, inactive, and stale sessions redirect to the configured login route once a protected route is accessed.
+
+## src/auth/csrf.py
+
+### csrf
+- Purpose: Shared Flask-WTF `CSRFProtect` instance for protecting browser forms and JSON POST requests from Cross-Site Request Forgery.
+- Reads: Flask app configuration after `init_csrf(app)` is called.
+- Writes: CSRF request hooks and template helpers onto the Flask application.
+- Called from:
+  - `src.auth.csrf:init_csrf`.
+
+### init_csrf
+- Purpose: Attach Flask-WTF CSRF protection to the Flask application.
+- Reads: Flask application instance.
+- Writes: CSRF middleware/hooks onto the Flask app.
+- Returns: None.
+- Called from:
+  - `src.main:create_app`.
+
+### exempt_blueprints
+- Purpose: Exempt non-browser-session blueprints from CSRF enforcement.
+- Reads: Flask Blueprint objects passed by `src.main:create_app`.
+- Writes: CSRF exemption registrations for those blueprints.
+- Returns: None.
+- Called from:
+  - `src.main:create_app`.
+- Notes: browser form blueprints should normally stay protected. The current exemption is for tracker/device ingest, which should use device/API authentication instead of CSRF.
+
+### Checks
+- Flask app starts with CSRF protection initialised.
+- Browser POST forms include hidden `csrf_token` values.
+- Browser JavaScript POST requests to protected race routes send `X-CSRFToken`.
+- Tracker ingest remains operational while CSRF-exempt.
+- CSRF-less submissions to protected browser routes fail.
+
+## src/auth/passwords.py
+
+### validate_password
+- Purpose: Validate password strength and optional confirmation matching for signup and reset-password forms.
+- Reads: raw submitted password and optional confirmation value.
+- Writes: None.
+- Returns: list of validation error strings; an empty list means the password passed.
+- Policy: minimum six characters and at least one number or special character; confirmation must match when supplied.
+- Notes: six characters is intentionally the current MVP policy but should be increased before public release.
+
+### hash_password
+- Purpose: Convert a raw password into a Werkzeug password hash before database storage.
+- Reads: raw submitted password.
+- Writes: None.
+- Returns: hash string suitable for `users.password_hash`.
+- Notes: plaintext passwords must never be stored in the database.
+
+### check_password
+- Purpose: Verify a submitted password against the stored password hash during login.
+- Reads: stored `users.password_hash` value and raw submitted password.
+- Writes: None.
+- Returns: True when the password matches; False otherwise.
+
+### Checks
+- Valid password passes validation.
+- Too-short password fails.
+- Password without a number or special character fails.
+- Confirmation mismatch fails.
+- Stored hash is not equal to plaintext.
+- Correct password verifies against the stored hash.
+- Wrong password fails verification.
+
+## src/auth/tokens.py
+
+### generate_raw_token
+- Purpose: Generate a random URL-safe token for password-reset links.
+- Reads: None.
+- Writes: None.
+- Returns: raw token string to email to the user.
+- Notes: raw tokens must never be stored directly in the database.
+
+### hash_token
+- Purpose: Convert a raw token into a peppered SHA-256 hash for database storage.
+- Reads: raw token and `AUTH_TOKEN_PEPPER` from the environment.
+- Writes: None.
+- Returns: hex digest stored in `auth_tokens.token_hash`.
+
+### create_auth_token
+- Purpose: Create a new one-time auth token row for a user and return the raw token for emailing.
+- Reads: active SQLAlchemy session, target user, token purpose, and expiry duration.
+- Writes: invalidates older unused tokens for the same user/purpose, then inserts a new `AuthToken` row containing only the token hash.
+- Returns: raw token string for the reset link.
+- Notes: currently used for `password_reset`, but the `purpose` field keeps the helper reusable.
+
+### find_valid_token
+- Purpose: Validate a submitted raw token from a reset link.
+- Reads: active SQLAlchemy session, submitted raw token, expected purpose, `auth_tokens`, and `AUTH_TOKEN_PEPPER`.
+- Writes: None.
+- Returns: matching `AuthToken` row when the token exists, has the expected purpose, has not been used, and has not expired; otherwise None.
+
+### mark_token_used
+- Purpose: Consume a token after successful use.
+- Reads: `AuthToken` row.
+- Writes: sets `used_at` to the current UTC time.
+- Returns: None.
+
+### invalidate_existing_tokens
+- Purpose: Cancel older unused tokens for the same user and purpose before issuing a new one.
+- Reads: active SQLAlchemy session, `user_id`, purpose, and `auth_tokens`.
+- Writes: sets `used_at` on matching unused tokens.
+- Returns: number of token rows invalidated.
+
+### Checks
+- Raw token is never stored.
+- Token hash is stored.
+- Expired token fails validation.
+- Used token fails validation.
+- Wrong-purpose token fails validation.
+- Creating a new token invalidates earlier unused tokens for the same user and purpose.
+
+## src/auth/mail.py
+
+### build_password_reset_url
+- Purpose: Build the public password-reset URL from `APP_PUBLIC_BASE_URL` and the raw reset token.
+- Reads: `APP_PUBLIC_BASE_URL` and raw reset token.
+- Writes: None.
+- Returns: fully-qualified reset URL such as `https://dev.kooksnylive.co.za/reset-password/<token>`.
+- Notes: the URL is built from trusted environment configuration through `src.utils.env:required_env`, not the inbound request host.
+
+### send_email
+- Purpose: Send one transactional email through Resend.
+- Reads: `RESEND_API_KEY`, `MAIL_FROM`, recipient email address, subject, and HTML body.
+- Writes: one email through Resend.
+- Returns: Resend API response.
+- Notes: the API key is never printed.
+
+### send_password_reset_email
+- Purpose: Send a password-reset link to `user.email`.
+- Reads: User row email address and raw reset token.
+- Writes: one password-reset email through `send_email`.
+- Returns: Resend API response.
+- Notes: the current password is never emailed, and callers should not log reset links because they contain the raw token.
+
+### Checks
+- Password-reset URL uses `APP_PUBLIC_BASE_URL` rather than the inbound request host.
+- Missing email configuration fails with a clear `RuntimeError`.
+- Resend API key is not printed.
+- Manual Resend smoke test sends successfully when `RESEND_API_KEY`, `MAIL_FROM`, and `TEST_EMAIL_TO` are configured.
+
+## src/auth/routes.py
+
+Module header documents:
+- `GET/POST /signup`
+- `GET/POST /login`
+- `POST /logout`
+- `GET/POST /forgot-password`
+- `GET/POST /reset-password/<token>`
+- `GET /admin/users`
+
+Module notes:
+- Viewers remain anonymous and do not have `User` rows.
+- Public signup always creates `role='rider'`.
+- Forgot-password and reset-password flows do not reveal whether an email exists and never email/store the existing password.
+- `/admin/users` is currently an admin-only placeholder route protected with `admin_required`.
+
+### bp_auth
+- Purpose: Flask Blueprint for browser authentication routes.
+- Reads: None at definition time.
+- Writes: route registrations for signup and future login/logout/password-reset pages.
+- Called from:
+  - `src.main:create_app`, where the blueprint is registered on the Flask app.
+- Notes: all auth routes live in this module rather than `src/web` so authentication remains grouped in one place.
+
+### _normalize_auth_value
+- Purpose: Normalise usernames and email addresses for case-insensitive uniqueness checks.
+- Reads: raw submitted username or email value.
+- Writes: None.
+- Returns: lowercase, trimmed string.
+
+### _signup_form_data
+- Purpose: Read signup form fields into a template-friendly dictionary.
+- Reads: `request.form` values for name, surname, username, and email.
+- Writes: None.
+- Returns: dictionary of non-password signup fields.
+- Notes: password values are intentionally not returned to the template after validation errors.
+
+### _validate_signup_form
+- Purpose: Validate required signup fields and password policy.
+- Reads: signup form dictionary, raw password, password confirmation, and `email-validator` format checks.
+- Writes: None.
+- Returns: list of validation error messages.
+- Calls:
+  - `src.auth.passwords:validate_password`.
+
+### _signup_identity_exists
+- Purpose: Check whether the submitted username or email is already registered.
+- Reads: active SQLAlchemy session, `users.username_normalized`, and `users.email_normalized`.
+- Writes: None.
+- Returns: True when either identity value already exists.
+
+### _login_form_data
+- Purpose: Read login form values into a template-friendly dictionary.
+- Reads: `request.form` value for username/email identifier.
+- Writes: None.
+- Returns: dictionary containing the non-password login identifier.
+- Notes: password values are intentionally not returned to the template after validation errors.
+
+### _find_login_user
+- Purpose: Find a login account by username or email.
+- Reads: active SQLAlchemy session, `users.username_normalized`, and `users.email_normalized`.
+- Writes: None.
+- Returns: matching User row when found; otherwise None.
+- Notes: callers must use the same generic error for missing users and wrong passwords so login does not reveal whether an email or username exists.
+
+### _find_active_user_by_email
+- Purpose: Find an active user account by email for password reset.
+- Reads: active SQLAlchemy session and `users.email_normalized`.
+- Writes: None.
+- Returns: active User row when found; otherwise None.
+- Notes: callers always render the same forgot-password response whether this returns a user or None.
+
+### _forgot_password_form_data
+- Purpose: Read forgot-password form values into a template-friendly dictionary.
+- Reads: `request.form` value for recovery email.
+- Writes: None.
+- Returns: dictionary containing the submitted recovery email.
+
+### _reset_password_form_data
+- Purpose: Read reset-password form values.
+- Reads: `request.form` values for password and password confirmation.
+- Writes: None.
+- Returns: dictionary containing the new password and confirmation.
+
+### _render_forgot_password_response
+- Purpose: Render the standard forgot-password response.
+- Reads: template form dictionary.
+- Writes: None.
+- Returns: rendered `forgot_password.html`.
+- Notes: this response is deliberately reused for existing and non-existing email addresses so the route does not reveal whether an account exists.
+
+### signup
+- Purpose: Render the public rider signup form and create a rider login account on POST.
+- Reads: signup form fields, `User`, `Rider`, password helpers, and the active database session.
+- Writes: one linked `Rider` row and one linked `User` row with `role='rider'`; writes Flask-Login session data and the session `auth_version` after successful signup.
+- Returns: rendered `signup.html` for GET or validation errors; redirects to the existing rider edit form on success.
+- Notes: public signup ignores any submitted role/admin field and always creates a rider account. Later this success redirect should point to a dedicated rider/profile route that only allows the rider to edit their own linked profile.
+
+### login
+- Purpose: Render the login form and authenticate rider/admin users by username or email.
+- Reads: username/email identifier, password, `User`, password hash checker, and the active database session.
+- Writes: `last_login_at` on successful login; writes Flask-Login session data and session `auth_version`.
+- Returns: rendered `login.html` for GET or failed login; redirects riders to `/dashboard` and admins to `/dashboard-admin` on success.
+- Rate limit: POST requests are limited through Flask-Limiter.
+- Notes: wrong username/email and wrong password use the same generic message: `Username/email or password is incorrect.` Inactive users are denied with a clear inactive-account message.
+
+### logout
+- Purpose: Clear the current browser login session.
+- Reads: current Flask-Login session.
+- Writes: removes stored session `auth_version` and logs the user out.
+- Returns: redirect to `/login`.
+- Notes: route accepts POST only and remains CSRF-protected.
+
+### forgot_password
+- Purpose: Start the password-reset flow by accepting a recovery email address.
+- Reads: submitted email, active `User` row when present, auth-token helpers, and Resend mail helper.
+- Writes: for active accounts only, invalidates old reset tokens, creates one new hashed 30-minute reset token, and sends a reset email.
+- Returns: rendered `forgot_password.html` with the same success message whether or not the email belongs to an active account.
+- Rate limit: POST requests are limited through Flask-Limiter.
+- Notes: the current password is never emailed, and the raw reset token is never logged or stored directly.
+
+### reset_password
+- Purpose: Complete a one-use password reset from an emailed reset link.
+- Reads: raw reset token from the URL, submitted new password, `AuthToken`, and linked `User`.
+- Writes: new password hash, increments `user.auth_version`, updates `updated_at`, and marks the reset token used.
+- Returns: rendered `reset_password.html` for invalid/expired/reused links or validation errors; redirects to `/login` after a successful reset.
+- Rate limit: POST requests are limited through Flask-Limiter.
+- Notes: incrementing `auth_version` invalidates existing browser sessions for that user.
+
+### user_management
+- Purpose: Placeholder for future admin user management.
+- Reads: None.
+- Writes: None.
+- Returns: rendered `placeholder.html`.
+- Route: `/admin/users`.
+- Access: active admin account through `admin_required`.
+- Notes: later this route will allow admins to view users, update roles, activate/deactivate accounts, and reset relevant account flags.
+
+### Checks
+- Public signup cannot create admin accounts.
+- Successful signup creates a linked `Rider` row immediately.
+- Successful signup creates a linked `User` row with `role='rider'`.
+- Successful signup logs the new user in and stores the session `auth_version`.
+- Successful signup redirects to `/riders/<rider_id>/edit` so the rider can complete their profile.
+- Duplicate username/email submissions return a validation error.
+- Invalid email format returns a validation error.
+- Signup form is CSRF-protected and includes a hidden `csrf_token`.
+- Login works with either username or email.
+- Login sends riders to `/dashboard` and admins to `/dashboard-admin`.
+- Login page links to `/forgot-password`.
+- Logout clears the login session and session `auth_version`.
+- Protected pages redirect to login after logout.
+- Login does not reveal whether a username/email exists for wrong credentials.
+- Forgot-password page always shows the same response for existing and non-existing emails.
+- Forgot-password sends a reset link only for active accounts.
+- Reset links are one-use and fail after expiry or reuse.
+- Password reset increments `auth_version` so existing sessions stop working.
+- Reset token is never logged or stored directly.
+
+## src/web/rider_profiles.py
+
+Module header documents:
+- `GET /rider`
+
+### bp_rider_profiles
+- Purpose: Flask Blueprint for public rider profile pages.
+- Reads: None at definition time.
+- Writes: route registration for `/rider`.
+- Called from:
+  - `src.main:create_app`, where the blueprint is registered on the Flask app.
+
+### rider_profiles
+- Purpose: Placeholder for the future public rider profiles page.
+- Reads: None.
+- Writes: None.
+- Returns: rendered `placeholder.html`.
+- Route: `/rider`.
+- Notes: later this page will list rider profiles and expose edit controls only to the linked rider or admins.
+
+## src/auth/decorators.py
+
+### user_has_role
+- Purpose: Check whether a user object is authenticated, active, and assigned to an allowed role.
+- Reads: user object attributes `is_authenticated`, `is_active`, and `role`.
+- Writes: None.
+- Returns: True when the user has one of the allowed roles; otherwise False.
+- Notes: this helper keeps role comparison logic in one place for rider/admin route decorators.
+
+### user_can_access_rider_resource
+- Purpose: Check whether a user can access a resource owned by a Rider row.
+- Reads: current user role, active/authenticated state, and linked `user.rider_id`.
+- Writes: None.
+- Returns: True for admins, or for riders whose linked Rider id matches the requested resource owner id.
+- Called from:
+  - `src.web.riders:_can_edit_rider`
+  - `src.auth.decorators:require_rider_resource_access`
+- Notes: this generic helper supports Rider profile ownership, RaceRider entry ownership, and future Rider-owned resources.
+
+### require_rider_resource_access
+- Purpose: Abort unless a user can access a Rider-owned resource.
+- Reads: current user role and linked `user.rider_id`.
+- Writes: None.
+- Returns: None when allowed.
+- Raises: 403 Forbidden when the user is not an admin and does not own the linked Rider resource.
+- Called from:
+  - `src.web.races:edit_race_rider`
+  - `src.web.races:remove_race_rider`
+
+### active_user_required
+- Purpose: Protect routes that require any logged-in active account.
+- Reads: Flask-Login `current_user`.
+- Writes: None.
+- Returns: wrapped Flask route function.
+- Called from:
+  - Future account/profile routes that require login but do not care whether the user is a rider or admin.
+- Notes: anonymous, deleted, inactive, and auth-version-stale sessions are redirected by Flask-Login to the configured login route because `load_user()` returns None for those cases.
+
+### rider_required
+- Purpose: Protect rider-level routes.
+- Reads: Flask-Login `current_user` and the user's `role`.
+- Writes: None.
+- Returns: wrapped Flask route function.
+- Called from:
+  - Future rider profile and rider race-entry routes.
+- Notes: allowed roles are `rider` and `admin`, because admins have the highest permission level.
+
+### admin_required
+- Purpose: Protect admin-only routes.
+- Reads: Flask-Login `current_user` and the user's `role`.
+- Writes: None.
+- Returns: wrapped Flask route function.
+- Called from:
+  - Future race, rider, device, RFID, manual timing, user-management, and quota-admin routes.
+- Notes: allowed role is `admin` only. Riders receive 403.
+
+### Checks
+- Anonymous user is redirected to login for protected routes.
+- Rider is blocked from admin-only route with 403.
+- Admin can access admin route.
+- Admin can access rider route.
+
+## src/auth/rate_limits.py
+
+### limiter
+- Purpose: Shared Flask-Limiter instance used to decorate authentication and other abuse-sensitive routes.
+- Reads: client identity through Flask-Limiter's `get_remote_address` key function.
+- Writes: rate-limit headers on responses when route limits are active.
+- Called from:
+  - Future auth routes via decorators such as `@limiter.limit(...)`.
+- Notes: no default route limit is applied in the setup step, so existing pages are not throttled until specific limits are added.
+
+### init_limiter
+- Purpose: Attach Flask-Limiter to the Flask application using Redis-backed counter storage.
+- Reads: `AUTH_RATE_LIMIT_STORAGE_URL` from Flask app config.
+- Writes: Flask-Limiter config keys `RATELIMIT_STORAGE_URI` and `RATELIMIT_HEADERS_ENABLED`, then initialises the Limiter extension.
+- Returns: None.
+- Raises: `RuntimeError` when `AUTH_RATE_LIMIT_STORAGE_URL` is missing so the app does not silently fall back to per-process Python memory counters.
+- Called from:
+  - `src.main:create_app`.
+- Notes: the expected storage URL is `redis://redis:6379/0` in Compose. The same Redis service can later support temporary map/tile usage counters.
+
+### Checks
+- Flask-Limiter initialises with Redis-backed storage from `AUTH_RATE_LIMIT_STORAGE_URL`.
+- Missing storage URL fails clearly rather than silently falling back to per-process memory.
+- No global route throttling is applied until route-specific limits are added.
+- Future auth routes can apply limits to `/login`, `/signup`, `/forgot-password`, and `/reset-password/<token>`.
 
 ### Direct-run debug block
 - Purpose: support direct local execution through `python src/main.py`.
@@ -148,6 +639,492 @@ docker compose -p enduro-prod --env-file .env.prod up -d
 - Writes: none.
 - Called from: only when `src/main.py` is executed directly.
 - Notes: the containerised runtime uses Gunicorn from the Dockerfile rather than this `app.run(...)` path, so the production deployment does not depend on Flask's built-in debug server.
+
+## src/utils/env.py
+
+### env_bool
+- Purpose: Parse environment variable strings into booleans for Flask and worker configuration values.
+- Reads: named environment variable.
+- Writes: None.
+- Returns: `True`, `False`, or the provided default when the value is missing/unrecognised.
+- Called from:
+  - `src.main:create_app` for `SESSION_COOKIE_SECURE`.
+
+### required_env
+- Purpose: Read required environment variables and fail clearly when they are missing or blank.
+- Reads: named environment variable.
+- Writes: None.
+- Returns: stripped environment value.
+- Raises: `RuntimeError` when the value is missing or blank.
+- Called from:
+  - `src.auth.mail` for `APP_PUBLIC_BASE_URL`, `RESEND_API_KEY`, and `MAIL_FROM`.
+- Notes: shared environment helpers should live here so auth, map, worker, and future admin modules do not each create their own local parsing functions.
+
+## Python Layering Rule
+
+### utils / services / web separation
+- Purpose: keep helper logic organised by responsibility so route files stay thin and reusable logic does not become tied to Flask.
+- `src/utils/*`: pure or low-level reusable helpers. These should avoid Flask route concerns and should not render templates. Good examples: Redis key construction, browser cookie id mechanics, time parsing, GPX conversion, and validation helpers.
+- `src/services/*`: business/application logic that coordinates models, durable state, and domain rules. Good examples: billing-cycle calculation, current quota row creation, quota payload building, and block-reason decisions.
+- `src/web/*`: Flask route/controller layer only. This layer should parse requests, call services/utils, enforce decorators, return `render_template()` or `jsonify()`, and keep route-specific HTTP glue.
+- Notes: when adding new map tile quota functions, first check whether the function belongs in an existing utility or service module before adding another route-local helper. This keeps the Esri quota work aligned with the system design goal of controlling tile-provider costs without mixing provider logic into every route.
+
+## src/utils/map_tile_quota.py
+
+### Overall description
+- Purpose: Provide shared helper logic for Esri/satellite map tile quota enforcement, browser identification, Redis short-term counters, Redis temporary blocks, monthly quota state, and database usage summaries.
+- Contains:
+  - `_timeout_seconds`: convert timeout minutes to seconds for Redis expiry.
+  - `_normalise_tile_delta`: validate tile deltas before counting them.
+  - `_minute_bucket`: round a datetime down to its minute bucket.
+  - `_window_bucket_times`: list the minute buckets in the rolling usage window.
+  - `_is_safe_browser_cookie_id`: check browser cookie ids before reusing them.
+  - `generate_browser_cookie_id`: create a new anonymous browser identifier.
+  - `get_or_create_browser_cookie_id`: read or create the anonymous browser cookie.
+  - `browser_count_key`: build the Redis key for one browser/minute tile bucket.
+  - `browser_block_key`: build the Redis key for a browser's temporary block flag.
+  - `_redis_value_to_int`: safely parse Redis values into integers.
+  - `get_browser_tile_count`: sum browser tile buckets inside the rolling window.
+  - `increment_browser_tile_count`: add a tile delta to the current minute bucket.
+  - `is_browser_over_tile_limit`: compare rolling browser usage against the tile limit.
+  - `_browser_window_count_keys`: build current rolling-window Redis count keys.
+  - `is_browser_blocked`: check whether a browser currently has a block flag.
+  - `set_browser_block`: set a temporary browser block in Redis.
+  - `reset_browser_block`: remove a browser block and optionally current window counters.
+  - `_override_is_current`: check whether a monthly quota override is still active.
+  - `is_monthly_blocked`: decide whether monthly/global quota state blocks satellite use.
+  - `set_monthly_hard_stop`: set or clear the monthly hard-stop flag.
+  - `reset_monthly_hard_stop`: clear the monthly hard-stop flag.
+  - `record_tile_delta`: apply one tile delta to session and monthly DB rows.
+- Notes: this matches the system design requirement to control tile-provider cost exposure while still allowing GPX/race viewing to continue with fallback map behavior.
+
+### get_or_create_browser_cookie_id
+- Purpose: Read an existing anonymous browser id cookie or create a new one.
+- Reads: Flask request cookies.
+- Writes: browser cookie on the response when a new id is needed.
+- Returns: browser cookie id.
+- Called from:
+  - Future map config/status and tile usage routes.
+- Notes: the cookie stores only an identifier; usage counts remain server-side in Redis/database stores.
+
+### browser_count_key
+- Purpose: Build the Redis key for one browser/minute tile count bucket.
+- Reads: browser cookie id and optional bucket datetime.
+- Writes: None.
+- Returns: Redis key string.
+- Called from: `get_browser_tile_count`, `increment_browser_tile_count`, and `reset_browser_block`.
+
+### browser_block_key
+- Purpose: Build the Redis key for a browser's temporary satellite block.
+- Reads: browser cookie id.
+- Writes: None.
+- Returns: Redis key string.
+- Called from: `is_browser_blocked`, `set_browser_block`, and `reset_browser_block`.
+
+### get_browser_tile_count
+- Purpose: Sum the Redis browser tile buckets inside the rolling usage window.
+- Reads: Redis count keys for the current minute and previous minutes inside `MAP_USER_LIMIT_TIMEOUT_MIN`.
+- Writes: None.
+- Returns: integer count for the rolling window.
+- Notes: this is minute-granularity rolling-window counting, not one counter that resets after inactivity.
+
+### increment_browser_tile_count
+- Purpose: Add a browser-reported tile delta to the current minute Redis bucket.
+- Reads: current minute bucket key and the other bucket keys inside the rolling window.
+- Writes: current minute bucket key and expiry.
+- Returns: updated browser count inside the rolling window.
+- Notes: each bucket expires after `MAP_USER_LIMIT_TIMEOUT_MIN` plus a small buffer. Enforcement is based on the sum of buckets inside the current window, so older usage naturally stops counting once it falls outside the window.
+
+### is_browser_over_tile_limit
+- Purpose: Compare rolling browser usage against `MAP_TILE_USER_LIMIT`.
+- Reads: browser bucket keys inside the current rolling window.
+- Writes: None.
+- Returns: boolean.
+- Notes: this is the preferred browser-limit check for automatic Esri fallback because it allows satellite usage again once the rolling-window total falls below the limit.
+
+### is_browser_blocked
+- Purpose: Check whether the browser currently has a Redis block key.
+- Reads: Redis block key.
+- Writes: None.
+- Returns: boolean.
+
+### set_browser_block
+- Purpose: Set a temporary Redis block key for a browser.
+- Reads: configured timeout minutes.
+- Writes: Redis block key with expiry and reason value.
+- Returns: None.
+
+### reset_browser_block
+- Purpose: Manually release a browser block.
+- Reads: browser cookie id.
+- Writes: deletes Redis block key and optionally deletes current rolling-window bucket keys.
+- Returns: None.
+- Called from:
+  - Future admin map tile quota reset route.
+
+### is_monthly_blocked
+- Purpose: Decide whether monthly/global quota state should prevent Esri config release.
+- Reads: `MapTileMonthlyQuota`-like row, current role, admin flag, and optional current time.
+- Writes: None.
+- Returns: boolean.
+- Notes: missing quota state fails closed for non-admin users.
+
+### set_monthly_hard_stop
+- Purpose: Set or clear the monthly hard-stop flag.
+- Reads: `MapTileMonthlyQuota`-like row and optional current time.
+- Writes: `hard_stop_active`, `hard_stop_triggered_at`, and `updated_at`.
+- Returns: None.
+
+### reset_monthly_hard_stop
+- Purpose: Clear the monthly hard-stop flag.
+- Reads: `MapTileMonthlyQuota`-like row and optional current time.
+- Writes: `hard_stop_active` and `updated_at`.
+- Returns: None.
+
+### record_tile_delta
+- Purpose: Apply one accepted browser tile delta to both the usage-session row and monthly quota row.
+- Reads: `MapTileUsageSession`-like row, `MapTileMonthlyQuota`-like row, tile delta, and optional current time.
+- Writes: `usage_session.estimated_tiles_loaded`, `usage_session.session_last_seen_at`, `monthly_quota.estimated_tiles_used`, and `updated_at` fields.
+- Returns: normalised tile delta.
+- Notes: callers should pass deltas, not cumulative totals, to avoid double counting.
+
+### Checks
+- Browser count bucket keys expire using `MAP_USER_LIMIT_TIMEOUT_MIN` plus a small cleanup buffer.
+- Browser block keys expire using `MAP_USER_LIMIT_TIMEOUT_MIN`.
+- Browser tile counts are calculated from the current rolling window, not from one inactivity-refreshed counter.
+- Tile deltas increment Redis count and database summary totals once.
+- Reset removes the block key and, by default, current rolling-window count bucket keys.
+- Monthly hard stop blocks satellite unless an active override is present.
+
+## src/services/__init__.py
+
+- Purpose: Mark `src.services` as the business-service package for application/domain logic.
+- Reads: None.
+- Writes: None.
+- Functions: None.
+- Notes: service modules sit between Flask routes and low-level utilities/database models. They should contain business rules but should not render templates or define routes.
+
+## src/services/map_tile_quota.py
+
+### Overall description
+- Purpose: Provide map tile quota business/service helpers for Esri billing-cycle, durable quota state, usage summaries, browser block history, and quota audit events.
+- Contains:
+  - `current_billing_month`: calculate the 25th-to-25th billing-cycle key.
+  - `quota_defaults_from_config`: convert map-limit config values into quota defaults.
+  - `get_or_create_current_quota`: load/create the current billing-cycle quota row.
+  - `generate_usage_session_key`: create a public usage-session identifier.
+  - `get_or_create_usage_session`: load/create a summarized browser/page usage row.
+  - `update_quota_threshold_flags`: set warning/hard-stop timestamps and flags.
+  - `apply_tile_usage_delta`: apply a tile delta and update threshold flags.
+  - `record_browser_block`: record a browser block for admin visibility.
+  - `release_browser_blocks`: mark active browser block rows released.
+  - `set_viewers_only_blocked`: block/unblock anonymous viewer satellite access.
+  - `set_global_hard_stop`: manually set/clear global hard-stop state.
+  - `set_monthly_thresholds`: manually update active monthly quota thresholds.
+  - `set_monthly_tile_estimate`: manually correct the current monthly tile estimate.
+  - `set_monthly_override`: enable a temporary monthly hard-stop override.
+  - `clear_monthly_override`: disable a monthly hard-stop override.
+  - `record_quota_audit_event`: write admin/system quota actions to auth_audit_events.
+  - `monthly_block_reason`: convert quota state into a frontend-safe block reason.
+  - `quota_payload`: convert a quota row into JSON/admin display data.
+- Notes: Redis rolling-window mechanics remain in `src.utils.map_tile_quota`; Flask request/response handling remains in `src.web.map_tile_quota`.
+
+### current_billing_month
+- Purpose: Calculate the current Esri billing-cycle month key.
+- Reads: current UTC date, or supplied test datetime.
+- Writes: None.
+- Returns: `YYYY-MM` key for the cycle starting on the 25th.
+- Notes: dates from the 1st to the 24th belong to the previous cycle-start month.
+
+### quota_defaults_from_config
+- Purpose: Convert map-limit configuration into defaults for a new monthly quota row.
+- Reads: config dictionary values for `monthly_limit`, `warning_threshold`, and `hard_stop_threshold`.
+- Writes: None.
+- Returns: dictionary of normalised quota defaults.
+
+### get_or_create_current_quota
+- Purpose: Load or create the `MapTileMonthlyQuota` row for the active 25th-to-25th billing cycle.
+- Reads: `map_tile_monthly_quota` through the provided SQLAlchemy session.
+- Writes: a new `MapTileMonthlyQuota` row when one does not exist for the current cycle/provider.
+- Returns: `MapTileMonthlyQuota` row.
+- Notes: this keeps config-status fail-safe decisions tied to durable monthly quota state.
+
+### generate_usage_session_key
+- Purpose: Create a browser/page usage-session identifier.
+- Reads: secure random source.
+- Writes: None.
+- Returns: URL-safe token.
+
+### get_or_create_usage_session
+- Purpose: Load an existing usage session by `session_key`, or create a summarized browser/page usage row.
+- Reads: `map_tile_usage_sessions` through the provided SQLAlchemy session.
+- Writes: a new `MapTileUsageSession` row when no valid session exists.
+- Returns: `MapTileUsageSession` row.
+
+### update_quota_threshold_flags
+- Purpose: Set warning and hard-stop flags after monthly usage changes.
+- Reads: `estimated_tiles_used`, `warning_threshold`, and `hard_stop_threshold`.
+- Writes: `warning_triggered_at`, `hard_stop_active`, `hard_stop_triggered_at`, and `updated_at` when thresholds are crossed.
+- Returns: None.
+
+### apply_tile_usage_delta
+- Purpose: Apply one tile delta to session/monthly totals and update threshold flags.
+- Reads: `MapTileUsageSession`, `MapTileMonthlyQuota`, and tile delta.
+- Writes: usage-session total, monthly estimated total, last-seen/update timestamps, warning state, and hard-stop state.
+- Returns: normalised tile delta.
+
+### record_browser_block
+- Purpose: Record browser over-limit state for admin visibility.
+- Reads: active `map_tile_browser_blocks` rows for the browser/reason.
+- Writes: new or updated `MapTileBrowserBlock` row.
+- Returns: `MapTileBrowserBlock` row.
+- Notes: Redis rolling-window counting remains the enforcement source; this DB row gives admins something visible/resettable.
+
+### release_browser_blocks
+- Purpose: Mark active browser block rows as released.
+- Reads: active `map_tile_browser_blocks` rows for the browser.
+- Writes: `released_at`, `released_by_user_id`, `release_reason`, and `updated_at`.
+- Returns: count of released rows.
+
+### set_viewers_only_blocked
+- Purpose: Block/unblock anonymous viewer satellite access.
+- Reads: desired boolean state.
+- Writes: `viewers_only_blocked` and `updated_at`.
+- Returns: None.
+
+### set_global_hard_stop
+- Purpose: Manually set or clear global hard-stop state.
+- Reads: desired boolean state.
+- Writes: `hard_stop_active`, optionally `hard_stop_triggered_at`, and `updated_at`.
+- Returns: None.
+
+### set_monthly_thresholds
+- Purpose: Manually update the active monthly quota row's monthly limit, warning threshold, and hard-stop threshold.
+- Reads: submitted threshold values and current monthly estimate.
+- Writes: `monthly_limit`, `warning_threshold`, `hard_stop_threshold`, recalculated warning/hard-stop flags, and `updated_at`.
+- Returns: None.
+- Notes: values are stored in the current DB row only; `.env` values continue to seed newly-created billing-cycle rows.
+
+### set_monthly_tile_estimate
+- Purpose: Manually correct the app-estimated monthly Esri tile usage.
+- Reads: corrected estimate and current quota thresholds.
+- Writes: `estimated_tiles_used`, recalculated warning/hard-stop flags, and `updated_at`.
+- Returns: None.
+- Notes: if the corrected estimate falls below thresholds, automatic warning/hard-stop state is cleared because the previous estimate was treated as inaccurate.
+
+### set_monthly_override
+- Purpose: Enable a temporary monthly hard-stop override.
+- Reads: override duration and optional reason.
+- Writes: `override_active`, `override_until`, `override_reason`, and `updated_at`.
+- Returns: None.
+
+### clear_monthly_override
+- Purpose: Disable the active monthly override.
+- Reads: current quota row.
+- Writes: `override_active`, `override_until`, `override_reason`, and `updated_at`.
+- Returns: None.
+
+### record_quota_audit_event
+- Purpose: Write map quota admin/system actions to `auth_audit_events`.
+- Reads: actor user id, action name, and safe JSON metadata.
+- Writes: `AuthAuditEvent` row.
+- Returns: `AuthAuditEvent` row.
+
+### monthly_block_reason
+- Purpose: Convert monthly quota state into a frontend-safe fallback reason.
+- Reads: current quota row, role, and admin flag.
+- Writes: None.
+- Returns: reason string such as `monthly_limit` or `viewers_disabled`, or None when not blocked.
+
+### quota_payload
+- Purpose: Convert a monthly quota row into JSON/admin display data.
+- Reads: `MapTileMonthlyQuota` row fields.
+- Writes: None.
+- Returns: dictionary safe to expose to the browser.
+
+### Checks
+- Billing cycle uses the 25th-to-25th rule.
+- Missing quota rows are created with environment-derived limits.
+- Tile deltas update usage session and monthly quota totals once.
+- Monthly hard-stop is activated when the hard-stop threshold is crossed.
+- Browser block rows are visible/releasable for admins.
+- Admin quota actions are captured in `auth_audit_events`.
+
+## src/web/map_tile_quota.py
+
+Module header documents:
+- `GET /admin/map_tile_quota`
+- `GET /api/map/config-status`
+- `POST /api/map/tile-usage`
+- `POST /admin/map_tile_quota/browser/<browser_cookie_id>/reset`
+- `POST /admin/map_tile_quota/global-toggle`
+- `POST /admin/map_tile_quota/runtime-limits`
+- `POST /admin/map_tile_quota/runtime-limits/clear`
+- `POST /admin/map_tile_quota/monthly-thresholds`
+- `POST /admin/map_tile_quota/monthly-estimate`
+- `POST /admin/map_tile_quota/monthly-override`
+- `POST /admin/map_tile_quota/monthly-override/clear`
+
+### bp_map_tile_quota
+- Purpose: Flask Blueprint for map tile quota admin and browser map configuration routes.
+- Reads: None at definition time.
+- Writes: route registration for all map quota routes.
+- Called from:
+  - `src.main:create_app`, where the blueprint is registered on the Flask app.
+- Notes: admin routes use `admin_required`; public config/usage routes remain anonymous so viewer maps can load and report usage.
+
+### _config_int
+- Purpose: Read integer map-limit values from Flask app configuration.
+- Reads: Flask `current_app.config`.
+- Writes: None.
+- Returns: parsed integer or a safe default.
+
+### _runtime_limit_overrides
+- Purpose: Load process-only admin overrides for browser tile limit and rolling-window timeout.
+- Reads: Flask `current_app.extensions`.
+- Writes: creates `current_app.extensions["map_tile_quota_runtime_limit_overrides"]` if missing.
+- Returns: mutable runtime override dictionary.
+- Notes: these values do not edit `.env` and reset when the server process/container restarts.
+
+### _runtime_config_int
+- Purpose: Read effective browser limit values, preferring process-only overrides over `.env` config.
+- Reads: runtime override dictionary and Flask `current_app.config`.
+- Writes: None.
+- Returns: parsed integer value.
+
+### _runtime_limit_config
+- Purpose: Build display state for the admin quota page showing current/default browser limits.
+- Reads: runtime override dictionary and Flask `current_app.config`.
+- Writes: None.
+- Returns: dictionary containing current value, `.env` default, and overridden flag for each runtime limit.
+
+### _map_quota_config
+- Purpose: Gather map quota defaults from Flask configuration for the service layer.
+- Reads: `MAP_TILE_MONTHLY_LIMIT`, `MAP_TILE_WARNING_THRESHOLD`, and `MAP_TILE_HARD_STOP_THRESHOLD` from Flask config.
+- Writes: None.
+- Returns: dictionary containing quota default values.
+
+### _get_redis_client
+- Purpose: Create/reuse the Redis client used for browser block checks.
+- Reads: `AUTH_RATE_LIMIT_STORAGE_URL` from Flask app config.
+- Writes: `current_app.extensions["map_tile_quota_redis"]` when the client is first created.
+- Returns: Redis client.
+- Raises: `RuntimeError` if Redis configuration is missing.
+- Notes: this stays in the web layer because it uses Flask `current_app` extension storage.
+
+### _current_browser_role
+- Purpose: Convert Flask-Login state into a quota role snapshot.
+- Reads: `current_user`.
+- Writes: None.
+- Returns: tuple of role string and admin boolean.
+
+### _current_user_id
+- Purpose: Return the current logged-in user id for usage analytics/admin audit events.
+- Reads: `current_user`.
+- Writes: None.
+- Returns: user id or None.
+
+### _safe_int
+- Purpose: Parse optional integer request values.
+- Reads: submitted request value.
+- Writes: None.
+- Returns: parsed integer or default.
+
+### _hash_request_value
+- Purpose: Hash request metadata before storing it in usage analytics.
+- Reads: raw metadata such as user-agent or IP.
+- Writes: None.
+- Returns: SHA-256 hex digest or None.
+
+### admin_map_tile_quota (GET `/admin/map_tile_quota`)
+- Purpose: Render the admin map tile quota management page.
+- Reads: current quota row through `src.services.map_tile_quota`, recent unreleased `MapTileBrowserBlock` rows, runtime browser limit override state, and Redis connectivity status.
+- Writes: creates the current billing-cycle quota row if missing.
+- Renders: `templates/map_tile_quota.html`.
+- Access: protected with `admin_required`.
+
+### map_config_status (GET `/api/map/config-status`)
+- Purpose: Tell the frontend whether Esri satellite config may be released or whether it must fall back to OpenStreetMap.
+- Reads: browser cookie, Redis browser block/rolling-window state, current quota row through `src.services.map_tile_quota`, current role, and map provider config.
+- Writes: anonymous browser id cookie when missing; creates the current billing-cycle quota row if missing.
+- Returns: JSON containing `satelliteAllowed`, provider/fallback info, reason, role, rolling browser count, quota status, and Esri config only when allowed.
+
+### map_tile_usage (POST `/api/map/tile-usage`)
+- Purpose: Record browser tile deltas and enforce browser/monthly quota state.
+- Reads: JSON `tiles_delta`, optional `race_id`, optional `page_path`, optional `session_key`, browser cookie, Redis rolling-window state, current quota row, current role, and map limits.
+- Rate limit: `120 per minute` through Flask-Limiter/Redis.
+- Writes: browser id cookie when missing, Redis minute bucket count, `MapTileUsageSession`, `MapTileMonthlyQuota`, `MapTileBrowserBlock` when browser limit is exceeded, and threshold flags when crossed.
+- Returns: JSON containing updated satellite/fallback state, usage session key, rolling browser count, and quota payload.
+- Notes: this route expects browser JavaScript to send the CSRF token because it is a browser POST.
+
+### reset_browser_quota (POST `/admin/map_tile_quota/browser/<browser_cookie_id>/reset`)
+- Purpose: Admin reset for one browser's rolling-window quota state.
+- Reads: browser cookie id path parameter and current admin user.
+- Writes: clears Redis rolling-window bucket keys, releases active DB block rows, and records an audit event.
+- Returns: redirect to `/admin/map_tile_quota`.
+- Access: protected with `admin_required`.
+
+### global_toggle (POST `/admin/map_tile_quota/global-toggle`)
+- Purpose: Admin update for viewer-only block and global hard-stop flags.
+- Reads: submitted form values and current quota row.
+- Writes: quota flags and audit event.
+- Returns: redirect to `/admin/map_tile_quota`.
+- Access: protected with `admin_required`.
+
+### runtime_limits (POST `/admin/map_tile_quota/runtime-limits`)
+- Purpose: Admin process-only override for `MAP_TILE_USER_LIMIT` and `MAP_USER_LIMIT_TIMEOUT_MIN`.
+- Reads: submitted browser limit/window values and current quota row.
+- Writes: Flask process memory under `current_app.extensions`, plus audit event.
+- Returns: redirect to `/admin/map_tile_quota`.
+- Access: protected with `admin_required`.
+- Notes: does not edit `.env`; restart or restore action returns behaviour to environment defaults.
+
+### clear_runtime_limits (POST `/admin/map_tile_quota/runtime-limits/clear`)
+- Purpose: Clear process-only browser limit overrides and restore `.env` defaults.
+- Reads: current quota row.
+- Writes: clears Flask process-memory overrides and records an audit event.
+- Returns: redirect to `/admin/map_tile_quota`.
+- Access: protected with `admin_required`.
+
+### monthly_thresholds (POST `/admin/map_tile_quota/monthly-thresholds`)
+- Purpose: Update the current billing-cycle monthly limit, warning threshold, and hard-stop threshold.
+- Reads: submitted threshold values and current quota row.
+- Writes: `map_tile_monthly_quota.monthly_limit`, `warning_threshold`, `hard_stop_threshold`, recalculated threshold flags, and audit event.
+- Returns: redirect to `/admin/map_tile_quota`.
+- Access: protected with `admin_required`.
+- Notes: this persists in the database for the active billing cycle; it does not edit `.env`.
+
+### monthly_estimate (POST `/admin/map_tile_quota/monthly-estimate`)
+- Purpose: Correct the current billing-cycle Esri tile estimate when Esri platform totals differ from the app estimate.
+- Reads: submitted corrected estimate and current quota row.
+- Writes: `map_tile_monthly_quota.estimated_tiles_used`, recalculated warning/hard-stop flags, and audit event.
+- Returns: redirect to `/admin/map_tile_quota`.
+- Access: protected with `admin_required`.
+- Notes: this persists in the database for the active billing cycle; it does not edit `.env` monthly thresholds.
+
+### monthly_override (POST `/admin/map_tile_quota/monthly-override`)
+- Purpose: Admin enables a temporary monthly hard-stop override.
+- Reads: submitted duration/reason and current quota row.
+- Writes: override fields and audit event.
+- Returns: redirect to `/admin/map_tile_quota`.
+- Access: protected with `admin_required`.
+
+### clear_monthly_override_route (POST `/admin/map_tile_quota/monthly-override/clear`)
+- Purpose: Admin clears the active monthly hard-stop override.
+- Reads: current quota row.
+- Writes: override fields and audit event.
+- Returns: redirect to `/admin/map_tile_quota`.
+- Access: protected with `admin_required`.
+
+### Checks
+- All ten map quota routes are registered.
+- Admin routes are protected by `admin_required`.
+- Config-status sets the anonymous browser id cookie when missing.
+- Config-status does not release Esri config when Redis, quota, monthly, browser, or provider checks block satellite usage.
+- Tile usage POST updates Redis rolling-window state and DB usage/quota state.
+- Billing cycle uses the 25th-to-25th service-layer rule.
+- Runtime browser limit overrides affect the current server process only and can be restored to `.env` defaults.
+- Monthly estimate correction updates the current DB quota row and records an audit event.
 
 ## Alembic Migration Workflow
 
@@ -193,20 +1170,50 @@ docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
 
 ## src/web/home.py
 
+Module header documents:
+- `GET /`
+- `GET /dashboard`
+- `GET /dashboard-admin`
+
+### _race_display_data
+- Purpose: Load race rows and add display-friendly datetime values for dashboard templates.
+- Reads: `Race`, `starts_at_epoch`, `active`, and configured categories from `config.yaml`.
+- Writes: temporary `starts_at` display attribute on race objects before rendering.
+- Returns: tuple of races and default configured category.
+- Notes: `active_only=True` is used for the public dashboard; `active_only=False` is used for the admin dashboard.
+
 ### home_page (GET `/`)
-- Purpose: Render the home page with navigation and a quick races table.
-- Reads: `Race` (ordered by `starts_at_epoch`), config categories from `config.yaml`.
+- Purpose: Render the public landing page.
+- Reads: None.
 - Writes: None.
-- Renders: `templates/home.html`.
-- Display: converts `starts_at_epoch` to a datetime for the template table.
+- Renders: `templates/landing.html`.
+- Buttons: View Races, Sign Up, Login.
 - Called from:
-  - `templates/home.html`: direct page load at `/`.
-  - `templates/devices.html`: "Back to Home" link.
-  - `templates/device_edit.html`: "Home" button.
-  - `templates/riders_form.html`: "Back to Home" link.
-  - `templates/race_form.html`: "Back" link.
-  - `templates/post_race.html`: "Back to Home" link.
-  - `templates/rfid_view.html`: "Back to Home" link.
+  - Direct public page load at `/`.
+
+### dashboard (GET `/dashboard`)
+- Purpose: Render the public race dashboard with active races only and no management controls.
+- Reads: active `Race` rows and default configured category.
+- Writes: None.
+- Renders: `templates/dashboard.html`.
+- Buttons: Landing, Login, Sign Up, and View Race for each active race.
+- Notes: this is the viewer/rider public dashboard. It intentionally excludes edit race, add race, device, RFID, and other admin controls.
+
+### dashboard_admin (GET `/dashboard-admin`)
+- Purpose: Render the admin operational dashboard with management controls.
+- Reads: all `Race` rows and default configured category.
+- Writes: None.
+- Renders: `templates/dashboard_admin.html`.
+- Access: protected with `admin_required`.
+- Buttons: Public Dashboard, Input Rider Details, Manage Devices, Add New Race, View RFID Records, Edit race, and Post Race.
+- Notes: this page contains the operational controls that previously lived on `/`.
+
+### Checks
+- Anonymous users can load `/` and `/dashboard`.
+- Anonymous users see no management controls on `/dashboard`.
+- Anonymous users are redirected to login for `/dashboard-admin`.
+- Riders are blocked from `/dashboard-admin` with 403.
+- Admins can load `/dashboard-admin`.
 
 ## CSS Structure
 
@@ -248,12 +1255,19 @@ src/static/css/
 - Notes: stylesheet order matters. Shared files should define the default look, while page files should only add or override what that page genuinely needs.
 
 ### Current base.css usage
-- Purpose: Provide the lean shared static stylesheet for the Flask-rendered UI, currently applied to `templates/home.html`, `templates/riders_form.html`, `templates/devices.html`, `templates/device_edit.html`, `templates/rfid_view.html`, `templates/race_form.html`, and `templates/post_race.html`.
+- Purpose: Provide the lean shared static stylesheet for the Flask-rendered UI, currently applied to `templates/landing.html`, `templates/dashboard.html`, `templates/dashboard_admin.html`, `templates/placeholder.html`, `templates/login.html`, `templates/signup.html`, `templates/forgot_password.html`, `templates/reset_password.html`, `templates/riders_form.html`, `templates/devices.html`, `templates/device_edit.html`, `templates/rfid_view.html`, `templates/race_form.html`, and `templates/post_race.html`.
 - Reads: CSS custom properties defined in `:root` for navy, white, forest green, neutral surfaces, borders, text, and shadows.
 - Writes: Browser presentation only; no application data is changed.
 - Styles: theme variables, page shell, page header, primary buttons, section titles, muted text, empty state, and mobile layout adjustments.
 - Called from:
-  - `templates/home.html`: linked through `url_for('static', filename='css/base.css')`.
+  - `templates/landing.html`: linked through `url_for('static', filename='css/base.css')`.
+  - `templates/dashboard.html`: linked through `url_for('static', filename='css/base.css')`.
+  - `templates/dashboard_admin.html`: linked through `url_for('static', filename='css/base.css')`.
+  - `templates/placeholder.html`: linked through `url_for('static', filename='css/base.css')`.
+  - `templates/login.html`: linked through `url_for('static', filename='css/base.css')`.
+  - `templates/signup.html`: linked through `url_for('static', filename='css/base.css')`.
+  - `templates/forgot_password.html`: linked through `url_for('static', filename='css/base.css')`.
+  - `templates/reset_password.html`: linked through `url_for('static', filename='css/base.css')`.
   - `templates/riders_form.html`: linked through `url_for('static', filename='css/base.css')`.
   - `templates/devices.html`: linked through `url_for('static', filename='css/base.css')`.
   - `templates/device_edit.html`: linked through `url_for('static', filename='css/base.css')`.
@@ -264,7 +1278,7 @@ src/static/css/
 
 ### Shared component files
 - Purpose: Provide reusable component stylesheets that are loaded after `base.css` by pages that need them.
-- Current state: `forms.css`, `tables.css`, and `maps.css` exist under `src/static/css`; `templates/home.html`, `templates/riders_form.html`, `templates/devices.html`, `templates/device_edit.html`, `templates/rfid_view.html`, `templates/race_form.html`, and `templates/post_race.html` now load the relevant component files.
+- Current state: `forms.css`, `tables.css`, and `maps.css` exist under `src/static/css`; `templates/landing.html`, `templates/dashboard.html`, `templates/dashboard_admin.html`, `templates/placeholder.html`, `templates/login.html`, `templates/signup.html`, `templates/forgot_password.html`, `templates/reset_password.html`, `templates/riders_form.html`, `templates/devices.html`, `templates/device_edit.html`, `templates/rfid_view.html`, `templates/race_form.html`, and `templates/post_race.html` now load the relevant component files.
 - `forms.css`: contains reusable content panels, form grids, filter grids, field rows, inputs, checkboxes, file inputs, focus states, status messages, and form action layout.
 - `tables.css`: contains reusable table cards, table cells, wide-table behavior, table heading styling, table action buttons, `pre-wrap`, and `code` wrapping helpers.
 - `maps.css`: contains reusable compact map preview container styling plus shared Leaflet map wrapper/canvas styling for route and track maps.
@@ -297,6 +1311,7 @@ src/static/js/
 - Rule: do not put Jinja syntax such as `{{ race.id }}` directly in an external `.js` file; expose the value through a `data-*` attribute or JSON data block instead.
 - Rule: replace inline event attributes such as `onchange` and `onsubmit` with `addEventListener` calls in the relevant page file as each page is migrated.
 - Rule: retain external library loading, such as Leaflet, in the template unless a future dependency-management approach is introduced.
+- Rule: load Esri Leaflet and Esri Leaflet Vector only in `templates/post_race.html`. The post-race page is the sole planned satellite-imagery consumer; the race form remains Leaflet/OpenStreetMap-only and must not load those dependencies.
 - Rule: create a shared component only after a second page needs the same stable behaviour; otherwise keep the code in the owning page file.
 
 ### Page script example
@@ -313,10 +1328,12 @@ src/static/js/
 - Purpose: Record the current incremental JavaScript migration state.
 - Current state: `src/static/js/components/forms.js`, `src/static/js/components/maps.js`, `src/static/js/pages/race-form.js`, and `src/static/js/pages/post-race.js` exist. Templates load their required component files before their page file.
 - `components/forms.js`: contains shared `data-auto-submit` select handling used by the category controls in `templates/race_form.html` and `templates/post_race.html`.
-- `components/maps.js`: contains shared Leaflet map creation, selected-category route fetching, GeoJSON layer creation, and map-bounds fitting used by the race form and post-race pages.
+- `components/maps.js`: contains shared Leaflet map creation, selected-category route fetching, GeoJSON layer creation, map-bounds fitting, basemap switching, and Esri tile-usage reporting helpers used by the race form and post-race pages.
+- `components/maps.js`: retains the OpenStreetMap base-layer helper and adds Esri satellite attach/remove helpers. The race form uses the existing OSM default. The post-race page creates an empty map, fits its selected route or rider track first, then attaches the backend-approved basemap so it requests only tiles near the visible course. After fitting the selected route it limits panning and minimum zoom to bounds padded by 25% on every side. It will use the retained OSM layer whenever `/api/map/config-status` does not allow satellite imagery. When Esri is attached, `createEsriTileUsageReporter` counts newly observed Esri tile resources and posts batched `tiles_delta` values to `/api/map/tile-usage`.
 - `pages/race-form.js`: contains race-form-only GPX upload validation and rider/device auto-fill behaviour. It uses the shared form/map helpers for category auto-submit and route preview. The GPX input uses native required-field validation so an empty upload is blocked before navigation even when JavaScript is unavailable; the script supplies the GPX-specific text for the browser validation popup. The script reads the race id and category from `#map` data attributes and the rider/device mapping from the `#last-device-by-rider-data` JSON data node.
-- `pages/post-race.js`: contains post-race-only live track/timing polling, track overlay controls, map size preferences, finish confirmation, and the manual timing/TXT upload modal. It uses the shared form/map helpers for category auto-submit and route-map setup.
+- `pages/post-race.js`: contains post-race-only live track/timing polling, track overlay controls, map size preferences, finish confirmation, Esri tile-usage reporter startup, and the manual timing/TXT upload modal. It reads safe bootstrap endpoint/page configuration from `#post-race-map-config`, fits the route before attaching the base layer, fetches `/api/map/config-status`, and only uses Esri satellite imagery when that response allows it. If the backend blocks satellite access, the tile-usage endpoint later returns `satelliteAllowed=false`, or the status request fails, it attaches OpenStreetMap and shows the configured unavailable message.
 - Notes: `components/polling.js` does not exist yet because polling is currently used only by the post-race page. Move polling code there only when another page needs the same stable behaviour.
+- External map dependencies: `templates/post_race.html` loads Leaflet 1.9.4, Esri Leaflet 3.0.19, and Esri Leaflet Vector 4.3.2 in that order. The Esri libraries make `L.esri.Vector.vectorBasemapLayer(...)` available for the later satellite-basemap implementation; loading them alone does not make an Esri request or replace the current OpenStreetMap layer.
 
 ## src/web/devices.py
 
@@ -338,8 +1355,9 @@ src/static/js/
 - Reads: `Device` (list view).
 - Writes: `Device` (new row on POST, including optional `epc_id`).
 - Renders: `templates/devices.html`.
+- Access: active admin account through `admin_required`.
 - Called from:
-  - `templates/home.html`: "Manage Devices" button (GET).
+  - `templates/dashboard_admin.html`: "Manage Devices" button (GET).
   - `templates/devices.html`: "Save" button in "Add a new device" form (POST).
   - `templates/device_edit.html`: "Back to Devices" link (GET).
 
@@ -348,6 +1366,7 @@ src/static/js/
 - Reads: `Device` (by id).
 - Writes: `Device.device_info` and `Device.epc_id` (on POST).
 - Renders: `templates/device_edit.html`.
+- Access: active admin account through `admin_required`.
 - Called from:
   - `templates/devices.html`: "Edit" link in devices table (GET).
   - `templates/device_edit.html`: "Save" button (POST).
@@ -372,9 +1391,10 @@ src/static/js/
 - Reads: `IngestRfid` rows filtered by optional `id`, `epc`, `reader_id`, `ant`, reader datetime range, received datetime range, and `limit`.
 - Writes: None.
 - Renders: `templates/rfid_view.html`.
+- Access: active admin account through `admin_required`.
 - Display: converts `time_stamp_epoch` and `received_at_epoch` to datetimes for the template table.
 - Called from:
-  - `templates/home.html`: "View RFID Records" button (GET).
+  - `templates/dashboard_admin.html`: "View RFID Records" button (GET).
   - `templates/rfid_view.html`: filter form and "Clear" link (GET).
 
 ## src/web/riders.py
@@ -384,13 +1404,37 @@ src/static/js/
 - Reads/Writes: None.
 - Called from: `rider_form` only (internal helper).
 
+### _is_rider_user
+- Purpose: Check whether the current account is a rider account.
+- Reads: current user role.
+- Writes: None.
+- Returns: True for rider users; otherwise False.
+- Called from: `_rider_already_exists`, `_can_edit_rider`, and `rider_form`.
+
+### _rider_already_exists
+- Purpose: Check whether a rider user already has a linked Rider profile.
+- Reads: `current_user.rider_id`.
+- Writes: None.
+- Returns: True when a rider account already has a linked Rider row.
+- Called from: `rider_form`.
+- Notes: this prevents normal riders from using `/riders/new` to create multiple Rider rows for the same login account.
+
+### _can_edit_rider
+- Purpose: Check whether the current user can edit a requested Rider row.
+- Reads: current user role and `current_user.rider_id` through `user_can_access_rider_resource`.
+- Writes: None.
+- Returns: True for admins, or for riders editing their own linked Rider row.
+- Called from: `rider_form`.
+
 ### rider_form (GET/POST `/riders/new` and `/riders/<rider_id>/edit`)
 - Purpose: Create a new rider or edit an existing rider.
-- Reads: `Rider` (list and optional row for editing).
-- Writes: `Rider` (insert or update).
+- Reads: `Rider` (list and optional row for editing), current login user, and linked `User.rider_id` when a rider creates their first profile.
+- Writes: `Rider` (insert or update). When a rider creates their first profile, also writes `User.rider_id` and `User.updated_at`.
 - Renders: `templates/riders_form.html`.
+- Access: active rider or admin account through `rider_required`.
+- Notes: admins can create and edit any Rider row. Riders can create one linked Rider row only, and can edit only their own linked Rider row. A rider who already has a linked profile is redirected from `GET /riders/new` to their own edit page.
 - Called from:
-  - `templates/home.html`: "Input Rider Details" button (GET `/riders/new`).
+  - `templates/dashboard_admin.html`: "Input Rider Details" button (GET `/riders/new`).
   - `templates/riders_form.html`: "Edit" link in riders table (GET `/riders/<id>/edit`).
   - `templates/riders_form.html`: "Save" button in the rider form (POST create/update).
 
@@ -423,13 +1467,22 @@ src/static/js/
 - Returns: timing display strings, datetime-local input values, RFID warning flag suppressed by confirmed finishes, and RFID finish confirmation flag.
 - Called from: `post_race` and `race_rider_timings` only (internal helper).
 
+### _post_race_map_bootstrap_config
+- Purpose: Build safe browser bootstrap configuration for the post-race map.
+- Reads: route names through `url_for`, current request path, and race id.
+- Writes: None.
+- Returns: endpoint URLs, race id, page path, and the satellite-unavailable message.
+- Called from: `post_race` only.
+- Notes: this helper deliberately does not include `ARCGIS_API_KEY`, provider, or style. The browser must call `/api/map/config-status` before Esri satellite imagery can be used.
+
 ### new_race (GET `/races/new`)
 - Purpose: Render the "New Race" page.
 - Reads: Config categories.
 - Writes: None.
 - Renders: `templates/race_form.html`.
+- Access: active admin account through `admin_required`.
 - Called from:
-  - `templates/home.html`: "Add New Race" button.
+  - `templates/dashboard_admin.html`: "Add New Race" button.
 
 ### post_race (GET `/races/<race_id>/post`)
 - Purpose: Post-race view with route preview and rider list for a category.
@@ -438,9 +1491,42 @@ src/static/js/
 - Renders: `templates/post_race.html`.
 - Display: converts rider timing epochs to naive local datetimes for UI controls.
 - UI: map includes multi-select rider track overlays controlled from the compact legend beside race info (toggle state synced to active overlays, reselects replace prior overlays), persisted map height/width sliders, auto-stacking of the riders table under the map when widths clash, 5-second live refresh polling for selected rider tracks (cache-first), 5-second live refresh polling for rider timing cells, and a manual timing modal that can optionally upload a TXT log to `/api/v1/upload-text` before reapplying the chosen start/end window.
+- Map config: renders only safe bootstrap values in `#post-race-map-config`; Esri provider/style/key must come from `/api/map/config-status` after quota checks.
 - Called from:
-  - `templates/home.html`: "Post Race" button in races table.
+  - `templates/dashboard.html`: "View Race" button in active races table.
+  - `templates/dashboard_admin.html`: "Post Race" button in races table.
   - `templates/post_race.html`: category `<select>` `onchange` (GET with `?category=`).
+
+### enter_race (GET `/races/<race_id>/enter`)
+- Purpose: Placeholder for future rider/admin race entry.
+- Reads: None.
+- Writes: None.
+- Renders: `templates/placeholder.html`.
+- Access: active rider or admin account through `rider_required`.
+- Called from:
+  - `templates/dashboard.html`: "Enter Race" button.
+  - `templates/dashboard_admin.html`: "Enter Race" button.
+- Notes: later this will allow riders to enter races, choose category, see approval status, and use automatic device assignment.
+
+### post_race_admin (GET `/races/<race_id>/post-admin`)
+- Purpose: Placeholder for future admin post-race controls.
+- Reads: None.
+- Writes: None.
+- Renders: `templates/placeholder.html`.
+- Access: active admin account through `admin_required`.
+- Called from:
+  - `templates/dashboard_admin.html`: "Post Admin" button.
+- Notes: later this should receive the admin timing controls that currently live on the public post-race page.
+
+### race_results (GET `/races/<race_id>/results`)
+- Purpose: Placeholder for future official public race results.
+- Reads: None.
+- Writes: None.
+- Renders: `templates/placeholder.html`.
+- Called from:
+  - `templates/dashboard.html`: "Results" button.
+  - `templates/dashboard_admin.html`: "Results" button.
+- Notes: later this will show official released results and provide rider GPX/result downloads.
 
 ### device_geojson (GET `/races/<race_id>/device/<device_id>/geojson`)
 - Purpose: Build GeoJSON on demand for a device track (no persistence).
@@ -475,6 +1561,7 @@ src/static/js/
 - Reads: `RaceRider`, latest `TrackHist` (for raw text).
 - Writes: `RaceRider.start_time_rfid_epoch`, `RaceRider.finish_time_rfid_epoch`, `RaceRider.finish_time_rfid_confirmed`, `RaceRider.multiple_rfid_flag`, new `TrackHist` row with `updated_at_epoch`.
 - Returns: JSON status.
+- Access: active admin account through `admin_required`.
 - Timezone: inputs must be timezone-naive; values are assumed to be in the configured local timezone (`config.yaml` → `global.timezone`) and converted to UTC before saving.
 - Called from:
   - `templates/post_race.html`: "Manual Edit" button opens modal, modal "Save" and "Upload TXT" trigger JS `fetch`.
@@ -484,6 +1571,7 @@ src/static/js/
 - Reads: `RaceRider`, `Category`, `Route`.
 - Writes: `RaceRider.finish_time_rfid_confirmed=True` and `RaceRider.multiple_rfid_flag=False`.
 - Returns: JSON status with the refreshed timing payload.
+- Access: active admin account through `admin_required`.
 - Called from:
   - `templates/post_race.html`: "Confirm" timing button next to manual edit.
 
@@ -492,6 +1580,7 @@ src/static/js/
 - Reads: `Race` (when updating).
 - Writes: `Race` (insert/update).
 - Behavior: parses date/time inputs and converts them to epoch seconds using the configured timezone for naive input.
+- Access: active admin account through `admin_required`.
 - Redirects: to edit page for the saved race.
 - Called from:
   - `templates/race_form.html`: "Save Changes" button.
@@ -501,8 +1590,9 @@ src/static/js/
 - Reads: `Race`, `Route`, `Category`, `Rider`, `Device`, `RaceRider`.
 - Writes: `Route`/`Category` if missing for the selected category.
 - Renders: `templates/race_form.html`.
+- Access: active admin account through `admin_required`.
 - Called from:
-  - `templates/home.html`: "Edit" button in races table.
+  - `templates/dashboard_admin.html`: "Edit" button in races table.
   - `templates/race_form.html`: category `<select>` `onchange` (GET with `?category=`).
   - Redirect from `save_race` after a successful save.
 
@@ -510,6 +1600,7 @@ src/static/js/
 - Purpose: Upload a GPX file and store both GPX and GeoJSON on `Route`.
 - Reads: Uploaded file.
 - Writes: `Route.gpx`, `Route.geojson`.
+- Access: active admin account through `admin_required`.
 - Redirects: back to edit page.
 - Called from:
   - `templates/race_form.html`: "Upload GPX" button (file upload form).
@@ -518,6 +1609,7 @@ src/static/js/
 - Purpose: Remove GPX/GeoJSON for the selected category.
 - Reads: `Route`.
 - Writes: `Route.gpx = None`, `Route.geojson = None`.
+- Access: active admin account through `admin_required`.
 - Redirects: back to edit page.
 - Called from:
   - `templates/race_form.html`: "Remove GPX" button.
@@ -535,22 +1627,27 @@ src/static/js/
 - Purpose: Add a rider/device entry to a race category.
 - Reads: `Category` (via helper lookup).
 - Writes: `RaceRider` (new row).
+- Access: active admin account through `admin_required`.
 - Redirects: back to edit page.
 - Called from:
   - `templates/race_form.html`: "Save" button in the "Add new rider" row.
 
-### edit_race_rider (POST `/races/<race_id>/riders/<entry_id>/edit`)
+### edit_race_rider (POST `/races/<race_id>/riders/<race_rider_id>/edit`)
 - Purpose: Update device assignment and flags for a race rider entry.
-- Reads: `RaceRider`.
+- Reads: `RaceRider`, `Category`, `Route`, and current login user.
 - Writes: `RaceRider.device_id`, `RaceRider.active`, `RaceRider.recording`.
+- Access: active rider or admin account through `rider_required`. Admins can edit any race entry; riders can edit only entries linked to their own `current_user.rider_id`.
+- Notes: the route verifies that the `race_rider_id` belongs to the requested `race_id` before applying the ownership check.
 - Redirects: back to edit page.
 - Called from:
   - `templates/race_form.html`: "Edit" button in the riders table.
 
-### remove_race_rider (POST `/races/<race_id>/riders/<entry_id>/remove`)
+### remove_race_rider (POST `/races/<race_id>/riders/<race_rider_id>/remove`)
 - Purpose: Remove a rider from the race category.
-- Reads: `RaceRider`.
+- Reads: `RaceRider`, `Category`, `Route`, and current login user.
 - Writes: `RaceRider` (delete).
+- Access: active rider or admin account through `rider_required`. Admins can remove any race entry; riders can remove only entries linked to their own `current_user.rider_id`.
+- Notes: the route verifies that the `race_rider_id` belongs to the requested `race_id` before applying the ownership check.
 - Redirects: back to edit page.
 - Called from:
   - `templates/race_form.html`: "Remove" button (with confirm dialog) in the riders table.
@@ -663,6 +1760,23 @@ src/static/js/
   - `src/web/races.py:upload_gpx`
 
 ## src/utils/time.py
+
+### utc_now
+- Purpose: Return a timezone-aware UTC datetime for timestamps such as token creation, token expiry, and token consumption.
+- Reads: system clock.
+- Writes: None.
+- Returns: current UTC datetime.
+- Called from:
+  - `src/auth/tokens.py`
+
+### as_aware_utc
+- Purpose: Convert stored datetimes to timezone-aware UTC before comparing expiry values.
+- Reads: datetime value read from the database.
+- Writes: None.
+- Returns: timezone-aware UTC datetime.
+- Called from:
+  - `src/auth/tokens.py`
+- Notes: PostgreSQL preserves timezone-aware values in the target runtime, while lightweight SQLite checks can return naive datetimes. Naive values are treated as UTC.
 
 ### datetime_to_epoch
 - Purpose: Convert a datetime to UTC epoch seconds, honoring the configured local timezone for naive datetimes.
@@ -815,6 +1929,20 @@ src/static/js/
 - Called from:
   - Direct script execution: `python tests/download_latest_track_hist_gpx.py <race_rider_id>`.
 
+## tests/test_resend_email.py
+
+### main
+- Purpose: Send one manual test email through Resend using the same environment-variable pattern as the Flask runtime.
+- Reads: `RESEND_API_KEY`, `TEST_EMAIL_TO`, and optional `MAIL_FROM`.
+- Writes: one test email to the requested destination and prints the Resend response without printing the API key.
+- Returns: process exit code (`0` success, `1` failure through `src.utils.env:required_env` validation).
+- Called from:
+  - Docker Compose manual smoke test:
+```bash
+docker compose -p enduro-dev --env-file .env.dev run --rm -e TEST_EMAIL_TO=you@example.com server python tests/test_resend_email.py
+```
+- Notes: this script is a manual smoke test for the forgot-password email setup. It is not part of the automated test suite and should not be used to send signup verification emails.
+
 ## tests/migrate_sqlite_to_postgres.py
 
 ### migrate_sqlite_to_postgres
@@ -837,11 +1965,19 @@ src/static/js/
 
 ## Database Tables (src/db/models.py)
 
+- Schema management: Alembic migrations are the source of truth for database schema. Runtime app, ingest, and worker startup must not call `Base.metadata.create_all()` because that can create tables outside migration history and confuse Alembic autogenerate. The legacy `init_db()` helper remains in `src/db/models.py` only for deliberate manual development use.
 - `ingest_raw`: raw device uploads (payload JSON, received/processed timestamps, parse error). Columns: `id`, `device_id`, `payload_json`, `received_at`, `received_at_epoch`, `processed_at`, `processed_at_epoch`, `parse_error`. Relationships: no enforced foreign-key relationship; records are associated to devices by `device_id` value only. Conditions: `device_id` and `payload_json` are required (`NOT NULL`).
 - `ingest_rfid`: raw RFID reader tag events. Columns: `id`, `epc`, `rssi`, `ant`, `time_stamp_epoch`, `reader_id`, `avg_rssi`, `received_at_epoch`, `processed_at_epoch`, `process_error`. Relationships: view-only link to `devices` through `ingest_rfid.epc == devices.epc_id` so unknown/false RFID reads can still be stored. Conditions: `epc` is required (`NOT NULL`); `time_stamp_epoch`, `reader_id`, and `processed_at_epoch` are indexed for worker lookups.
 - `devices`: registered hardware devices; referenced by race_riders. Columns: `id`, `device_info`, `epc_id`. Relationships: one device can map to many `race_riders` entries via `race_riders.device_id -> devices.id`, and can view many `ingest_rfid` rows through matching EPC values. Conditions: primary-key uniqueness on `id`; unique constraint `ux_devices_epc_id` enforces at most one device per non-null EPC tag.
 - `points`: parsed GNSS fixes per device (t_epoch, lat/lon, optional metrics). Columns: `id`, `device_id`, `t_epoch`, `lat`, `lon`, `ele`, `sog`, `cog`, `fx`, `hdop`, `nsat`, `received_at`, `received_at_epoch`. Relationships: no enforced foreign key to `devices`; points are linked to `race_riders` through a view-only `device_id` join. Conditions: unique constraint `ux_points_device_time` enforces one row per (`device_id`, `t_epoch`).
-- `riders`: core athlete details (name, team, bike, bio). Columns: `id`, `name`, `bike`, `bio`, `team`, `category`. Relationships: one rider can have many `race_riders` entries via `race_riders.rider_id -> riders.id`. Conditions: `name` is required (`NOT NULL`).
+- `riders`: core athlete details (name, team, bike, bio). Columns: `id`, `name`, `bike`, `bio`, `team`, `category`. Relationships: one rider can have many `race_riders` entries via `race_riders.rider_id -> riders.id`, and can optionally have one linked login account via `users.rider_id -> riders.id`. Conditions: `name` is required (`NOT NULL`).
+- `users`: browser login accounts for riders and admins. Columns: `id`, `first_name`, `last_name`, `username`, `username_normalized`, `email`, `email_normalized`, `password_hash`, `role`, `rider_id`, `is_active`, `auth_version`, `created_at`, `updated_at`, `last_login_at`. Relationships: optionally links one account to one `rider`, has many `auth_tokens`, and can be actor/target for `auth_audit_events`. Conditions: role is constrained to `rider` or `admin`; `username_normalized`, `email_normalized`, and non-null `rider_id` are unique; passwords are stored only as hashes. Notes: the model uses Flask-Login's `UserMixin` for standard login-session helpers such as `get_id()`.
+- `auth_tokens`: one-time hashed authentication tokens, currently for password reset. Columns: `id`, `user_id`, `purpose`, `token_hash`, `expires_at`, `used_at`, `created_at`. Relationships: belongs to one `user`. Conditions: `user_id`, `purpose`, `token_hash`, `expires_at`, and `created_at` are required; raw tokens are never stored.
+- `auth_audit_events`: security-relevant account event history. Columns: `id`, `actor_user_id`, `target_user_id`, `action`, `metadata_json`, `created_at`. Relationships: optional actor and target links to `users`. Conditions: `action` and `created_at` are required; metadata must not contain passwords, raw reset tokens, or other secrets.
+- `map_tile_monthly_quota`: durable monthly Esri tile quota state for admin controls and hard-stop decisions. Columns: `id`, `billing_month`, `provider`, `estimated_tiles_used`, `monthly_limit`, `warning_threshold`, `hard_stop_threshold`, `warning_triggered_at`, `hard_stop_triggered_at`, `hard_stop_active`, `viewers_only_blocked`, `override_active`, `override_until`, `override_reason`, `last_usage_rollup_at`, `created_at`, `updated_at`. Relationships: none. Conditions: `billing_month` and `provider` are unique together via `ux_map_tile_monthly_quota_month_provider`; usage reports should increment `estimated_tiles_used` directly from tile deltas so hard-stop decisions happen immediately.
+- `map_tile_usage_sessions`: summarized browser/page map tile usage sessions for analytics and quota evidence. Columns: `id`, `session_key`, `browser_cookie_id`, `user_id`, `role`, `race_id`, `billing_month`, `page_path`, `provider`, `session_started_at`, `session_last_seen_at`, `estimated_tiles_loaded`, `fallback_used`, `blocked_reason`, `user_agent_hash`, `ip_hash`, `created_at`, `updated_at`. Relationships: optionally links to `users` and `races`. Conditions: `session_key` is unique; `browser_cookie_id`, `role`, `billing_month`, `page_path`, provider, session timestamps, tile count, fallback flag, and timestamps are required. Notes: there is no `map_style` column and no `estimated_tiles_delta_unrolled` column because accepted usage-report deltas update both this table and `map_tile_monthly_quota.estimated_tiles_used` immediately.
+- `map_tile_browser_blocks`: browser-level tile block history for admin visibility and early release. Columns: `id`, `browser_cookie_id`, `user_id`, `reason`, `tiles_at_block`, `blocked_at`, `blocked_until`, `released_at`, `released_by_user_id`, `release_reason`, `created_at`, `updated_at`. Relationships: optionally links to the affected `users` row and to the admin `users` row that released the block. Conditions: `browser_cookie_id`, `reason`, `blocked_at`, `blocked_until`, `created_at`, and `updated_at` are required. Notes: Redis remains the enforcement store for short-lived browser blocks; this table records block history and admin reset state. Quota admin actions should be recorded in `auth_audit_events` rather than a separate map-specific audit table.
+- Migration: the map tile quota tables are created by `migrations/versions/4578a2e08ba3_add_esri_tile_quota_tables.py`. The migration is manually written because the dev database may already contain these tables from `Base.metadata.create_all()`; clean databases still receive normal `CREATE TABLE` operations.
 - `races`: event metadata (name, description, website, starts/ends, active flag). Columns: `id`, `name`, `description`, `website`, `starts_at`, `starts_at_epoch`, `ends_at`, `ends_at_epoch`, `active`. Relationships: one race can have many `route` rows via `route.race_id -> races.id`. Conditions: `name` and `active` are required (`NOT NULL`) and `active` defaults to `true`.
 - `route`: per-race route geometry storage (gpx/geojson). Columns: `id`, `race_id`, `geojson`, `gpx`. Relationships: belongs to one `race` and can have many `categories` via `categories.route_id -> route.id`. Conditions: `race_id` is required (`NOT NULL`) and must reference an existing `races.id`.
 - `categories`: category labels tied to a route; unique per route. Columns: `id`, `route_id`, `name`. Relationships: belongs to one `route` and is referenced by many `race_riders`, plus one-to-one cache/history links in `leaderboard_cache` and `leaderboard_hist`. Conditions: unique constraint `ux_route_category_name` enforces unique `name` per `route_id`.
@@ -853,73 +1989,125 @@ src/static/js/
 
 ## Templates (templates/*.html)
 
-### home.html
-- General: Home/landing page and navigation hub.
-- Displays: Races table (name, start, website, active).
-- Styles: Uses `src/static/css/base.css` for the lean shared base theme and `src/static/css/tables.css` for the race-list table.
-- UI actions: "Input Rider Details", "Manage Devices", "Add New Race", "View RFID Records", "Edit", "Post Race".
+### landing.html
+- General: Public landing page.
+- Displays: Kooksnylive entry point and high-level public actions.
+- Styles: Uses `src/static/css/base.css` for the lean shared base theme.
+- UI actions: "View Races", "Sign Up", "Login".
 - Linked pages (buttons):
+  - "View Races" → `/dashboard` (public race dashboard).
+  - "Sign Up" → `/signup` (rider signup).
+  - "Login" → `/login` (rider/admin login).
+- Pulls: none.
+- Pushes: none.
+- Routes called: `/`, `/dashboard`, `/signup`, `/login`.
+- Embedded scripts: none.
+
+### dashboard.html
+- General: Public race dashboard.
+- Displays: Active races table (name, start, website).
+- Styles: Uses `src/static/css/base.css` for the lean shared base theme and `src/static/css/tables.css` for the race-list table.
+- UI actions: "Landing", "Login", "Sign Up", "Rider Profiles", "View Race", "Enter Race", "Results".
+- Linked pages (buttons):
+  - "Landing" → `/`.
+  - "Login" → `/login`.
+  - "Sign Up" → `/signup`.
+  - "Rider Profiles" → `/rider`.
+  - "View Race" → `/races/<id>/post` (public post-race page).
+  - "Enter Race" → `/races/<id>/enter`.
+  - "Results" → `/races/<id>/results`.
+- Pulls: `races`, `default_category`.
+- Pushes: none.
+- Routes called: `/dashboard`, `/`, `/login`, `/signup`, `/rider`, `/races/<id>/post`, `/races/<id>/enter`, `/races/<id>/results`.
+- Embedded scripts: none.
+- Notes: no admin management controls are shown here.
+
+### dashboard_admin.html
+- General: Admin operational dashboard.
+- Displays: All races table (name, start, website, active).
+- Styles: Uses `src/static/css/base.css` for the lean shared base theme and `src/static/css/tables.css` for the race-list table.
+- UI actions: "Public Dashboard", "Input Rider Details", "Manage Devices", "Add New Race", "View RFID Records", "Rider Profiles", "User Management", "Edit", "Post Race", "Post Admin", "Enter Race", "Results".
+- Linked pages (buttons):
+  - "Public Dashboard" → `/dashboard`.
   - "Input Rider Details" → `/riders/new` (riders form page).
   - "Manage Devices" → `/devices/` (devices list page).
   - "Add New Race" → `/races/new` (new race form).
   - "View RFID Records" → `/rfid/` (RFID records page).
+  - "Rider Profiles" → `/rider`.
+  - "User Management" → `/admin/users`.
   - "Edit" → `/races/<id>/edit` (race edit page).
-  - "Post Race" → `/races/<id>/post` (post-race page).
+  - "Post Race" → `/races/<id>/post` (current post-race page).
+  - "Post Admin" → `/races/<id>/post-admin`.
+  - "Enter Race" → `/races/<id>/enter`.
+  - "Results" → `/races/<id>/results`.
 - Pulls: `races`, `default_category`.
 - Pushes: none (links only).
-- Routes called: `/`, `/riders/new`, `/devices/`, `/races/new`, `/rfid/`, `/races/<id>/edit`, `/races/<id>/post`.
+- Routes called: `/dashboard-admin`, `/dashboard`, `/riders/new`, `/devices/`, `/races/new`, `/rfid/`, `/rider`, `/admin/users`, `/races/<id>/edit`, `/races/<id>/post`, `/races/<id>/post-admin`, `/races/<id>/enter`, `/races/<id>/results`.
+- Embedded scripts: none.
+- Notes: protected by admin access.
+
+### placeholder.html
+- General: Shared placeholder page for planned UX routes.
+- Displays: title, route, target access level, and placeholder note.
+- Styles: Uses `src/static/css/base.css` for the lean shared base theme and `src/static/css/forms.css` for the content panel.
+- UI actions: one configurable back button.
+- Linked pages (buttons):
+  - Back button target is supplied by each route.
+- Pulls: `title`, `description`, `route`, `access`, `back_url`, `back_label`.
+- Pushes: none.
+- Routes called: `/rider`, `/races/<id>/enter`, `/races/<id>/post-admin`, `/races/<id>/results`, `/admin/users`.
 - Embedded scripts: none.
 
 ### devices.html
 - General: Device list and create form.
 - Displays: Device ID, RFID EPC, Device Info.
 - Styles: Uses `src/static/css/base.css` for the lean shared base theme, `src/static/css/forms.css` for the device form panel and messages, and `src/static/css/tables.css` for the device table.
-- UI actions: "Save" (create), "Edit", "Back to Home".
+- UI actions: "Save" (create), "Edit", "Back to Admin Dashboard".
 - Linked pages (buttons):
-  - "Back to Home" → `/` (home page).
+  - "Back to Admin Dashboard" → `/dashboard-admin`.
   - "Edit" → `/devices/<id>/edit` (device edit page).
 - Pulls: `devices`, `message`, `success`, `form`.
 - Pushes: POST create device with optional RFID EPC.
-- Routes called: `/devices/` (GET/POST), `/devices/<id>/edit`, `/`.
+- Routes called: `/devices/` (GET/POST), `/devices/<id>/edit`, `/dashboard-admin`.
 - Embedded scripts: none.
 
 ### device_edit.html
 - General: Edit a single device's info and RFID EPC.
 - Displays: Device ID (read-only), Device Info, RFID EPC.
 - Styles: Uses `src/static/css/base.css` for the lean shared base theme and `src/static/css/forms.css` for the edit form panel, inputs, status messages, and form action layout.
-- UI actions: "Save", "Back to Devices", "Home".
+- UI actions: "Save", "Back to Devices", "Admin Dashboard".
 - Linked pages (buttons):
   - "Back to Devices" → `/devices/` (devices list page).
-  - "Home" → `/` (home page).
+  - "Admin Dashboard" → `/dashboard-admin`.
 - Pulls: `device`, `message`, `success`.
 - Pushes: POST update device info and optional RFID EPC.
-- Routes called: `/devices/<id>/edit`, `/devices/`, `/`.
+- Routes called: `/devices/<id>/edit`, `/devices/`, `/dashboard-admin`.
 - Embedded scripts: none.
 
 ### rfid_view.html
 - General: RFID ingest records viewer with server-side filters.
 - Displays: RFID row id, EPC, RSSI, average RSSI, antenna, reader id, reader time, and received time.
 - Styles: Uses `src/static/css/base.css` for the lean shared base theme, `src/static/css/forms.css` for the filter panel, filter grid, messages, and filter actions, and `src/static/css/tables.css` for the wide RFID records table.
-- UI actions: "Filter", "Clear", "Back to Home".
+- UI actions: "Filter", "Clear", "Back to Admin Dashboard".
 - Linked pages (buttons):
-  - "Back to Home" → `/` (home page).
+  - "Back to Admin Dashboard" → `/dashboard-admin`.
   - "Clear" → `/rfid/` (unfiltered RFID records page).
 - Pulls: `rows`, `filters`, `message`, `success`, `max_limit`.
 - Pushes: GET filter query string values only.
-- Routes called: `/rfid/`, `/`.
+- Routes called: `/rfid/`, `/dashboard-admin`.
 - Embedded scripts: none.
 
 ### riders_form.html
 - General: Create/edit rider form with riders list.
 - Displays: Rider fields and riders table.
 - Styles: Uses `src/static/css/base.css` for the lean shared base theme, `src/static/css/forms.css` for the rider form panel and messages, and `src/static/css/tables.css` for the riders table.
-- UI actions: "Save", "Edit", "Back to Home".
+- UI actions: "Save", "Edit", "Back to Admin Dashboard".
 - Linked pages (buttons/links):
-  - "Back to Home" → `/` (home page).
+  - "Back to Admin Dashboard" → `/dashboard-admin`.
   - "Edit" → `/riders/<id>/edit` (loads rider into form).
 - Pulls: `categories`, `riders`, `form`, `editing_rider`, `message`, `success`.
 - Pushes: POST create/update rider.
-- Routes called: `/riders/new`, `/riders/<id>/edit`, `/`.
+- Routes called: `/riders/new`, `/riders/<id>/edit`, `/dashboard-admin`.
 - Embedded scripts: none.
 
 ### race_form.html
@@ -928,11 +2116,11 @@ src/static/js/
 - Styles: Uses `src/static/css/base.css` for the lean shared base theme, `src/static/css/forms.css` for form controls and row actions, `src/static/css/tables.css` for the rider assignment table, `src/static/css/maps.css` for the Leaflet route preview container, and `src/static/css/race-form.css` for race-form-only layout.
 - UI actions: "Save Changes", category dropdown (reload), "Upload GPX", "Remove GPX", "Save" (add rider), "Edit" (update rider entry), "Remove" (delete entry), "Back".
 - Linked pages (buttons/links):
-  - "Back" → `/` (home page).
+  - "Back" → `/dashboard-admin`.
   - "Open Website" → external race website URL (if set).
 - Pulls: `race`, `categories`, `selected_category`, `route`, `geojson`, `riders`, `devices`, `race_riders`, `last_device_by_rider`.
 - Pushes: POST save race, upload/remove GPX, add/edit/remove riders.
-- Routes called: `/races/save`, `/races/<id>/edit?category=...`, `/races/<id>/route/upload`, `/races/<id>/route/remove`, `/races/<id>/route/geojson`, `/races/<id>/riders/add`, `/races/<id>/riders/<entry_id>/edit`, `/races/<id>/riders/<entry_id>/remove`.
+- Routes called: `/races/save`, `/races/<id>/edit?category=...`, `/races/<id>/route/upload`, `/races/<id>/route/remove`, `/races/<id>/route/geojson`, `/races/<id>/riders/add`, `/races/<id>/riders/<race_rider_id>/edit`, `/races/<id>/riders/<race_rider_id>/remove`.
 - Embedded scripts:
   - GPX upload validation: native required-field validation blocks an empty file submission with a browser popup; JavaScript supplies the GPX-specific popup text.
   - Shared form/map scripts: auto-submit the category selector and fetch/render the route GeoJSON through `components/forms.js` and `components/maps.js`.
@@ -944,12 +2132,13 @@ src/static/js/
 - Styles: Uses `src/static/css/base.css` for the lean shared base theme, `src/static/css/forms.css` for category/manual timing controls, `src/static/css/tables.css` for the riders timing table, `src/static/css/maps.css` for the Leaflet route/track map canvas, and `src/static/css/post-race.css` for post-race-only layout, track key, RFID warning, and modal styles.
 - UI actions: Category dropdown (reload), "Show Track", "Manual Edit", "Confirm" timing, modal "Save/Cancel/Upload TXT".
 - Linked pages (buttons/links):
-  - "Back to Home" → `/` (home page).
+  - "Back to Dashboard" → `/dashboard`.
 - Pulls: `race`, `categories`, `selected_category`, `geojson`, `riders`, `has_multiple_rfid_flag`.
-- Pushes: Fetch route GeoJSON, fetch stored rider track (cache-first for live polling), fetch live rider timing values, POST manual timing edits, POST finish timing confirmation, POST TXT log ingest.
-- Routes called: `/races/<id>/post?category=...`, `/races/<id>/route/geojson?category=...`, `/races/<id>/race-rider/<id>/track`, `/races/<id>/race-rider/<id>/track?prefer_cache=1`, `/races/<id>/race-rider-timings?category=...`, `/races/<id>/race-rider/<id>/manual-times`, `/races/<id>/race-rider/<id>/confirm-finish`, `/api/v1/upload-text`.
+- Pushes: Fetch route GeoJSON, fetch map config status, POST Esri tile-usage deltas, fetch stored rider track (cache-first for live polling), fetch live rider timing values, POST manual timing edits, POST finish timing confirmation, POST TXT log ingest.
+- Routes called: `/races/<id>/post?category=...`, `/races/<id>/route/geojson?category=...`, `/api/map/config-status`, `/api/map/tile-usage`, `/races/<id>/race-rider/<id>/track`, `/races/<id>/race-rider/<id>/track?prefer_cache=1`, `/races/<id>/race-rider-timings?category=...`, `/races/<id>/race-rider/<id>/manual-times`, `/races/<id>/race-rider/<id>/confirm-finish`, `/api/v1/upload-text`.
 - Embedded scripts:
   - Shared form/map scripts: auto-submit the category selector and initialise the Leaflet route map through `components/forms.js` and `components/maps.js`.
+  - Esri quota integration: fetch config-status after route bounds are fitted, count Esri tile resources, POST tile deltas to `/api/map/tile-usage`, and switch to OpenStreetMap when the backend blocks satellite access.
   - "Show Track" overlay fetch + render (page-specific).
   - 5-second polling refresh for selected rider tracks (preserves selected toggles and layer state).
   - 5-second polling refresh for start/end timing cells, multiple-RFID asterisk state, and confirmation button state.

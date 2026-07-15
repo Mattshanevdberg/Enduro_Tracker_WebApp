@@ -16,6 +16,8 @@ Behavior:
 Notes:
   - Keep these endpoints fast; background jobs handle heavier processing later.
   - Light auth: optional short token in header (X-Device-Key). Add check when you're ready.
+  - Database schema is managed by Alembic migrations; this module must not
+    create tables during import/startup.
 """
 
 import json
@@ -41,7 +43,7 @@ with open(CONFIG_PATH, 'r') as f:
 # DATABASE_URL = config['global']['database_url'] # not used
 
 # this is for ingesting GNSS and RFID data
-from src.db.models import SessionLocal, init_db, IngestRaw, IngestRfid, RaceRider, TrackHist
+from src.db.models import SessionLocal, IngestRaw, IngestRfid, RaceRider, TrackHist
 # this is for parsing the points and saving to a db table in a usable format
 # parsing will be handled in a background job later
 # from src.db.models import Point   # enable when parsing points now
@@ -56,9 +58,6 @@ from src.utils.time import datetime_to_epoch, rfid_timestamp_to_epoch
 # url_prefix="/api/v1" makes every route defined on the blueprint automatically live under /api/v1 when the blueprint is registered.
 # a route essentially links an API endpoint (ie api/v1/upload) to a function (ie upload()) that runs when that endpoint is called
 bp = Blueprint("ingest", __name__, url_prefix="/api/v1")
-
-# Initialize DB at import/load time (safe if called multiple times)
-init_db()
 
 # @bp.route("/upload", methods=["POST"]) decorator registers the upload function as the handler for the POST /api/v1/upload route 
 # (the bp blueprint supplies the /api/v1 prefix). Without that decorator, Flask wouldn’t know to call upload() for incoming requests.

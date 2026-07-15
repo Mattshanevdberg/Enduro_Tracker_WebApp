@@ -25,6 +25,7 @@
       {% if device %}
         <section class="content-panel">
           <form class="form-grid" method="post" action="{{ url_for('devices.device_edit', device_id=device.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
             <label>Device ID</label>
             <input value="{{ device.id }}" readonly />
 
@@ -36,7 +37,7 @@
 
             <div class="actions">
               <button class="btn" type="submit">Save</button>
-              <a class="btn" href="{{ url_for('home.home_page') }}">Home</a>
+              <a class="btn" href="{{ url_for('home.dashboard_admin') }}">Admin Dashboard</a>
             </div>
           </form>
         </section>

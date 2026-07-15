@@ -8,6 +8,10 @@ Run (dev):
 Jargon:
 - "Polling": periodically checking the DB for new work, instead of being pushed jobs.
 - "Batch": process multiple rows at once to reduce overhead.
+
+Notes:
+- Database schema is managed by Alembic migrations; run `alembic upgrade head`
+  before starting this worker.
 """
 #### for running in vscode (comment out when on Raspberry Pi)
 import sys
@@ -28,7 +32,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 
-from src.db.models import SessionLocal, init_db, IngestRaw, Point
+from src.db.models import SessionLocal, IngestRaw, Point
 from src.utils.time import datetime_to_epoch
 
 # ---- Configuration ----
@@ -193,7 +197,6 @@ def _process_batch_once() -> int:
 
 def main():
     """Entry point for the background parser."""
-    init_db()
     print("[parse_worker] started (polling IngestRaw)")
     while True:
         n = _process_batch_once()

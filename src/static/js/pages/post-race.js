@@ -24,6 +24,8 @@ because they currently belong only to the post-race page.
   const raceId = mapNode?.dataset?.raceId || '';
   const categoryLabel = mapNode?.dataset?.category || '';
   const categoryText = categoryLabel ? `category "${categoryLabel}"` : 'selected category';
+  const mapConfigNode = document.getElementById('post-race-map-config');
+  const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
 
   const BASE_ROUTE_COLOR = '#1f78b4';
   const TRACK_PALETTE = [
@@ -46,18 +48,154 @@ because they currently belong only to the post-race page.
   const trackMeta = new Map();
   const timingRows = new Map();
   const inFlightTrackRefresh = new Set();
+  let mapBootstrapConfig = null;
+  let basemapAttached = false;
+  let basemapAttachInFlight = false;
+  let tileUsageReporter = null;
+  let satelliteFallbackActive = false;
+
+  // Build headers for browser-originated JSON POST requests that use the
+  // logged-in session cookie. Flask-WTF accepts X-CSRFToken for JSON/fetch
+  // requests where a hidden form field is not available.
+  function csrfJsonHeaders() {
+    const headers = { 'Content-Type': 'application/json' };
+    if (csrfToken) headers['X-CSRFToken'] = csrfToken;
+    return headers;
+  }
+
+  // Read the server-rendered map bootstrap configuration from JSON rather than
+  // embedding Jinja expressions in this static page script. This bootstrap must
+  // not contain the Esri key; the key is fetched from /api/map/config-status
+  // only after route/track bounds have been fitted and quota checks pass.
+  if (mapConfigNode?.textContent) {
+    try {
+      mapBootstrapConfig = JSON.parse(mapConfigNode.textContent);
+    } catch (error) {
+      console.error('Failed to parse post-race map bootstrap configuration:', error);
+    }
+  }
 
   // Update the status line without requiring every page state to include one.
   function updateStatus(message) {
     if (statusNode) statusNode.textContent = message;
   }
 
-  // Create the Leaflet map only when a post-race map interaction needs it.
+  // Create an empty Leaflet map only when a post-race interaction needs it. The
+  // selected route or track sets the view before a basemap can request tiles.
   function ensureMap() {
     if (map) return map;
     if (!maps || !mapNode) return null;
-    map = maps.createMap(mapNode);
+    map = maps.createMap(mapNode, { basemap: 'none' });
     return map;
+  }
+
+  // Convert the backend quota/config response into the shape expected by the
+  // shared Leaflet helper. The backend intentionally uses explicit API names
+  // (`arcgisApiKey`, `mapProvider`, `mapStyle`) so the HTML bootstrap never
+  // needs to carry the Esri key.
+  function normaliseBackendMapConfig(configStatus) {
+    return {
+      provider: configStatus?.mapProvider || configStatus?.provider || '',
+      style: configStatus?.mapStyle || '',
+      apiKey: configStatus?.arcgisApiKey || '',
+      satelliteAllowed: configStatus?.satelliteAllowed === true,
+    };
+  }
+
+  function satelliteUnavailableMessage(configStatus) {
+    if (configStatus?.satelliteAllowed === true) return '';
+    return mapBootstrapConfig?.satelliteUnavailableMessage || 'Satellite view is currently unavailable for this account, please try again later.';
+  }
+
+  function stopTileUsageReporter() {
+    if (tileUsageReporter) {
+      tileUsageReporter.stop();
+      tileUsageReporter = null;
+    }
+  }
+
+  // Move the map from Esri imagery to the retained OpenStreetMap fallback after
+  // a quota block. This is intentionally idempotent so repeated blocked
+  // responses do not keep re-attaching the same OSM layer or spamming the
+  // status line. Base layer switching is handled by maps.js and does not touch
+  // route or rider overlays.
+  function switchToOpenStreetMapWithMessage(message) {
+    if (!map || !maps) return;
+    stopTileUsageReporter();
+    if (!satelliteFallbackActive) {
+      const fallbackLayer = maps.attachOpenStreetMapBasemap(map);
+      basemapAttached = !!fallbackLayer;
+      satelliteFallbackActive = !!fallbackLayer;
+    }
+    if (satelliteFallbackActive) {
+      updateStatus(message || mapBootstrapConfig?.satelliteUnavailableMessage || 'Satellite view is currently unavailable for this account, please try again later.');
+    }
+  }
+
+  // Start reporting Esri tile deltas only when the backend has allowed
+  // satellite imagery. The reporter sends deltas to the quota endpoint and
+  // switches this map to OSM if the backend later returns satelliteAllowed=false.
+  function startTileUsageReporter(configStatus) {
+    stopTileUsageReporter();
+    if (!map || !maps || configStatus?.satelliteAllowed !== true || !mapBootstrapConfig?.tileUsageUrl) {
+      return null;
+    }
+
+    tileUsageReporter = maps.createEsriTileUsageReporter({
+      tileUsageUrl: mapBootstrapConfig.tileUsageUrl,
+      raceId: mapBootstrapConfig.raceId || raceId,
+      pagePath: mapBootstrapConfig.pagePath || window.location.pathname,
+      csrfToken,
+      onBlocked: data => switchToOpenStreetMapWithMessage(satelliteUnavailableMessage(data)),
+      onError: () => {
+        // Keep the map usable on transient report failures. The next successful
+        // report or config-status check will enforce quota state again.
+      },
+    });
+    tileUsageReporter.start();
+    return tileUsageReporter;
+  }
+
+  // Ask the backend whether this browser may receive Esri config. This is the
+  // quota gate: if the response is blocked, it should not contain arcgisApiKey
+  // and the shared helper will attach OpenStreetMap instead.
+  function fetchMapConfigStatus() {
+    const configStatusUrl = mapBootstrapConfig?.configStatusUrl || '/api/map/config-status';
+    return fetch(configStatusUrl, { cache: 'no-store' })
+      .then(response => {
+        if (!response.ok) throw new Error('Map config status request failed.');
+        return response.json();
+      });
+  }
+
+  // Attach satellite imagery only after valid bounds are visible. If quota
+  // checks block satellite imagery, or the status request fails, attach the
+  // retained OpenStreetMap fallback without touching route/rider overlays.
+  function attachPostRaceBasemap() {
+    if (!map || !maps || basemapAttached || basemapAttachInFlight) return;
+    basemapAttachInFlight = true;
+
+    fetchMapConfigStatus()
+      .then(configStatus => {
+        const reporter = startTileUsageReporter(configStatus);
+        const result = maps.attachConfiguredBasemap(map, normaliseBackendMapConfig(configStatus));
+        basemapAttached = !!result?.layer;
+        if (result?.provider === 'esri' && reporter) {
+          satelliteFallbackActive = false;
+          reporter.watchLayer(result.layer);
+        } else {
+          stopTileUsageReporter();
+          satelliteFallbackActive = result?.provider === 'openstreetmap';
+        }
+        const message = satelliteUnavailableMessage(configStatus);
+        if (message) updateStatus(message);
+      })
+      .catch(() => {
+        switchToOpenStreetMapWithMessage(mapBootstrapConfig?.satelliteUnavailableMessage);
+      })
+      .finally(() => {
+        basemapAttachInFlight = false;
+      });
   }
 
   // Build cache-busted endpoints for live rider tracks and timing refreshes.
@@ -148,7 +286,7 @@ because they currently belong only to the post-race page.
     button.disabled = true;
     fetch(`/races/${encodeURIComponent(raceId)}/race-rider/${encodeURIComponent(raceRiderId)}/confirm-finish`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: csrfJsonHeaders(),
     })
       .then(response => {
         if (!response.ok) throw new Error('Finish confirmation failed.');
@@ -308,7 +446,10 @@ because they currently belong only to the post-race page.
     if (routeLayer) currentMap.removeLayer(routeLayer);
     routeLayer = maps.addGeojsonLayer(currentMap, geojson, { style: { color: BASE_ROUTE_COLOR, weight: 3 } });
     routeLayer?.bringToBack();
-    maps.fitMapToLayer(currentMap, routeLayer);
+    if (maps.fitMapToLayer(currentMap, routeLayer)) {
+      maps.setMapBoundsLimit(currentMap, routeLayer, 0.25);
+      attachPostRaceBasemap();
+    }
   }
 
   function addTrackLayer(raceRiderId, geojson, shouldRefocus) {
@@ -322,7 +463,7 @@ because they currently belong only to the post-race page.
     trackLayers.set(raceRiderId, layer);
     layer.bringToFront();
     routeLayer?.bringToBack();
-    if (shouldRefocus) maps.fitMapToLayer(currentMap, layer);
+    if (shouldRefocus && maps.fitMapToLayer(currentMap, layer)) attachPostRaceBasemap();
     updateTrackKeyActiveStates();
   }
 
@@ -487,7 +628,7 @@ because they currently belong only to the post-race page.
     if (!currentRaceRiderId) return;
     if (!window.confirm('Are you sure? This is a permanent change. Original times will be lost.')) return;
     fetch(`/races/${encodeURIComponent(raceId)}/race-rider/${encodeURIComponent(currentRaceRiderId)}/manual-times`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(buildManualTimesPayload()),
+      method: 'POST', headers: csrfJsonHeaders(), body: JSON.stringify(buildManualTimesPayload()),
     })
       .then(response => {
         if (!response.ok) throw new Error('Manual update failed.');
@@ -527,7 +668,7 @@ because they currently belong only to the post-race page.
       if (!uploadResponse.ok) throw new Error('Upload failed.');
 
       const timingResponse = await fetch(`/races/${encodeURIComponent(raceId)}/race-rider/${encodeURIComponent(currentRaceRiderId)}/manual-times`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(buildManualTimesPayload()),
+        method: 'POST', headers: csrfJsonHeaders(), body: JSON.stringify(buildManualTimesPayload()),
       });
       if (!timingResponse.ok) throw new Error('Timing update failed.');
 
