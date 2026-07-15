@@ -17,7 +17,28 @@
 
       <div class="stack">
         <a class="btn" href="{{ url_for('home.dashboard_admin') }}">Back to Admin Dashboard</a>
+        <a class="btn" href="{{ url_for('map_tile_quota.admin_map_tile_quota') }}">Refresh</a>
       </div>
+
+      {% set warning_crossed = quota.warning_threshold and quota.estimated_tiles_used >= quota.warning_threshold %}
+      {% set hard_stop_crossed = quota.hard_stop_threshold and quota.estimated_tiles_used >= quota.hard_stop_threshold %}
+      {% if hard_stop_crossed or quota.hard_stop_active %}
+        <div class="content-panel">
+          <h2 class="section-title">Hard Stop Warning</h2>
+          <p>
+            Satellite imagery is at or above the hard-stop threshold, or the global hard stop is active.
+            New blocked users should receive OpenStreetMap fallback instead of Esri config.
+          </p>
+        </div>
+      {% elif warning_crossed or quota.warning_triggered_at %}
+        <div class="content-panel">
+          <h2 class="section-title">Usage Warning</h2>
+          <p>
+            Estimated Esri usage has reached the warning threshold.
+            Check the Esri platform total and correct the estimate below if needed.
+          </p>
+        </div>
+      {% endif %}
 
       <h2 class="section-title">Current Billing Cycle</h2>
       <div class="table-card">
@@ -37,7 +58,12 @@
             </tr>
             <tr>
               <th>Estimated tiles used</th>
-              <td>{{ quota.estimated_tiles_used }}</td>
+              <td>
+                {{ quota.estimated_tiles_used }}
+                {% if quota.monthly_limit %}
+                  ({{ ((quota.estimated_tiles_used / quota.monthly_limit) * 100) | round(1) }}% of monthly limit)
+                {% endif %}
+              </td>
             </tr>
             <tr>
               <th>Monthly limit</th>
@@ -45,11 +71,21 @@
             </tr>
             <tr>
               <th>Warning threshold</th>
-              <td>{{ quota.warning_threshold }}</td>
+              <td>
+                {{ quota.warning_threshold }}
+                {% if quota.warning_triggered_at %}
+                  — crossed at {{ quota.warning_triggered_at }}
+                {% endif %}
+              </td>
             </tr>
             <tr>
               <th>Hard-stop threshold</th>
-              <td>{{ quota.hard_stop_threshold }}</td>
+              <td>
+                {{ quota.hard_stop_threshold }}
+                {% if quota.hard_stop_triggered_at %}
+                  — crossed at {{ quota.hard_stop_triggered_at }}
+                {% endif %}
+              </td>
             </tr>
             <tr>
               <th>Hard stop active</th>
@@ -72,6 +108,28 @@
               <th>Redis status</th>
               <td>{{ redis_status }}</td>
             </tr>
+            <tr>
+              <th>Current browser tile limit</th>
+              <td>
+                {{ runtime_limits.MAP_TILE_USER_LIMIT.current }}
+                {% if runtime_limits.MAP_TILE_USER_LIMIT.overridden %}
+                  (runtime override; .env default {{ runtime_limits.MAP_TILE_USER_LIMIT.default }})
+                {% else %}
+                  (.env default)
+                {% endif %}
+              </td>
+            </tr>
+            <tr>
+              <th>Current browser rolling window</th>
+              <td>
+                {{ runtime_limits.MAP_USER_LIMIT_TIMEOUT_MIN.current }} minutes
+                {% if runtime_limits.MAP_USER_LIMIT_TIMEOUT_MIN.overridden %}
+                  (runtime override; .env default {{ runtime_limits.MAP_USER_LIMIT_TIMEOUT_MIN.default }})
+                {% else %}
+                  (.env default)
+                {% endif %}
+              </td>
+            </tr>
           </tbody>
         </table>
       </div>
@@ -87,6 +145,7 @@
                 <th>Tiles at block</th>
                 <th>Blocked at</th>
                 <th>Blocked until</th>
+                <th>Status</th>
                 <th class="actions">Actions</th>
               </tr>
             </thead>
@@ -98,6 +157,15 @@
                   <td>{{ block.tiles_at_block if block.tiles_at_block is not none else '—' }}</td>
                   <td>{{ block.blocked_at }}</td>
                   <td>{{ block.blocked_until }}</td>
+                  <td>
+                    {% if block.released_at %}
+                      Released
+                    {% elif block.blocked_until <= current_time %}
+                      Expired
+                    {% else %}
+                      Active
+                    {% endif %}
+                  </td>
                   <td class="actions">
                     <form method="post" action="{{ url_for('map_tile_quota.reset_browser_quota', browser_cookie_id=block.browser_cookie_id) }}">
                       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
@@ -159,6 +227,119 @@
         <form method="post" action="{{ url_for('map_tile_quota.clear_monthly_override_route') }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
           <button class="btn" type="submit">Clear Override</button>
+        </form>
+      </div>
+
+      <h2 class="section-title">Runtime Browser Limits</h2>
+      <div class="content-panel">
+        <p>
+          These values affect the current running server only. They do not edit .env files and will reset
+          when the container/server process restarts.
+        </p>
+
+        <form class="form-grid" method="post" action="{{ url_for('map_tile_quota.runtime_limits') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+
+          <label>
+            <span>Browser tile limit</span>
+            <input
+              type="number"
+              min="0"
+              name="map_tile_user_limit"
+              value="{{ runtime_limits.MAP_TILE_USER_LIMIT.current }}"
+              required
+            />
+          </label>
+
+          <label>
+            <span>Rolling window in minutes</span>
+            <input
+              type="number"
+              min="1"
+              name="map_user_limit_timeout_min"
+              value="{{ runtime_limits.MAP_USER_LIMIT_TIMEOUT_MIN.current }}"
+              required
+            />
+          </label>
+
+          <button class="btn" type="submit">Save Runtime Limits</button>
+        </form>
+
+        <form method="post" action="{{ url_for('map_tile_quota.clear_runtime_limits') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+          <button class="btn" type="submit">Restore .env Defaults</button>
+        </form>
+      </div>
+
+      <h2 class="section-title">Monthly Thresholds</h2>
+      <div class="content-panel">
+        <p>
+          These values update the current database quota row only. They do not edit .env files.
+          New billing-cycle rows are still seeded from the .env defaults.
+        </p>
+
+        <form class="form-grid" method="post" action="{{ url_for('map_tile_quota.monthly_thresholds') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+
+          <label>
+            <span>Monthly limit</span>
+            <input
+              type="number"
+              min="0"
+              name="monthly_limit"
+              value="{{ quota.monthly_limit }}"
+              required
+            />
+          </label>
+
+          <label>
+            <span>Warning threshold</span>
+            <input
+              type="number"
+              min="0"
+              name="warning_threshold"
+              value="{{ quota.warning_threshold }}"
+              required
+            />
+          </label>
+
+          <label>
+            <span>Hard-stop threshold</span>
+            <input
+              type="number"
+              min="0"
+              name="hard_stop_threshold"
+              value="{{ quota.hard_stop_threshold }}"
+              required
+            />
+          </label>
+
+          <button class="btn" type="submit">Save Monthly Thresholds</button>
+        </form>
+      </div>
+
+      <h2 class="section-title">Monthly Estimate Correction</h2>
+      <div class="content-panel">
+        <p>
+          Use this if the Esri platform total differs from the app estimate. This updates the database row
+          for the current billing cycle only.
+        </p>
+
+        <form class="form-grid" method="post" action="{{ url_for('map_tile_quota.monthly_estimate') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+
+          <label>
+            <span>Corrected estimated tiles used</span>
+            <input
+              type="number"
+              min="0"
+              name="estimated_tiles_used"
+              value="{{ quota.estimated_tiles_used }}"
+              required
+            />
+          </label>
+
+          <button class="btn" type="submit">Save Monthly Estimate</button>
         </form>
       </div>
     </main>

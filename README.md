@@ -820,6 +820,8 @@ Module header documents:
   - `release_browser_blocks`: mark active browser block rows released.
   - `set_viewers_only_blocked`: block/unblock anonymous viewer satellite access.
   - `set_global_hard_stop`: manually set/clear global hard-stop state.
+  - `set_monthly_thresholds`: manually update active monthly quota thresholds.
+  - `set_monthly_tile_estimate`: manually correct the current monthly tile estimate.
   - `set_monthly_override`: enable a temporary monthly hard-stop override.
   - `clear_monthly_override`: disable a monthly hard-stop override.
   - `record_quota_audit_event`: write admin/system quota actions to auth_audit_events.
@@ -896,6 +898,20 @@ Module header documents:
 - Writes: `hard_stop_active`, optionally `hard_stop_triggered_at`, and `updated_at`.
 - Returns: None.
 
+### set_monthly_thresholds
+- Purpose: Manually update the active monthly quota row's monthly limit, warning threshold, and hard-stop threshold.
+- Reads: submitted threshold values and current monthly estimate.
+- Writes: `monthly_limit`, `warning_threshold`, `hard_stop_threshold`, recalculated warning/hard-stop flags, and `updated_at`.
+- Returns: None.
+- Notes: values are stored in the current DB row only; `.env` values continue to seed newly-created billing-cycle rows.
+
+### set_monthly_tile_estimate
+- Purpose: Manually correct the app-estimated monthly Esri tile usage.
+- Reads: corrected estimate and current quota thresholds.
+- Writes: `estimated_tiles_used`, recalculated warning/hard-stop flags, and `updated_at`.
+- Returns: None.
+- Notes: if the corrected estimate falls below thresholds, automatic warning/hard-stop state is cleared because the previous estimate was treated as inaccurate.
+
 ### set_monthly_override
 - Purpose: Enable a temporary monthly hard-stop override.
 - Reads: override duration and optional reason.
@@ -942,6 +958,10 @@ Module header documents:
 - `POST /api/map/tile-usage`
 - `POST /admin/map_tile_quota/browser/<browser_cookie_id>/reset`
 - `POST /admin/map_tile_quota/global-toggle`
+- `POST /admin/map_tile_quota/runtime-limits`
+- `POST /admin/map_tile_quota/runtime-limits/clear`
+- `POST /admin/map_tile_quota/monthly-thresholds`
+- `POST /admin/map_tile_quota/monthly-estimate`
 - `POST /admin/map_tile_quota/monthly-override`
 - `POST /admin/map_tile_quota/monthly-override/clear`
 
@@ -958,6 +978,25 @@ Module header documents:
 - Reads: Flask `current_app.config`.
 - Writes: None.
 - Returns: parsed integer or a safe default.
+
+### _runtime_limit_overrides
+- Purpose: Load process-only admin overrides for browser tile limit and rolling-window timeout.
+- Reads: Flask `current_app.extensions`.
+- Writes: creates `current_app.extensions["map_tile_quota_runtime_limit_overrides"]` if missing.
+- Returns: mutable runtime override dictionary.
+- Notes: these values do not edit `.env` and reset when the server process/container restarts.
+
+### _runtime_config_int
+- Purpose: Read effective browser limit values, preferring process-only overrides over `.env` config.
+- Reads: runtime override dictionary and Flask `current_app.config`.
+- Writes: None.
+- Returns: parsed integer value.
+
+### _runtime_limit_config
+- Purpose: Build display state for the admin quota page showing current/default browser limits.
+- Reads: runtime override dictionary and Flask `current_app.config`.
+- Writes: None.
+- Returns: dictionary containing current value, `.env` default, and overridden flag for each runtime limit.
 
 ### _map_quota_config
 - Purpose: Gather map quota defaults from Flask configuration for the service layer.
@@ -999,7 +1038,7 @@ Module header documents:
 
 ### admin_map_tile_quota (GET `/admin/map_tile_quota`)
 - Purpose: Render the admin map tile quota management page.
-- Reads: current quota row through `src.services.map_tile_quota`, recent unreleased `MapTileBrowserBlock` rows, and Redis connectivity status.
+- Reads: current quota row through `src.services.map_tile_quota`, recent unreleased `MapTileBrowserBlock` rows, runtime browser limit override state, and Redis connectivity status.
 - Writes: creates the current billing-cycle quota row if missing.
 - Renders: `templates/map_tile_quota.html`.
 - Access: protected with `admin_required`.
@@ -1032,6 +1071,37 @@ Module header documents:
 - Returns: redirect to `/admin/map_tile_quota`.
 - Access: protected with `admin_required`.
 
+### runtime_limits (POST `/admin/map_tile_quota/runtime-limits`)
+- Purpose: Admin process-only override for `MAP_TILE_USER_LIMIT` and `MAP_USER_LIMIT_TIMEOUT_MIN`.
+- Reads: submitted browser limit/window values and current quota row.
+- Writes: Flask process memory under `current_app.extensions`, plus audit event.
+- Returns: redirect to `/admin/map_tile_quota`.
+- Access: protected with `admin_required`.
+- Notes: does not edit `.env`; restart or restore action returns behaviour to environment defaults.
+
+### clear_runtime_limits (POST `/admin/map_tile_quota/runtime-limits/clear`)
+- Purpose: Clear process-only browser limit overrides and restore `.env` defaults.
+- Reads: current quota row.
+- Writes: clears Flask process-memory overrides and records an audit event.
+- Returns: redirect to `/admin/map_tile_quota`.
+- Access: protected with `admin_required`.
+
+### monthly_thresholds (POST `/admin/map_tile_quota/monthly-thresholds`)
+- Purpose: Update the current billing-cycle monthly limit, warning threshold, and hard-stop threshold.
+- Reads: submitted threshold values and current quota row.
+- Writes: `map_tile_monthly_quota.monthly_limit`, `warning_threshold`, `hard_stop_threshold`, recalculated threshold flags, and audit event.
+- Returns: redirect to `/admin/map_tile_quota`.
+- Access: protected with `admin_required`.
+- Notes: this persists in the database for the active billing cycle; it does not edit `.env`.
+
+### monthly_estimate (POST `/admin/map_tile_quota/monthly-estimate`)
+- Purpose: Correct the current billing-cycle Esri tile estimate when Esri platform totals differ from the app estimate.
+- Reads: submitted corrected estimate and current quota row.
+- Writes: `map_tile_monthly_quota.estimated_tiles_used`, recalculated warning/hard-stop flags, and audit event.
+- Returns: redirect to `/admin/map_tile_quota`.
+- Access: protected with `admin_required`.
+- Notes: this persists in the database for the active billing cycle; it does not edit `.env` monthly thresholds.
+
 ### monthly_override (POST `/admin/map_tile_quota/monthly-override`)
 - Purpose: Admin enables a temporary monthly hard-stop override.
 - Reads: submitted duration/reason and current quota row.
@@ -1047,12 +1117,14 @@ Module header documents:
 - Access: protected with `admin_required`.
 
 ### Checks
-- All seven map quota routes are registered.
+- All ten map quota routes are registered.
 - Admin routes are protected by `admin_required`.
 - Config-status sets the anonymous browser id cookie when missing.
 - Config-status does not release Esri config when Redis, quota, monthly, browser, or provider checks block satellite usage.
 - Tile usage POST updates Redis rolling-window state and DB usage/quota state.
 - Billing cycle uses the 25th-to-25th service-layer rule.
+- Runtime browser limit overrides affect the current server process only and can be restored to `.env` defaults.
+- Monthly estimate correction updates the current DB quota row and records an audit event.
 
 ## Alembic Migration Workflow
 

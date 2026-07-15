@@ -13,6 +13,10 @@ GET /api/map/config-status -> Public browser endpoint returning Esri/fallback co
 POST /api/map/tile-usage -> Browser tile delta reporting and quota enforcement
 POST /admin/map_tile_quota/browser/<browser_cookie_id>/reset -> Admin browser reset
 POST /admin/map_tile_quota/global-toggle -> Admin global/viewer satellite toggle
+POST /admin/map_tile_quota/runtime-limits -> Admin runtime browser-limit override
+POST /admin/map_tile_quota/runtime-limits/clear -> Admin runtime limit restore
+POST /admin/map_tile_quota/monthly-thresholds -> Admin monthly threshold update
+POST /admin/map_tile_quota/monthly-estimate -> Admin monthly usage correction
 POST /admin/map_tile_quota/monthly-override -> Admin monthly hard-stop override
 POST /admin/map_tile_quota/monthly-override/clear -> Admin override cancellation
 
@@ -29,6 +33,9 @@ Notes
 
 Contains:
 - _config_int: read integer values from Flask configuration.
+- _runtime_limit_overrides: load current process-only limit overrides.
+- _runtime_config_int: read runtime override first, then Flask configuration.
+- _runtime_limit_config: build admin display state for runtime limits.
 - _map_quota_config: gather map quota defaults from Flask configuration.
 - _get_redis_client: get/create the Flask-cached Redis client.
 - _current_browser_role: convert Flask-Login state into a quota role snapshot.
@@ -39,6 +46,10 @@ Contains:
 - map_tile_usage: record browser tile deltas and enforce quota state.
 - reset_browser_quota: reset one browser's current rolling-window usage.
 - global_toggle: update viewer/global block flags.
+- runtime_limits: set process-only browser tile limit/window overrides.
+- clear_runtime_limits: clear process-only browser tile limit/window overrides.
+- monthly_thresholds: update active monthly limit/warning/hard-stop thresholds.
+- monthly_estimate: correct the monthly estimated Esri tile count.
 - monthly_override: set a temporary monthly quota override.
 - clear_monthly_override_route: clear the monthly quota override.
 """
@@ -70,6 +81,8 @@ from src.services.map_tile_quota import (
     record_quota_audit_event,
     release_browser_blocks,
     set_global_hard_stop,
+    set_monthly_thresholds,
+    set_monthly_tile_estimate,
     set_monthly_override,
     set_viewers_only_blocked,
 )
@@ -81,9 +94,12 @@ from src.utils.map_tile_quota import (
     is_browser_over_tile_limit,
     reset_browser_block,
 )
+from src.utils.time import utc_now
 
 
 bp_map_tile_quota = Blueprint("map_tile_quota", __name__)
+RUNTIME_LIMIT_OVERRIDE_KEY = "map_tile_quota_runtime_limit_overrides"
+RUNTIME_LIMIT_NAMES = ("MAP_TILE_USER_LIMIT", "MAP_USER_LIMIT_TIMEOUT_MIN")
 
 
 def _config_int(name: str, default: int = 0) -> int:
@@ -101,6 +117,63 @@ def _config_int(name: str, default: int = 0) -> int:
         return int((current_app.config.get(name) or "").strip())
     except (AttributeError, TypeError, ValueError):
         return default
+
+
+def _runtime_limit_overrides() -> dict:
+    """
+    Load the current process-only map tile runtime limit overrides.
+
+    Input Args:
+      None. Reads Flask app extension storage.
+
+    Output:
+      Mutable dictionary of runtime override values.
+
+    Notes:
+      These overrides do not edit .env files and disappear when the server
+      process/container restarts.
+    """
+    return current_app.extensions.setdefault(RUNTIME_LIMIT_OVERRIDE_KEY, {})
+
+
+def _runtime_config_int(name: str, default: int = 0) -> int:
+    """
+    Read a map-limit integer from runtime overrides first, then Flask config.
+
+    Input Args:
+      name: config key, currently MAP_TILE_USER_LIMIT or MAP_USER_LIMIT_TIMEOUT_MIN.
+      default: fallback integer when neither source has a usable value.
+
+    Output:
+      Effective integer used by quota enforcement.
+    """
+    overrides = _runtime_limit_overrides()
+    if name in overrides:
+        try:
+            return int(overrides[name])
+        except (TypeError, ValueError):
+            return default
+    return _config_int(name, default)
+
+
+def _runtime_limit_config() -> dict:
+    """
+    Build admin display state for runtime browser-limit settings.
+
+    Input Args:
+      None. Reads Flask config and process-only overrides.
+
+    Output:
+      Dictionary keyed by setting name with default/current/overridden values.
+    """
+    return {
+        name: {
+            "default": _config_int(name, 0),
+            "current": _runtime_config_int(name, 0),
+            "overridden": name in _runtime_limit_overrides(),
+        }
+        for name in RUNTIME_LIMIT_NAMES
+    }
 
 
 def _map_quota_config() -> dict:
@@ -243,6 +316,8 @@ def admin_map_tile_quota():
             active_blocks=active_blocks,
             redis_status=redis_status,
             billing_cycle_start_day=BILLING_CYCLE_START_DAY,
+            current_time=utc_now(),
+            runtime_limits=_runtime_limit_config(),
         )
     except SQLAlchemyError:
         session.rollback()
@@ -268,8 +343,8 @@ def map_config_status():
     provider = (current_app.config.get("MAP_PROVIDER") or "").strip().lower()
     map_style = (current_app.config.get("MAP_STYLE") or "").strip() or "arcgis/imagery"
     arcgis_api_key = (current_app.config.get("ARCGIS_API_KEY") or "").strip()
-    user_limit = _config_int("MAP_TILE_USER_LIMIT", 0)
-    timeout_minutes = _config_int("MAP_USER_LIMIT_TIMEOUT_MIN", 30)
+    user_limit = _runtime_config_int("MAP_TILE_USER_LIMIT", 0)
+    timeout_minutes = _runtime_config_int("MAP_USER_LIMIT_TIMEOUT_MIN", 30)
     reason = None
     quota_payload = None
     rolling_browser_tiles = None
@@ -365,8 +440,8 @@ def map_tile_usage():
 
     role, is_admin = _current_browser_role()
     user_id = _current_user_id()
-    user_limit = _config_int("MAP_TILE_USER_LIMIT", 0)
-    timeout_minutes = _config_int("MAP_USER_LIMIT_TIMEOUT_MIN", 30)
+    user_limit = _runtime_config_int("MAP_TILE_USER_LIMIT", 0)
+    timeout_minutes = _runtime_config_int("MAP_USER_LIMIT_TIMEOUT_MIN", 30)
     rolling_browser_tiles = None
     reason = None
     quota_payload = None
@@ -458,7 +533,7 @@ def reset_browser_quota(browser_cookie_id: str):
     """
     Reset one browser's current map tile quota block/count state.
     """
-    timeout_minutes = _config_int("MAP_USER_LIMIT_TIMEOUT_MIN", 30)
+    timeout_minutes = _runtime_config_int("MAP_USER_LIMIT_TIMEOUT_MIN", 30)
     try:
         reset_browser_block(
             _get_redis_client(),
@@ -518,6 +593,150 @@ def global_toggle():
         )
         session.commit()
     except SQLAlchemyError:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+    return redirect(url_for("map_tile_quota.admin_map_tile_quota"))
+
+
+@bp_map_tile_quota.route("/admin/map_tile_quota/runtime-limits", methods=["POST"])
+@admin_required
+def runtime_limits():
+    """
+    Set process-only browser tile limit/window overrides.
+    """
+    submitted_user_limit = _safe_int(request.form.get("map_tile_user_limit"))
+    submitted_timeout = _safe_int(request.form.get("map_user_limit_timeout_min"))
+    if submitted_user_limit is None or submitted_user_limit < 0:
+        submitted_user_limit = _config_int("MAP_TILE_USER_LIMIT", 0)
+    if submitted_timeout is None or submitted_timeout <= 0:
+        submitted_timeout = _config_int("MAP_USER_LIMIT_TIMEOUT_MIN", 30)
+
+    overrides = _runtime_limit_overrides()
+    overrides["MAP_TILE_USER_LIMIT"] = submitted_user_limit
+    overrides["MAP_USER_LIMIT_TIMEOUT_MIN"] = submitted_timeout
+
+    session = SessionLocal()
+    try:
+        quota = get_or_create_current_quota(session, _map_quota_config())
+        record_quota_audit_event(
+            session,
+            actor_user_id=_current_user_id(),
+            action="map_tile_runtime_limits_set",
+            metadata={
+                "billing_month": quota.billing_month,
+                "map_tile_user_limit": submitted_user_limit,
+                "map_user_limit_timeout_min": submitted_timeout,
+            },
+        )
+        session.commit()
+    except SQLAlchemyError:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+    return redirect(url_for("map_tile_quota.admin_map_tile_quota"))
+
+
+@bp_map_tile_quota.route("/admin/map_tile_quota/runtime-limits/clear", methods=["POST"])
+@admin_required
+def clear_runtime_limits():
+    """
+    Clear process-only browser tile limit/window overrides.
+    """
+    _runtime_limit_overrides().clear()
+
+    session = SessionLocal()
+    try:
+        quota = get_or_create_current_quota(session, _map_quota_config())
+        record_quota_audit_event(
+            session,
+            actor_user_id=_current_user_id(),
+            action="map_tile_runtime_limits_clear",
+            metadata={"billing_month": quota.billing_month},
+        )
+        session.commit()
+    except SQLAlchemyError:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+    return redirect(url_for("map_tile_quota.admin_map_tile_quota"))
+
+
+@bp_map_tile_quota.route("/admin/map_tile_quota/monthly-thresholds", methods=["POST"])
+@admin_required
+def monthly_thresholds():
+    """
+    Update the active monthly quota limit/warning/hard-stop thresholds.
+    """
+    monthly_limit = request.form.get("monthly_limit")
+    warning_threshold = request.form.get("warning_threshold")
+    hard_stop_threshold = request.form.get("hard_stop_threshold")
+
+    session = SessionLocal()
+    try:
+        quota = get_or_create_current_quota(session, _map_quota_config())
+        previous_values = {
+            "monthly_limit": int(quota.monthly_limit or 0),
+            "warning_threshold": int(quota.warning_threshold or 0),
+            "hard_stop_threshold": int(quota.hard_stop_threshold or 0),
+        }
+        set_monthly_thresholds(
+            quota,
+            monthly_limit=monthly_limit,
+            warning_threshold=warning_threshold,
+            hard_stop_threshold=hard_stop_threshold,
+        )
+        record_quota_audit_event(
+            session,
+            actor_user_id=_current_user_id(),
+            action="map_tile_monthly_thresholds_set",
+            metadata={
+                "billing_month": quota.billing_month,
+                "previous": previous_values,
+                "current": {
+                    "monthly_limit": int(quota.monthly_limit or 0),
+                    "warning_threshold": int(quota.warning_threshold or 0),
+                    "hard_stop_threshold": int(quota.hard_stop_threshold or 0),
+                },
+            },
+        )
+        session.commit()
+    except (SQLAlchemyError, ValueError):
+        session.rollback()
+        raise
+    finally:
+        session.close()
+    return redirect(url_for("map_tile_quota.admin_map_tile_quota"))
+
+
+@bp_map_tile_quota.route("/admin/map_tile_quota/monthly-estimate", methods=["POST"])
+@admin_required
+def monthly_estimate():
+    """
+    Correct the current monthly estimated Esri tile count.
+    """
+    estimated_tiles_used = request.form.get("estimated_tiles_used")
+
+    session = SessionLocal()
+    try:
+        quota = get_or_create_current_quota(session, _map_quota_config())
+        previous_estimate = int(quota.estimated_tiles_used or 0)
+        set_monthly_tile_estimate(quota, estimated_tiles_used)
+        record_quota_audit_event(
+            session,
+            actor_user_id=_current_user_id(),
+            action="map_tile_monthly_estimate_set",
+            metadata={
+                "billing_month": quota.billing_month,
+                "previous_estimated_tiles_used": previous_estimate,
+                "estimated_tiles_used": int(quota.estimated_tiles_used or 0),
+            },
+        )
+        session.commit()
+    except (SQLAlchemyError, ValueError):
         session.rollback()
         raise
     finally:

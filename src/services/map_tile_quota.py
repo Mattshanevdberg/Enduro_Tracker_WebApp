@@ -15,6 +15,8 @@ Contains:
 - release_browser_blocks: mark active browser block rows released.
 - set_viewers_only_blocked: block/unblock anonymous viewer satellite access.
 - set_global_hard_stop: manually set/clear global hard-stop state.
+- set_monthly_thresholds: manually update active monthly quota thresholds.
+- set_monthly_tile_estimate: manually correct the estimated monthly tile count.
 - set_monthly_override: enable a temporary monthly hard-stop override.
 - clear_monthly_override: disable a monthly hard-stop override.
 - record_quota_audit_event: write admin/system quota actions to auth_audit_events.
@@ -374,6 +376,108 @@ def set_global_hard_stop(quota: MapTileMonthlyQuota, active: bool, now: datetime
     quota.hard_stop_active = bool(active)
     if active and quota.hard_stop_triggered_at is None:
         quota.hard_stop_triggered_at = current_time
+    quota.updated_at = current_time
+
+
+def set_monthly_thresholds(
+    quota: MapTileMonthlyQuota,
+    monthly_limit: int | str,
+    warning_threshold: int | str,
+    hard_stop_threshold: int | str,
+    now: datetime | None = None,
+) -> None:
+    """
+    Manually update the active monthly quota limits/thresholds.
+
+    Input Args:
+      quota: MapTileMonthlyQuota row to update.
+      monthly_limit: displayed/nominal monthly tile allowance.
+      warning_threshold: usage level that triggers admin warning state.
+      hard_stop_threshold: usage level that activates the hard stop.
+      now: optional current UTC datetime for deterministic tests.
+
+    Output:
+      None. The caller is responsible for committing the session.
+
+    Notes:
+      These values live in the active database row. They do not edit .env.
+      Environment values only seed newly-created billing-cycle rows.
+    """
+    try:
+        limit = int(monthly_limit)
+        warning = int(warning_threshold)
+        hard_stop = int(hard_stop_threshold)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("monthly thresholds must be non-negative integers") from exc
+
+    if limit < 0 or warning < 0 or hard_stop < 0:
+        raise ValueError("monthly thresholds must be non-negative integers")
+    if limit > 0 and warning > limit:
+        raise ValueError("warning_threshold cannot be greater than monthly_limit")
+    if limit > 0 and hard_stop > limit:
+        raise ValueError("hard_stop_threshold cannot be greater than monthly_limit")
+    if warning > 0 and hard_stop > 0 and warning > hard_stop:
+        raise ValueError("warning_threshold cannot be greater than hard_stop_threshold")
+
+    current_time = now or utc_now()
+    estimate = int(quota.estimated_tiles_used or 0)
+
+    quota.monthly_limit = limit
+    quota.warning_threshold = warning
+    quota.hard_stop_threshold = hard_stop
+
+    if warning <= 0 or estimate < warning:
+        quota.warning_triggered_at = None
+    if hard_stop <= 0 or estimate < hard_stop:
+        quota.hard_stop_triggered_at = None
+        quota.hard_stop_active = False
+
+    update_quota_threshold_flags(quota, now=current_time)
+    quota.updated_at = current_time
+
+
+def set_monthly_tile_estimate(
+    quota: MapTileMonthlyQuota,
+    estimated_tiles_used: int | str,
+    now: datetime | None = None,
+) -> None:
+    """
+    Manually correct the app-estimated monthly Esri tile usage.
+
+    Input Args:
+      quota: MapTileMonthlyQuota row to update.
+      estimated_tiles_used: corrected tile estimate from the Esri platform/admin.
+      now: optional current UTC datetime for deterministic tests.
+
+    Output:
+      None. The caller is responsible for committing the session.
+
+    Notes:
+      If the corrected estimate drops below warning/hard-stop thresholds, the
+      matching automatic flags are cleared because the previous estimate was
+      considered inaccurate. Manual global hard-stop controls can still be
+      reapplied from the admin page.
+    """
+    try:
+        estimate = int(estimated_tiles_used)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("estimated_tiles_used must be a non-negative integer") from exc
+
+    if estimate < 0:
+        raise ValueError("estimated_tiles_used must be a non-negative integer")
+
+    current_time = now or utc_now()
+    warning_threshold = int(quota.warning_threshold or 0)
+    hard_stop_threshold = int(quota.hard_stop_threshold or 0)
+
+    quota.estimated_tiles_used = estimate
+    if warning_threshold <= 0 or estimate < warning_threshold:
+        quota.warning_triggered_at = None
+    if hard_stop_threshold <= 0 or estimate < hard_stop_threshold:
+        quota.hard_stop_triggered_at = None
+        quota.hard_stop_active = False
+
+    update_quota_threshold_flags(quota, now=current_time)
     quota.updated_at = current_time
 
 
