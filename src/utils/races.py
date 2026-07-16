@@ -1,10 +1,18 @@
 """
-Pure race form, category, and manual-time parsing helpers.
+Pure race form, route/category-name, and manual-time parsing helpers.
 
 Functions
 ---------
 normalize_race_form
     Normalize race form fields and convert the local start time to epoch seconds.
+normalize_route_name
+    Trim a submitted descriptive route name.
+normalize_category_name
+    Trim a submitted race category name.
+validate_route_name
+    Validate a normalized descriptive route name.
+validate_category_name
+    Validate a normalized race category name.
 select_category
     Select a requested category or fall back to the first available category.
 parse_manual_time_epoch
@@ -20,6 +28,68 @@ from src.utils.riders import DEFAULT_RIDER_CATEGORIES
 from src.utils.time import datetime_to_epoch, iso_to_epoch
 
 DEFAULT_RACE_CATEGORIES = DEFAULT_RIDER_CATEGORIES
+MAX_ROUTE_NAME_LENGTH = 128
+MAX_CATEGORY_NAME_LENGTH = 64
+
+
+def normalize_route_name(value) -> str:
+    """
+    Normalize a submitted descriptive route name.
+
+    Input Args:
+      value: raw route-name value.
+
+    Output:
+      Whitespace-trimmed route name.
+    """
+    return (value or "").strip()
+
+
+def normalize_category_name(value) -> str:
+    """
+    Normalize a submitted race category name.
+
+    Input Args:
+      value: raw category-name value.
+
+    Output:
+      Whitespace-trimmed category name.
+    """
+    return (value or "").strip()
+
+
+def validate_route_name(value: str) -> str | None:
+    """
+    Validate a normalized descriptive route name.
+
+    Input Args:
+      value: normalized route name.
+
+    Output:
+      User-facing error string, or None when valid.
+    """
+    if not value:
+        return "Route name is required."
+    if len(value) > MAX_ROUTE_NAME_LENGTH:
+        return f"Route name must be {MAX_ROUTE_NAME_LENGTH} characters or fewer."
+    return None
+
+
+def validate_category_name(value: str) -> str | None:
+    """
+    Validate a normalized race category name.
+
+    Input Args:
+      value: normalized category name.
+
+    Output:
+      User-facing error string, or None when valid.
+    """
+    if not value:
+        return "Category name is required."
+    if len(value) > MAX_CATEGORY_NAME_LENGTH:
+        return f"Category name must be {MAX_CATEGORY_NAME_LENGTH} characters or fewer."
+    return None
 
 
 def normalize_race_form(values) -> dict:

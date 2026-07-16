@@ -38,9 +38,12 @@ from src.services.race_routes import (
     RaceRouteNotFoundError,
     RaceRouteValidationError,
     clear_route_gpx,
-    find_or_create_route_for_category,
+    create_race_category,
+    create_race_category_with_route,
+    create_race_route,
     get_route_geojson,
     list_race_categories,
+    list_race_routes,
     store_route_gpx,
 )
 from src.services.race_timing import (
@@ -66,6 +69,8 @@ from src.utils.races import (
     select_category,
 )
 from src.web.races import (
+    add_race_category,
+    add_race_route,
     bp_races,
     confirm_finish_time,
     edit_race,
@@ -132,7 +137,12 @@ class RaceDatabaseTestCase(unittest.TestCase):
             device_two = Device(id="pi002", device_info="Backup")
             session.add_all([race, rider_one, rider_two, device_one, device_two])
             session.flush()
-            route = Route(race_id=race.id, gpx=VALID_GPX, geojson='{"history":"route"}')
+            route = Route(
+                race_id=race.id,
+                name="Main Course",
+                gpx=VALID_GPX,
+                geojson='{"history":"route"}',
+            )
             session.add(route)
             session.flush()
             category = Category(
@@ -215,6 +225,14 @@ class RaceLifecycleAndRouteServiceTestCase(RaceDatabaseTestCase):
             created = save_race(session, form)
             session.commit()
             self.assertEqual(created.name, "New Race")
+            category_count = session.query(Category).count()
+            route_count = session.query(Route).count()
+            empty_edit_data = load_race_edit_data(session, created.id, None)
+            self.assertEqual(empty_edit_data["categories"], [])
+            self.assertEqual(empty_edit_data["routes"], [])
+            self.assertIsNone(empty_edit_data["selected_category"])
+            self.assertEqual(session.query(Category).count(), category_count)
+            self.assertEqual(session.query(Route).count(), route_count)
             with self.assertRaises(RaceValidationError):
                 save_race(session, normalize_race_form({"name": ""}))
             with self.assertRaises(RaceNotFoundError):
@@ -239,6 +257,8 @@ class RaceLifecycleAndRouteServiceTestCase(RaceDatabaseTestCase):
                 "Professional",
             )
             self.assertEqual(edit_data["route"].race_id, self.race_id)
+            self.assertEqual(edit_data["route"].name, "Main Course")
+            self.assertEqual([route.name for route in edit_data["routes"]], ["Main Course"])
             self.assertEqual([r.name for r in edit_data["riders"]], ["Bob Rider"])
             self.assertEqual(edit_data["last_device_by_rider"][edit_data["race_riders"][0].rider_id], "pi001")
         finally:
@@ -248,22 +268,63 @@ class RaceLifecycleAndRouteServiceTestCase(RaceDatabaseTestCase):
         """Create category routes, validate GPX, return GeoJSON, and clear it."""
         session = self.session_factory()
         try:
-            route, category = find_or_create_route_for_category(
+            route = create_race_route(
                 session,
                 self.race_id,
+                "Open Course",
+            )
+            category = create_race_category(
+                session,
+                self.race_id,
+                route.id,
                 "Open",
             )
             self.assertEqual(category.name, "Open")
+            _, shared_category = create_race_category_with_route(
+                session,
+                self.race_id,
+                "Junior",
+                route_id=route.id,
+            )
+            self.assertEqual(shared_category.route_id, category.route_id)
+            self.assertEqual(
+                [race_route.name for race_route in list_race_routes(session, self.race_id)],
+                ["Main Course", "Open Course"],
+            )
             store_route_gpx(
                 session,
                 self.race_id,
                 "Open",
                 VALID_GPX,
-                DEFAULT_RACE_CATEGORIES,
             )
             session.commit()
             self.assertIn("FeatureCollection", get_route_geojson(session, self.race_id, "Open"))
-            self.assertEqual(list_race_categories(session, self.race_id), ["Open", "Professional"])
+            self.assertEqual(
+                get_route_geojson(session, self.race_id, "Junior"),
+                get_route_geojson(session, self.race_id, "Open"),
+            )
+            self.assertEqual(
+                list_race_categories(session, self.race_id),
+                ["Junior", "Open", "Professional"],
+            )
+
+            with self.assertRaises(RaceRouteValidationError):
+                create_race_route(session, self.race_id, "open course")
+            with self.assertRaises(RaceRouteValidationError):
+                create_race_category(
+                    session,
+                    self.race_id,
+                    route.id,
+                    "OPEN",
+                )
+            new_route, new_category = create_race_category_with_route(
+                session,
+                self.race_id,
+                "Masters",
+                new_route_name="Masters Course",
+            )
+            self.assertEqual(new_route.name, "Masters Course")
+            self.assertEqual(new_category.route_id, new_route.id)
 
             with self.assertRaises(RaceRouteValidationError):
                 store_route_gpx(
@@ -271,13 +332,13 @@ class RaceLifecycleAndRouteServiceTestCase(RaceDatabaseTestCase):
                     self.race_id,
                     "Unsupported",
                     VALID_GPX,
-                    DEFAULT_RACE_CATEGORIES,
                 )
             clear_route_gpx(session, self.race_id, "Open")
             session.commit()
             self.assertIsNone(route.geojson)
+            self.assertIsNone(get_route_geojson(session, self.race_id, "Junior"))
             with self.assertRaises(RaceRouteNotFoundError):
-                clear_route_gpx(session, self.race_id, "Junior")
+                clear_route_gpx(session, self.race_id, "Elite")
         finally:
             session.close()
 
@@ -345,7 +406,7 @@ class RaceEntryTimingTrackServiceTestCase(RaceDatabaseTestCase):
             session.commit()
             self.assertEqual(shared.race_id, self.race_id)
 
-            second_route = Route(race_id=self.race_id)
+            second_route = Route(race_id=self.race_id, name="Second Course")
             session.add(second_route)
             session.flush()
             session.add(
@@ -502,6 +563,8 @@ class RaceControllerTestCase(RaceDatabaseTestCase):
             "races.new_race": new_race,
             "races.save_race": save_race_route,
             "races.edit_race": edit_race,
+            "races.add_race_route": add_race_route,
+            "races.add_race_category": add_race_category,
             "races.manual_times": manual_times,
             "races.confirm_finish_time": confirm_finish_time,
         }.items():
@@ -537,7 +600,43 @@ class RaceControllerTestCase(RaceDatabaseTestCase):
             data={"name": "Controller Race", "active": "on"},
         )
         self.assertEqual(create_response.status_code, 302)
-        self.assertIn(b"/edit?category=Professional", create_response.data)
+        self.assertRegex(
+            create_response.headers["Location"],
+            r"/races/\d+/edit$",
+        )
+
+        created_race_id = int(create_response.headers["Location"].split("/")[2])
+        route_response = self.client.post(
+            f"/races/{created_race_id}/routes/add",
+            data={"route_name": "Main Course"},
+        )
+        self.assertEqual(route_response.status_code, 302)
+        session = self.session_factory()
+        try:
+            created_route = session.query(Route).filter_by(
+                race_id=created_race_id,
+                name="Main Course",
+            ).one()
+            created_route_id = created_route.id
+        finally:
+            session.close()
+        category_response = self.client.post(
+            f"/races/{created_race_id}/categories/add",
+            data={
+                "category_name": "Junior Women",
+                "route_choice": str(created_route_id),
+            },
+        )
+        self.assertEqual(category_response.status_code, 302)
+        self.assertIn("category=Junior+Women", category_response.headers["Location"])
+        shared_response = self.client.post(
+            f"/races/{created_race_id}/categories/add",
+            data={
+                "category_name": "Junior Men",
+                "route_choice": str(created_route_id),
+            },
+        )
+        self.assertEqual(shared_response.status_code, 302)
 
         self.assertEqual(self.client.get(f"/races/{self.race_id}/edit").status_code, 200)
         geojson_response = self.client.get(

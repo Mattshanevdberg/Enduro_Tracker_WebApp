@@ -586,7 +586,11 @@ class Race(Base):
 
 class Route(Base):
     """
-    Course geometry per race.
+    Named, reusable course geometry owned by one race.
+
+    Multiple categories can share a Route. Route names are trimmed/non-empty
+    and unique without regard to case within their owning Race so organisers
+    can distinguish courses such as "Main Course" and "Junior Course".
     """
 
     # A foreign key is a column (or set of columns) in one table that references the primary key of another table. It tells the database, “every value in this column must match an existing id in that other table.” The database enforces that rule for you:
@@ -597,6 +601,7 @@ class Route(Base):
 
     id = Column(Integer, primary_key=True)
     race_id = Column(Integer, ForeignKey("races.id"), nullable=False, index=True)
+    name = Column(String(128), nullable=False)
     geojson = Column(Text, nullable=True)
     gpx = Column(Text, nullable=True)
 
@@ -607,6 +612,16 @@ class Route(Base):
     # while pointing at a route owned by another race.
     __table_args__ = (
         UniqueConstraint("id", "race_id", name="ux_route_id_race_id"),
+        CheckConstraint(
+            "name = trim(name) AND length(name) > 0",
+            name="ck_route_name_trimmed_nonempty",
+        ),
+        Index(
+            "ux_route_race_name_ci",
+            "race_id",
+            func.lower(name),
+            unique=True,
+        ),
     )
 
     race = relationship("Race", back_populates="routes")

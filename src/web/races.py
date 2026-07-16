@@ -15,6 +15,8 @@ POST /races/<race_id>/race-rider/<race_rider_id>/manual-times
 POST /races/<race_id>/race-rider/<race_rider_id>/confirm-finish
 POST /races/save
 GET  /races/<race_id>/edit
+POST /races/<race_id>/routes/add
+POST /races/<race_id>/categories/add
 POST /races/<race_id>/route/upload
 POST /races/<race_id>/route/remove
 GET  /races/<race_id>/route/geojson
@@ -55,7 +57,9 @@ from src.services.race_routes import (
     RaceRouteNotFoundError,
     RaceRouteValidationError,
     clear_route_gpx,
-    find_or_create_route_for_category,
+    create_race_category_with_route,
+    create_race_route,
+    get_category_for_race,
     get_route_geojson,
     store_route_gpx,
 )
@@ -77,13 +81,11 @@ from src.services.races import (
 )
 from src.utils.gpx import build_geojson_for_device
 from src.utils.races import (
-    DEFAULT_RACE_CATEGORIES,
     normalize_race_form,
     parse_manual_time_epoch,
 )
 
 bp_races = Blueprint("races", __name__, url_prefix="/races")
-ALLOWED_CATEGORIES = list(DEFAULT_RACE_CATEGORIES)
 
 
 def _post_race_map_bootstrap_config(race_id: int) -> dict:
@@ -124,11 +126,14 @@ def new_race():
     return render_template(
         "race_form.html",
         race=None,
-        categories=ALLOWED_CATEGORIES,
-        selected_category=ALLOWED_CATEGORIES[0],
+        routes=[],
+        categories=[],
+        selected_category=None,
+        route=None,
         riders=[],
         devices=[],
         race_riders=[],
+        last_device_by_rider={},
         message=None,
         success=None,
     )
@@ -430,13 +435,7 @@ def save_race():
         except RaceNotFoundError:
             return Response("Race not found.", status=404)
         session.commit()
-        return redirect(
-            url_for(
-                "races.edit_race",
-                race_id=race.id,
-                category=ALLOWED_CATEGORIES[0],
-            )
-        )
+        return redirect(url_for("races.edit_race", race_id=race.id))
     except SQLAlchemyError as error:
         session.rollback()
         return Response(f"DB error: {error}", status=500)
@@ -463,18 +462,97 @@ def edit_race(race_id: int):
                 session,
                 race_id,
                 request.args.get("category"),
-                ALLOWED_CATEGORIES,
             )
         except RaceNotFoundError:
             return Response("Race not found.", status=404)
-        # Persist a newly staged Route/Category pair for the selected tab.
-        session.commit()
         return render_template(
             "race_form.html",
             **page_data,
             message=None,
             success=None,
         )
+    finally:
+        session.close()
+
+
+@bp_races.route("/<int:race_id>/routes/add", methods=["POST"])
+@admin_required
+def add_race_route(race_id: int):
+    """
+    Create one named route independently of category creation.
+
+    Input Args:
+      race_id: Race primary key.
+
+    Output:
+      Redirect to the race edit page or mapped 400/404/500 response.
+    """
+    session = SessionLocal()
+    try:
+        try:
+            create_race_route(
+                session,
+                race_id,
+                request.form.get("route_name") or "",
+            )
+        except RaceRouteValidationError as error:
+            return Response(str(error), status=400)
+        except RaceRouteNotFoundError:
+            return Response("Race not found.", status=404)
+        session.commit()
+        return redirect(url_for("races.edit_race", race_id=race_id))
+    except SQLAlchemyError as error:
+        session.rollback()
+        return Response(f"DB error: {error}", status=500)
+    finally:
+        session.close()
+
+
+@bp_races.route("/<int:race_id>/categories/add", methods=["POST"])
+@admin_required
+def add_race_category(race_id: int):
+    """
+    Create a category on an existing route or a newly named route.
+
+    Input Args:
+      race_id: Race primary key.
+
+    Output:
+      Redirect to the new category tab or mapped 400/404/500 response.
+    """
+    route_choice = (request.form.get("route_choice") or "").strip()
+    route_id = None
+    if route_choice and route_choice != "new":
+        try:
+            route_id = int(route_choice)
+        except ValueError:
+            return Response("Invalid route selection.", status=400)
+
+    session = SessionLocal()
+    try:
+        try:
+            _, category = create_race_category_with_route(
+                session,
+                race_id,
+                request.form.get("category_name") or "",
+                route_id=route_id,
+                new_route_name=request.form.get("new_route_name"),
+            )
+        except RaceRouteValidationError as error:
+            return Response(str(error), status=400)
+        except RaceRouteNotFoundError:
+            return Response("Race not found.", status=404)
+        session.commit()
+        return redirect(
+            url_for(
+                "races.edit_race",
+                race_id=race_id,
+                category=category.name,
+            )
+        )
+    except SQLAlchemyError as error:
+        session.rollback()
+        return Response(f"DB error: {error}", status=500)
     finally:
         session.close()
 
@@ -491,7 +569,7 @@ def upload_gpx(race_id: int):
     Output:
       Redirect to the race edit tab or mapped 400/500 response.
     """
-    category_name = request.form.get("category") or ALLOWED_CATEGORIES[0]
+    category_name = (request.form.get("category") or "").strip()
     uploaded_file = request.files.get("gpx_file")
     if not uploaded_file or uploaded_file.filename == "":
         return Response("Please choose a GPX file.", status=400)
@@ -505,7 +583,6 @@ def upload_gpx(race_id: int):
                 race_id,
                 category_name,
                 gpx_text,
-                ALLOWED_CATEGORIES,
             )
         except RaceRouteValidationError as error:
             return Response(str(error), status=400)
@@ -536,7 +613,7 @@ def remove_gpx(race_id: int):
     Output:
       Redirect to the edit tab or mapped 404/500 response.
     """
-    category_name = request.form.get("category") or ALLOWED_CATEGORIES[0]
+    category_name = (request.form.get("category") or "").strip()
     session = SessionLocal()
     try:
         try:
@@ -569,7 +646,7 @@ def route_geojson(race_id: int):
     Output:
       Stored JSON response or an empty FeatureCollection.
     """
-    category_name = request.args.get("category") or ALLOWED_CATEGORIES[0]
+    category_name = (request.args.get("category") or "").strip()
     session = SessionLocal()
     try:
         geojson = get_route_geojson(session, race_id, category_name)
@@ -592,7 +669,7 @@ def add_race_rider(race_id: int):
     Output:
       Redirect to the edit tab or mapped 400/500 response.
     """
-    category_name = request.form.get("category") or ALLOWED_CATEGORIES[0]
+    category_name = (request.form.get("category") or "").strip()
     try:
         rider_id = int(request.form.get("rider_id"))
     except (TypeError, ValueError):
@@ -602,11 +679,9 @@ def add_race_rider(race_id: int):
     session = SessionLocal()
     try:
         try:
-            _, category = find_or_create_route_for_category(
-                session,
-                race_id,
-                category_name,
-            )
+            category = get_category_for_race(session, race_id, category_name)
+            if category is None:
+                return Response("Invalid category.", status=400)
             create_race_rider(
                 session,
                 race_id,
@@ -645,7 +720,7 @@ def edit_race_rider(race_id: int, race_rider_id: int):
     Output:
       Redirect to the edit tab or mapped 404/500 response.
     """
-    category_name = request.form.get("category") or ALLOWED_CATEGORIES[0]
+    category_name = (request.form.get("category") or "").strip()
     device_id = (request.form.get("device_id") or "").strip()
     active = request.form.get("active") == "on"
     recording = request.form.get("recording") == "on"
@@ -688,7 +763,7 @@ def remove_race_rider(race_id: int, race_rider_id: int):
     Output:
       Redirect to the edit tab or mapped 404/500 response.
     """
-    category_name = request.form.get("category") or ALLOWED_CATEGORIES[0]
+    category_name = (request.form.get("category") or "").strip()
     session = SessionLocal()
     try:
         race_rider = get_scoped_race_rider(session, race_id, race_rider_id)

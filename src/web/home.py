@@ -99,6 +99,8 @@ def robots_txt():
         "Disallow: /races/*/edit\n"
         "Disallow: /races/*/enter\n"
         "Disallow: /races/*/post-admin\n"
+        "Disallow: /races/*/routes/\n"
+        "Disallow: /races/*/categories/\n"
         "Disallow: /races/*/route/upload\n"
         "Disallow: /races/*/route/remove\n"
         "Disallow: /races/*/riders/\n"
