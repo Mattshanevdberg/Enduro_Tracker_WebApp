@@ -1,176 +1,114 @@
 """
-Routes to create/edit a race, upload/remove GPX per category, preview the route,
-and manage the RaceRider assignments for a selected category.
+Race lifecycle, route, entry, track, and timing HTTP controllers.
 
-Paths (main ones)
------------------
-GET  /races/new                               -> Admin-only create new race page (empty form)
-GET  /races/<race_id>/post                    -> Post-race view for a selected category
-GET  /races/<race_id>/enter                   -> Rider/admin placeholder race-entry page
-GET  /races/<race_id>/post-admin              -> Admin-only placeholder admin post-race controls page
-GET  /races/<race_id>/results                 -> Placeholder official results page
-POST /races/save                              -> Admin-only save new or existing race
-GET  /races/<race_id>/edit                    -> Admin-only edit page; choose category via ?category=Professional
-POST /races/<race_id>/route/upload            -> Admin-only upload GPX for selected category
-POST /races/<race_id>/route/remove            -> Admin-only remove GPX for selected category
-GET  /races/<race_id>/route/geojson           -> Return GeoJSON for selected category (map uses this)
-GET  /races/<race_id>/device/<device_id>/geojson      -> Build GeoJSON on the fly for a device (dynamic)
-GET  /races/<race_id>/race-rider/<race_rider_id>/track -> Return stored GeoJSON from track_hist for a race rider
-GET  /races/<race_id>/race-rider-timings              -> Return live race_riders timing fields for the post-race table
-POST /races/<race_id>/race-rider/<race_rider_id>/manual-times -> Admin-only manually overwrite start/finish times
-POST /races/<race_id>/race-rider/<race_rider_id>/confirm-finish -> Admin-only confirm RFID finish timing
+Routes
+------
+GET  /races/new
+GET  /races/<race_id>/post
+GET  /races/<race_id>/enter
+GET  /races/<race_id>/post-admin
+GET  /races/<race_id>/results
+GET  /races/<race_id>/race-rider-timings
+GET  /races/<race_id>/device/<device_id>/geojson
+GET  /races/<race_id>/race-rider/<race_rider_id>/track
+POST /races/<race_id>/race-rider/<race_rider_id>/manual-times
+POST /races/<race_id>/race-rider/<race_rider_id>/confirm-finish
+POST /races/save
+GET  /races/<race_id>/edit
+POST /races/<race_id>/route/upload
+POST /races/<race_id>/route/remove
+GET  /races/<race_id>/route/geojson
+POST /races/<race_id>/riders/add
+POST /races/<race_id>/riders/<race_rider_id>/edit
+POST /races/<race_id>/riders/<race_rider_id>/remove
 
-POST /races/<race_id>/riders/add                     -> Admin-only add a RaceRider row for this category
-POST /races/<race_id>/riders/<race_rider_id>/edit    -> Rider/admin update an existing RaceRider row
-POST /races/<race_id>/riders/<race_rider_id>/remove  -> Rider/admin delete an existing RaceRider row
+The module retains Flask request/response glue. Race lifecycle, route, assignment,
+timing, and track logic live in focused service modules; pure parsing lives in
+src.utils.races. Placeholder routes remain web-only until their features exist.
 """
 
-from datetime import datetime, timezone
-from typing import Optional
-
-from flask import Blueprint, request, render_template, redirect, url_for, Response, jsonify
+from flask import (
+    Blueprint,
+    Response,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    url_for,
+)
 from flask_login import current_user
-from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
-from src.auth.decorators import admin_required, require_rider_resource_access, rider_required
-from src.db.models import (
-    SessionLocal,
-    Race, Route, Category, Rider, Device, RaceRider, TrackCache, TrackHist
+from src.auth.decorators import (
+    admin_required,
+    require_rider_resource_access,
+    rider_required,
 )
-from src.db.models import config as app_config  # already loaded from config.yaml
-from src.utils.gpx import (
-    gpx_to_geojson,
-    build_geojson_for_device,
-    _parse_text_fixes,
-    _build_gpx_string,
-    _build_geojson_string,
-    filter_fixes_by_window,
+from src.db.models import SessionLocal
+from src.services.race_riders import (
+    create_race_rider,
+    delete_race_rider,
+    get_scoped_race_rider,
+    update_race_rider,
 )
-from src.utils.time import datetime_to_epoch, epoch_to_datetime, iso_to_epoch
+from src.services.race_routes import (
+    RaceRouteNotFoundError,
+    RaceRouteValidationError,
+    clear_route_gpx,
+    find_or_create_route_for_category,
+    get_route_geojson,
+    store_route_gpx,
+)
+from src.services.race_timing import (
+    RaceRiderFinishMissingError,
+    RaceRiderTimingNotFoundError,
+    confirm_race_rider_finish,
+    list_race_rider_timings,
+    race_rider_timing_payload,
+    update_manual_race_rider_times,
+)
+from src.services.race_tracks import get_race_rider_track_geojson
+from src.services.races import (
+    RaceNotFoundError,
+    RaceValidationError,
+    load_post_race_data,
+    load_race_edit_data,
+    save_race as save_race_record,
+)
+from src.utils.gpx import build_geojson_for_device
+from src.utils.races import (
+    DEFAULT_RACE_CATEGORIES,
+    normalize_race_form,
+    parse_manual_time_epoch,
+)
 
 bp_races = Blueprint("races", __name__, url_prefix="/races")
-
-# Helper: read allowed categories from config.yaml
-ALLOWED_CATEGORIES = app_config.get("categories", ["Professional", "Open", "Junior"])
+ALLOWED_CATEGORIES = list(DEFAULT_RACE_CATEGORIES)
 
 
 def _post_race_map_bootstrap_config(race_id: int) -> dict:
     """
-    Build browser-safe map bootstrap configuration for the post-race page.
+    Build browser-safe map endpoint/page configuration.
 
     Input Args:
       race_id: race id for the page being rendered.
 
     Output:
-      Dictionary containing only safe frontend wiring values.
+      Dictionary containing safe frontend endpoint and page wiring values.
 
     Notes:
-      This deliberately does not include the Esri API key, provider, or style.
-      The browser must call /api/map/config-status to receive Esri config, and
-      that route only returns the browser-facing key when quota checks allow it.
+      This remains web-layer glue because it uses request.path and url_for. It
+      deliberately excludes the provider key and quota configuration.
     """
     return {
         "configStatusUrl": url_for("map_tile_quota.map_config_status"),
         "tileUsageUrl": url_for("map_tile_quota.map_tile_usage"),
         "raceId": race_id,
         "pagePath": request.path,
-        "satelliteUnavailableMessage": "Satellite view is currently unavailable for this account, please try again later.",
-    }
-
-
-def _find_or_create_route_for_category(session, race_id: int, category_name: str) -> tuple[Route, Category]:
-    """
-    Get or create the (Route, Category) pair for (race_id, category_name).
-
-    We keep one Route per category in a race, and one Category row that records the name.
-    """
-    # First, find any existing Route rows for the race that have a Category with this name
-    route = (
-        session.query(Route)
-        .join(Category, Category.route_id == Route.id)
-        .filter(Route.race_id == race_id, Category.name == category_name)
-        .one_or_none()
-    )
-    if route:
-        cat = session.query(Category).filter(Category.route_id == route.id, Category.name == category_name).one()
-        return route, cat
-
-    # Else, create a new empty Route and attached Category
-    route = Route(race_id=race_id, geojson=None, gpx=None)
-    session.add(route)
-    session.flush()  # get route.id
-    cat = Category(route_id=route.id, name=category_name)
-    session.add(cat)
-    session.flush()
-    return route, cat
-
-
-def _read_track_hist_geojson(session, race_id: int, race_rider_id: int) -> Optional[str]:
-    """
-    Return the latest track_hist GeoJSON for a race_rider when it belongs to race_id.
-
-    We keep this as a helper so route handlers can choose query order (history-first
-    or cache-first) without duplicating join/filter logic.
-    """
-    geojson_row = (
-        session.query(TrackHist.geojson)
-        .join(RaceRider, TrackHist.race_rider_id == RaceRider.id)
-        .join(Category, Category.id == RaceRider.category_id)
-        .join(Route, Route.id == Category.route_id)
-        .filter(Route.race_id == race_id, RaceRider.id == race_rider_id)
-        .order_by(TrackHist.id.desc())  # latest snapshot for this race_rider_id
-        .first()
-    )
-    if not geojson_row or not geojson_row[0]:
-        return None
-    return geojson_row[0]
-
-
-def _read_track_cache_geojson(session, race_id: int, race_rider_id: int) -> Optional[str]:
-    """
-    Return track_cache GeoJSON for a race_rider when it belongs to race_id.
-
-    The cache table has a single row per race_rider_id (PK), so no ordering is needed.
-    """
-    cache_row = (
-        session.query(TrackCache.geojson)
-        .join(RaceRider, TrackCache.race_rider_id == RaceRider.id)
-        .join(Category, Category.id == RaceRider.category_id)
-        .join(Route, Route.id == Category.route_id)
-        .filter(Route.race_id == race_id, RaceRider.id == race_rider_id)
-        .first()
-    )
-    if not cache_row or not cache_row[0]:
-        return None
-    return cache_row[0]
-
-
-def _race_rider_timing_payload(race_rider: RaceRider) -> dict:
-    """
-    Build the JSON/template timing values for one RaceRider.
-
-    Input Args:
-      race_rider: RaceRider row with RFID epoch timing fields.
-
-    Output:
-      Dict containing display text, datetime-local input values, RFID warning flag,
-      and RFID finish confirmation flag.
-    """
-    start_dt = epoch_to_datetime(race_rider.start_time_rfid_epoch).replace(tzinfo=None) if race_rider.start_time_rfid_epoch is not None else None
-    finish_dt = epoch_to_datetime(race_rider.finish_time_rfid_epoch).replace(tzinfo=None) if race_rider.finish_time_rfid_epoch is not None else None
-
-    finish_confirmed = bool(race_rider.finish_time_rfid_confirmed)
-    show_multiple_rfid_warning = bool(race_rider.multiple_rfid_flag) and not finish_confirmed
-
-    return {
-        "race_rider_id": race_rider.id,
-        "start_time_rfid": start_dt.strftime("%Y-%m-%d %H:%M:%S") if start_dt else None,
-        "finish_time_rfid": finish_dt.strftime("%Y-%m-%d %H:%M:%S") if finish_dt else None,
-        "start_time_input": start_dt.strftime("%Y-%m-%dT%H:%M:%S") if start_dt else "",
-        "finish_time_input": finish_dt.strftime("%Y-%m-%dT%H:%M:%S") if finish_dt else "",
-        "multiple_rfid_flag": show_multiple_rfid_warning,
-        "finish_time_rfid_confirmed": finish_confirmed,
+        "satelliteUnavailableMessage": (
+            "Satellite view is currently unavailable for this account, "
+            "please try again later."
+        ),
     }
 
 
@@ -178,126 +116,48 @@ def _race_rider_timing_payload(race_rider: RaceRider) -> dict:
 @admin_required
 def new_race():
     """
-    Render a blank "New Race" page.
-    The page lets you fill race fields and also pick a category context.
+    Render a blank admin race form.
+
+    Output:
+      Rendered race_form.html response with empty route/assignment state.
     """
-    session = SessionLocal()
-    try:
-        return render_template(
-            "race_form.html",
-            race=None,
-            categories=ALLOWED_CATEGORIES,
-            selected_category=ALLOWED_CATEGORIES[0],
-            riders=[],
-            devices=[],
-            race_riders=[],
-            message=None,
-            success=None,
-        )
-    finally:
-        session.close()
+    return render_template(
+        "race_form.html",
+        race=None,
+        categories=ALLOWED_CATEGORIES,
+        selected_category=ALLOWED_CATEGORIES[0],
+        riders=[],
+        devices=[],
+        race_riders=[],
+        message=None,
+        success=None,
+    )
+
 
 @bp_races.route("/<int:race_id>/post", methods=["GET"])
 def post_race(race_id: int):
     """
-    Post-race view: render race info plus an optional route preview for a chosen category.
+    Render post-race route, rider-track, and timing data.
 
-    GET parameters
-    --------------
-    category : str (optional)
-        The category whose route should be shown. Defaults to the first available category
-        for this race if none is provided or if the provided one is invalid.
+    Input Args:
+      race_id: Race primary key from the route.
+
+    Output:
+      Rendered post_race.html response or HTTP 404 when the race is missing.
     """
     session = SessionLocal()
     try:
-        # -- Load the race upfront; fail fast if it does not exist.
-        race = session.query(Race).get(race_id)
-        if not race:
+        try:
+            page_data = load_post_race_data(
+                session,
+                race_id,
+                request.args.get("category"),
+            )
+        except RaceNotFoundError:
             return Response("Race not found.", status=404)
-
-        # Convert epoch to datetime for template display (date/time inputs).
-        if race.starts_at_epoch is not None:
-            race.starts_at = epoch_to_datetime(race.starts_at_epoch)
-        else:
-            race.starts_at = None
-
-        # Convert epoch to datetime for display without mutating stored values.
-        if race.starts_at_epoch is not None:
-            race.starts_at = epoch_to_datetime(race.starts_at_epoch)
-        else:
-            race.starts_at = None
-
-        # -- Gather category names actually attached to this race (via Category -> Route).
-        categories = [
-            row[0]
-            for row in (
-                session.query(Category.name)
-                .join(Route, Category.route_id == Route.id)
-                .filter(Route.race_id == race_id)
-                .order_by(Category.name.asc())
-                .all()
-            )
-        ]
-
-        # -- Pick the selected category: respect the query param if valid; otherwise fall back.
-        selected_category = request.args.get("category") or None
-        if selected_category not in categories:
-            selected_category = categories[0] if categories else None
-
-        # -- Fetch GeoJSON for the selected category (if any exists).
-        geojson = None
-        category_row = None
-        if selected_category:
-            category_row = (
-                session.query(Category)
-                .join(Route, Category.route_id == Route.id)
-                .filter(Route.race_id == race_id, Category.name == selected_category)
-                .one_or_none()
-            )
-            if category_row:
-                geojson_row = (
-                    session.query(Route.geojson)
-                    .filter(Route.id == category_row.route_id)
-                    .one_or_none()
-                )
-                geojson = geojson_row[0] if geojson_row else None
-
-        # -- Riders linked to this race+category (name/team/device) ordered for quick scanning.
-        riders_for_category = []
-        if category_row:
-            rider_rows = (
-                # Pull everything needed in one query to avoid per-row lookups.
-                session.query(
-                    Rider.name,
-                    Rider.team,
-                    RaceRider,
-                )
-                .join(RaceRider, RaceRider.rider_id == Rider.id)
-                .filter(RaceRider.category_id == category_row.id)
-                .order_by(Rider.name.asc())
-                .all()
-            )
-            riders_for_category = []
-            for (n, t, rr) in rider_rows:
-                timing_payload = _race_rider_timing_payload(rr)
-                riders_for_category.append(
-                    {
-                        "name": n,
-                        "team": t,
-                        "device_id": rr.device_id,
-                        "race_rider_id": rr.id,
-                        **timing_payload,
-                    }
-                )
-
         return render_template(
             "post_race.html",
-            race=race,
-            categories=categories,
-            selected_category=selected_category,
-            geojson=geojson,
-            riders=riders_for_category,
-            has_multiple_rfid_flag=any(r.get("multiple_rfid_flag") for r in riders_for_category),
+            **page_data,
             public_map_config=_post_race_map_bootstrap_config(race_id),
         )
     finally:
@@ -308,17 +168,13 @@ def post_race(race_id: int):
 @rider_required
 def enter_race(race_id: int):
     """
-    Render the future race-entry placeholder.
+    Render the future rider/admin race-entry placeholder.
 
     Input Args:
-      race_id: race id from the route.
+      race_id: Race primary key from the route.
 
     Output:
-      Placeholder page for rider/admin race entry.
-
-    Notes:
-      Later this route will allow riders to enter a race, see approval status,
-      choose a race category, and rely on automatic device assignment.
+      Rendered placeholder.html response.
     """
     return render_template(
         "placeholder.html",
@@ -335,17 +191,13 @@ def enter_race(race_id: int):
 @admin_required
 def post_race_admin(race_id: int):
     """
-    Render the future admin post-race placeholder.
+    Render the future admin post-race controls placeholder.
 
     Input Args:
-      race_id: race id from the route.
+      race_id: Race primary key from the route.
 
     Output:
-      Placeholder page for admin race timing controls.
-
-    Notes:
-      Later this route should receive the manual timing controls that currently
-      live on the public post-race page.
+      Rendered placeholder.html response.
     """
     return render_template(
         "placeholder.html",
@@ -361,17 +213,13 @@ def post_race_admin(race_id: int):
 @bp_races.route("/<int:race_id>/results", methods=["GET"])
 def race_results(race_id: int):
     """
-    Render the future official results placeholder.
+    Render the future public official-results placeholder.
 
     Input Args:
-      race_id: race id from the route.
+      race_id: Race primary key from the route.
 
     Output:
-      Placeholder page for official race results.
-
-    Notes:
-      Later this route will show released official results and allow approved
-      GPX/result downloads.
+      Rendered placeholder.html response.
     """
     return render_template(
         "placeholder.html",
@@ -387,36 +235,27 @@ def race_results(race_id: int):
 @bp_races.route("/<int:race_id>/race-rider-timings", methods=["GET"])
 def race_rider_timings(race_id: int):
     """
-    Return live RaceRider timing values for the post-race riders table.
+    Return live race-rider timing payloads for post-race polling.
 
-    GET parameters
-    --------------
-    category : str (optional)
-        Category name to scope the returned riders. This should match the selected
-        post-race category tab.
+    Input Args:
+      race_id: Race primary key from the route.
+
+    Output:
+      JSON response scoped to the optional category query parameter.
     """
     selected_category = (request.args.get("category") or "").strip()
-
     session = SessionLocal()
     try:
-        query = (
-            session.query(RaceRider)
-            .join(Category, RaceRider.category_id == Category.id)
-            .join(Route, Category.route_id == Route.id)
-            .filter(Route.race_id == race_id)
-            .order_by(RaceRider.id.asc())
-        )
-        if selected_category:
-            query = query.filter(Category.name == selected_category)
-
-        rows = query.all()
-        return jsonify({
-            "race_id": race_id,
-            "category": selected_category,
-            "riders": [_race_rider_timing_payload(row) for row in rows],
-        }), 200
-    except SQLAlchemyError as e:
-        return jsonify({"error": f"DB error: {e}"}), 500
+        riders = list_race_rider_timings(session, race_id, selected_category)
+        return jsonify(
+            {
+                "race_id": race_id,
+                "category": selected_category,
+                "riders": riders,
+            }
+        ), 200
+    except SQLAlchemyError as error:
+        return jsonify({"error": f"DB error: {error}"}), 500
     finally:
         session.close()
 
@@ -424,12 +263,22 @@ def race_rider_timings(race_id: int):
 @bp_races.route("/<int:race_id>/device/<device_id>/geojson", methods=["GET"])
 def device_geojson(race_id: int, device_id: str):
     """
-    Generate (without saving) GeoJSON for a device's track and return it as JSON.
-    Useful for quick previews in the post-race page.
+    Build and return unsaved GeoJSON for a device track.
+
+    Input Args:
+      race_id: Race primary key retained in the public URL contract.
+      device_id: Device primary key whose points should be converted.
+
+    Output:
+      JSON response or HTTP 404 when no track can be built.
     """
     session = SessionLocal()
     try:
-        ok, result = build_geojson_for_device(device_id=device_id, session=session, save=False)
+        ok, result = build_geojson_for_device(
+            device_id=device_id,
+            session=session,
+            save=False,
+        )
         if not ok:
             return Response(result, status=404)
         return Response(result, mimetype="application/json")
@@ -437,163 +286,127 @@ def device_geojson(race_id: int, device_id: str):
         session.close()
 
 
-@bp_races.route("/<int:race_id>/race-rider/<int:race_rider_id>/track", methods=["GET"])
+@bp_races.route(
+    "/<int:race_id>/race-rider/<int:race_rider_id>/track",
+    methods=["GET"],
+)
 def race_rider_track(race_id: int, race_rider_id: int):
     """
-    Return stored GeoJSON for a specific race_rider.
+    Return stored history-first GeoJSON for one scoped race entry.
 
-    Default behavior:
-      - Prefer latest `track_hist` snapshot.
-      - Fall back to `track_cache` when history is not available.
+    Input Args:
+      race_id: Race primary key.
+      race_rider_id: RaceRider primary key.
 
-    GET parameters
-    --------------
-    prefer_cache : str (optional)
-        When truthy (`1`, `true`, `yes`, `on`), query `track_cache` first so
-        post-race map polling can use the live cache while still falling back
-        to history if needed.
+    Output:
+      JSON track response or HTTP 404 when neither history nor cache exists.
     """
-    # Changed default to history-first since that's the more common use
-    prefer_cache = False # (request.args.get("prefer_cache") or "").strip().lower() in {"1", "true", "yes", "on"}
-
+    # Preserve the established history-first behavior. The service still accepts
+    # prefer_cache for future live polling callers without duplicating query logic.
+    prefer_cache = False
     session = SessionLocal()
     try:
-        # Live polling calls can explicitly ask for cache-first reads.
-        if prefer_cache:
-            cache_geojson = _read_track_cache_geojson(session, race_id, race_rider_id)
-            if cache_geojson:
-                return Response(cache_geojson, mimetype="application/json")
-
-        hist_geojson = _read_track_hist_geojson(session, race_id, race_rider_id)
-        if hist_geojson:
-            return Response(hist_geojson, mimetype="application/json")
-
-        cache_geojson = _read_track_cache_geojson(session, race_id, race_rider_id)
-        if cache_geojson:
-            return Response(cache_geojson, mimetype="application/json")
-
+        geojson = get_race_rider_track_geojson(
+            session,
+            race_id,
+            race_rider_id,
+            prefer_cache=prefer_cache,
+        )
+        if geojson:
+            return Response(geojson, mimetype="application/json")
         return Response("Track not found for this race rider.", status=404)
     finally:
         session.close()
 
 
-@bp_races.route("/<int:race_id>/race-rider/<int:race_rider_id>/manual-times", methods=["POST"])
+@bp_races.route(
+    "/<int:race_id>/race-rider/<int:race_rider_id>/manual-times",
+    methods=["POST"],
+)
 @admin_required
 def manual_times(race_id: int, race_rider_id: int):
     """
-    Manually overwrite start/finish RFID times for a race rider.
+    Manually replace or clear RFID start/finish times.
 
-    Expects JSON body:
-      {
-        "start_time": "<ISO8601 or empty>",   # optional; empty/None clears
-        "end_time": "<ISO8601 or empty>"      # optional; empty/None clears
-      }
+    Input Args:
+      race_id: Race primary key.
+      race_rider_id: RaceRider primary key.
 
-    Timezone handling:
-      - Inputs must be timezone-naive (e.g., from a datetime-local input).
-      - Naive values are interpreted in the configured local timezone and
-        converted to UTC epoch seconds for storage.
+    Output:
+      JSON success/error response. The service also stages a trimmed TrackHist
+      snapshot when the latest raw tracker text contains fixes in the new window.
     """
     data = request.get_json(silent=True) or {}
     start_raw = (data.get("start_time") or "").strip()
-    end_raw = (data.get("end_time") or "").strip()
-
+    finish_raw = (data.get("end_time") or "").strip()
     try:
-        start_epoch = iso_to_epoch(start_raw, allow_tz=False)
+        start_epoch = parse_manual_time_epoch(start_raw)
     except ValueError:
-        start_epoch = None
-    try:
-        end_epoch = iso_to_epoch(end_raw, allow_tz=False)
-    except ValueError:
-        end_epoch = None
-
-    if start_raw and start_epoch is None:
         return jsonify({"error": "Invalid start_time format"}), 400
-    if end_raw and end_epoch is None:
+    try:
+        finish_epoch = parse_manual_time_epoch(finish_raw)
+    except ValueError:
         return jsonify({"error": "Invalid end_time format"}), 400
 
     session = SessionLocal()
     try:
-        rr = (
-            session.query(RaceRider)
-            .join(Category, RaceRider.category_id == Category.id)
-            .join(Route, Category.route_id == Route.id)
-            .filter(Route.race_id == race_id, RaceRider.id == race_rider_id)
-            .one_or_none()
-        )
-        if not rr:
+        try:
+            update_manual_race_rider_times(
+                session,
+                race_id,
+                race_rider_id,
+                start_epoch,
+                finish_epoch,
+            )
+        except RaceRiderTimingNotFoundError:
             return jsonify({"error": "Race rider not found"}), 404
-
-        # Update stored times (epoch seconds, UTC).
-        rr.start_time_rfid_epoch = start_epoch
-        rr.finish_time_rfid_epoch = end_epoch
-        rr.finish_time_rfid_confirmed = end_epoch is not None
-        if rr.finish_time_rfid_confirmed:
-            rr.multiple_rfid_flag = False
-
-        # Rebuild trimmed track from the latest raw text (if available) and store as a new track_hist entry.
-        latest_track = (
-            session.query(TrackHist)
-            .filter(TrackHist.race_rider_id == rr.id)
-            .order_by(TrackHist.id.desc())
-            .first()
-        )
-
-        if latest_track and latest_track.raw_txt:
-            fixes = _parse_text_fixes(latest_track.raw_txt)
-            trimmed = filter_fixes_by_window(fixes, start_epoch=start_epoch, finish_epoch=end_epoch)
-            if trimmed:
-                gpx_text = _build_gpx_string(trimmed, creator=f"EnduroTracker {rr.device_id}")
-                geojson_text = _build_geojson_string(trimmed)
-                session.add(
-                    TrackHist(
-                        race_rider_id=rr.id,
-                        geojson=geojson_text,
-                        gpx=gpx_text,
-                        raw_txt=latest_track.raw_txt,
-                        updated_at_epoch=datetime_to_epoch(datetime.now(timezone.utc)),
-                    )
-                )
-
         session.commit()
         return jsonify({"ok": True}), 200
-    except SQLAlchemyError as e:
+    except SQLAlchemyError as error:
         session.rollback()
-        return jsonify({"error": f"DB error: {e}"}), 500
+        return jsonify({"error": f"DB error: {error}"}), 500
     finally:
         session.close()
 
 
-@bp_races.route("/<int:race_id>/race-rider/<int:race_rider_id>/confirm-finish", methods=["POST"])
+@bp_races.route(
+    "/<int:race_id>/race-rider/<int:race_rider_id>/confirm-finish",
+    methods=["POST"],
+)
 @admin_required
 def confirm_finish_time(race_id: int, race_rider_id: int):
     """
-    Confirm a race rider's current RFID finish time after organiser review.
+    Confirm a race entry's current RFID finish time.
 
-    This freezes the accepted finish time for RFID processing, clears the multiple
-    RFID warning flag, and lets the post-race page remove the highlight/asterisk.
+    Input Args:
+      race_id: Race primary key.
+      race_rider_id: RaceRider primary key.
+
+    Output:
+      JSON success/timing payload or mapped 400/404/500 error response.
     """
     session = SessionLocal()
     try:
-        rr = (
-            session.query(RaceRider)
-            .join(Category, RaceRider.category_id == Category.id)
-            .join(Route, Category.route_id == Route.id)
-            .filter(Route.race_id == race_id, RaceRider.id == race_rider_id)
-            .one_or_none()
-        )
-        if not rr:
+        try:
+            race_rider = confirm_race_rider_finish(
+                session,
+                race_id,
+                race_rider_id,
+            )
+        except RaceRiderTimingNotFoundError:
             return jsonify({"error": "Race rider not found"}), 404
-        if rr.finish_time_rfid_epoch is None:
+        except RaceRiderFinishMissingError:
             return jsonify({"error": "Cannot confirm a missing finish time"}), 400
-
-        rr.finish_time_rfid_confirmed = True
-        rr.multiple_rfid_flag = False
         session.commit()
-        return jsonify({"ok": True, "timing": _race_rider_timing_payload(rr)}), 200
-    except SQLAlchemyError as e:
+        return jsonify(
+            {
+                "ok": True,
+                "timing": race_rider_timing_payload(race_rider),
+            }
+        ), 200
+    except SQLAlchemyError as error:
         session.rollback()
-        return jsonify({"error": f"DB error: {e}"}), 500
+        return jsonify({"error": f"DB error: {error}"}), 500
     finally:
         session.close()
 
@@ -602,58 +415,31 @@ def confirm_finish_time(race_id: int, race_rider_id: int):
 @admin_required
 def save_race():
     """
-    Create or update a race. Only 'name' is required.
-    - If 'race_id' is present, we update that race.
-    - Otherwise we create a new one.
+    Create or update a race from the admin form.
+
+    Output:
+      Redirect to the race edit page or mapped 400/404/500 response.
     """
+    form = normalize_race_form(request.form)
     session = SessionLocal()
     try:
-        race_id = request.form.get("race_id")
-        name = (request.form.get("name") or "").strip()
-        website = (request.form.get("website") or "").strip() or None
-        start_date = (request.form.get("start_date") or "").strip()
-        start_time = (request.form.get("start_time") or "").strip()
-        description = (request.form.get("description") or "").strip() or None
-        active = True if request.form.get("active") == "on" else False
-
-        if not name:
-            return Response("Race name is required.", status=400)
-
-        # Convert date/time input into epoch seconds (UTC), using local tz for naive input.
-        starts_at_epoch: Optional[int] = None
-        if start_date and start_time:
-            try:
-                dt = datetime.strptime(f"{start_date} {start_time}", "%Y-%m-%d %H:%M")
-                starts_at_epoch = datetime_to_epoch(dt)
-            except Exception:
-                starts_at_epoch = None
-
-        if race_id:
-            race = session.query(Race).get(int(race_id))
-            if not race:
-                return Response("Race not found.", status=404)
-            race.name = name
-            race.website = website
-            race.description = description
-            race.starts_at_epoch = starts_at_epoch
-            race.active = active
-        else:
-            race = Race(
-                name=name,
-                website=website,
-                description=description,
-                starts_at_epoch=starts_at_epoch,
-                active=active,
-            )
-            session.add(race)
-            session.flush()  # obtain race.id
-
+        try:
+            race = save_race_record(session, form)
+        except RaceValidationError as error:
+            return Response(str(error), status=400)
+        except RaceNotFoundError:
+            return Response("Race not found.", status=404)
         session.commit()
-        # After save, go to edit page (so you can upload GPX and manage riders)
-        return redirect(url_for("races.edit_race", race_id=race.id, category=ALLOWED_CATEGORIES[0]))
-    except SQLAlchemyError as e:
+        return redirect(
+            url_for(
+                "races.edit_race",
+                race_id=race.id,
+                category=ALLOWED_CATEGORIES[0],
+            )
+        )
+    except SQLAlchemyError as error:
         session.rollback()
-        return Response(f"DB error: {e}", status=500)
+        return Response(f"DB error: {error}", status=500)
     finally:
         session.close()
 
@@ -662,65 +448,30 @@ def save_race():
 @admin_required
 def edit_race(race_id: int):
     """
-    Edit page for a race. The UI is scoped to a selected category (via ?category=...).
+    Render category-scoped route and entry management for a race.
+
+    Input Args:
+      race_id: Race primary key.
+
+    Output:
+      Rendered race_form.html response or HTTP 404 when the race is missing.
     """
     session = SessionLocal()
     try:
-        race = session.query(Race).get(race_id)
-        if not race:
-            return Response("Race not found.", status=404)
-
-        # Which category tab is selected in the UI?
-        selected_category = request.args.get("category") or ALLOWED_CATEGORIES[0]
-        if selected_category not in ALLOWED_CATEGORIES:
-            selected_category = ALLOWED_CATEGORIES[0]
-
-        # Make sure we have a (Route, Category) record pair for this selection
-        route, cat = _find_or_create_route_for_category(session, race.id, selected_category)
-        session.commit()  # persist any just-created rows
-
-        # Build lists for selectors
-        riders = session.query(Rider).order_by(Rider.name.asc()).all()
-        devices = session.query(Device).order_by(Device.id.asc()).all()
-
-        # Existing entries (riders already added for this category)
-        rrows = (
-            session.query(RaceRider)
-            .filter(RaceRider.category_id == cat.id)
-            .order_by(RaceRider.id.asc())
-            .all()
-        )
-
-        # Map: rider_id -> last device they used (from any past RaceRider row)
-        # We simply take the highest id as "most recent".
-        last_device_by_rider = {}
-        for rid in [r.id for r in riders]:
-            last = (
-                session.query(RaceRider)
-                .filter(RaceRider.rider_id == rid)
-                .order_by(RaceRider.id.desc())
-                .first()
+        try:
+            page_data = load_race_edit_data(
+                session,
+                race_id,
+                request.args.get("category"),
+                ALLOWED_CATEGORIES,
             )
-            last_device_by_rider[rid] = last.device_id if last else None
-
-        # Riders not yet selected for THIS race/category (for the add form dropdown)
-        selected_rider_ids = {row.rider_id for row in rrows}
-        available_riders = [r for r in riders if r.id not in selected_rider_ids]
-
-        # GeoJSON preview for the selected category (may be None)
-        geojson = route.geojson
-
+        except RaceNotFoundError:
+            return Response("Race not found.", status=404)
+        # Persist a newly staged Route/Category pair for the selected tab.
+        session.commit()
         return render_template(
             "race_form.html",
-            race=race,
-            categories=ALLOWED_CATEGORIES,
-            selected_category=selected_category,
-            route=route,
-            geojson=geojson,
-            riders=available_riders,
-            devices=devices,
-            race_riders=rrows,
-            last_device_by_rider=last_device_by_rider,
+            **page_data,
             message=None,
             success=None,
         )
@@ -732,36 +483,43 @@ def edit_race(race_id: int):
 @admin_required
 def upload_gpx(race_id: int):
     """
-    Upload a GPX file for the selected category and store both GPX and GeoJSON on Route.
-    Ensures one route per (race, category). Replaces any previous GPX for that category.
+    Validate and store GPX/GeoJSON for the selected race category.
+
+    Input Args:
+      race_id: Race primary key.
+
+    Output:
+      Redirect to the race edit tab or mapped 400/500 response.
     """
+    category_name = request.form.get("category") or ALLOWED_CATEGORIES[0]
+    uploaded_file = request.files.get("gpx_file")
+    if not uploaded_file or uploaded_file.filename == "":
+        return Response("Please choose a GPX file.", status=400)
+    gpx_text = uploaded_file.read().decode("utf-8", errors="ignore")
+
     session = SessionLocal()
     try:
-        category_name = request.form.get("category") or ALLOWED_CATEGORIES[0]
-        if category_name not in ALLOWED_CATEGORIES:
-            return Response("Invalid category.", status=400)
-
-        file = request.files.get("gpx_file")
-        if not file or file.filename == "":
-            return Response("Please choose a GPX file.", status=400)
-
-        gpx_text = file.read().decode("utf-8", errors="ignore")
-        ok, result = gpx_to_geojson(gpx_text)
-        if not ok:
-            return Response(result, status=400)
-
-        # Find or create route/category for this race + category
-        route, cat = _find_or_create_route_for_category(session, race_id, category_name)
-
-        # Store both
-        route.gpx = gpx_text
-        route.geojson = result
+        try:
+            store_route_gpx(
+                session,
+                race_id,
+                category_name,
+                gpx_text,
+                ALLOWED_CATEGORIES,
+            )
+        except RaceRouteValidationError as error:
+            return Response(str(error), status=400)
         session.commit()
-
-        return redirect(url_for("races.edit_race", race_id=race_id, category=category_name))
-    except SQLAlchemyError as e:
+        return redirect(
+            url_for(
+                "races.edit_race",
+                race_id=race_id,
+                category=category_name,
+            )
+        )
+    except SQLAlchemyError as error:
         session.rollback()
-        return Response(f"DB error: {e}", status=500)
+        return Response(f"DB error: {error}", status=500)
     finally:
         session.close()
 
@@ -770,27 +528,32 @@ def upload_gpx(race_id: int):
 @admin_required
 def remove_gpx(race_id: int):
     """
-    Remove the GPX/GeoJSON for the selected category (does not delete the route row entirely).
+    Clear GPX/GeoJSON for the selected category without deleting its route.
+
+    Input Args:
+      race_id: Race primary key.
+
+    Output:
+      Redirect to the edit tab or mapped 404/500 response.
     """
+    category_name = request.form.get("category") or ALLOWED_CATEGORIES[0]
     session = SessionLocal()
     try:
-        category_name = request.form.get("category") or ALLOWED_CATEGORIES[0]
-        route = (
-            session.query(Route)
-            .join(Category, Category.route_id == Route.id)
-            .filter(Route.race_id == race_id, Category.name == category_name)
-            .one_or_none()
-        )
-        if not route:
+        try:
+            clear_route_gpx(session, race_id, category_name)
+        except RaceRouteNotFoundError:
             return Response("No route for that category.", status=404)
-
-        route.gpx = None
-        route.geojson = None
         session.commit()
-        return redirect(url_for("races.edit_race", race_id=race_id, category=category_name))
-    except SQLAlchemyError as e:
+        return redirect(
+            url_for(
+                "races.edit_race",
+                race_id=race_id,
+                category=category_name,
+            )
+        )
+    except SQLAlchemyError as error:
         session.rollback()
-        return Response(f"DB error: {e}", status=500)
+        return Response(f"DB error: {error}", status=500)
     finally:
         session.close()
 
@@ -798,21 +561,21 @@ def remove_gpx(race_id: int):
 @bp_races.route("/<int:race_id>/route/geojson", methods=["GET"])
 def route_geojson(race_id: int):
     """
-    Provide the GeoJSON for the selected category, so the map can fetch it with AJAX.
+    Return stored route GeoJSON for the selected category.
+
+    Input Args:
+      race_id: Race primary key.
+
+    Output:
+      Stored JSON response or an empty FeatureCollection.
     """
+    category_name = request.args.get("category") or ALLOWED_CATEGORIES[0]
     session = SessionLocal()
     try:
-        category_name = request.args.get("category") or ALLOWED_CATEGORIES[0]
-        row = (
-            session.query(Route.geojson)
-            .join(Category, Category.route_id == Route.id)
-            .filter(Route.race_id == race_id, Category.name == category_name)
-            .one_or_none()
-        )
-        gj = row[0] if row else None
-        if not gj:
+        geojson = get_route_geojson(session, race_id, category_name)
+        if not geojson:
             return jsonify({"type": "FeatureCollection", "features": []})
-        return Response(gj, mimetype="application/json")
+        return Response(geojson, mimetype="application/json")
     finally:
         session.close()
 
@@ -821,99 +584,122 @@ def route_geojson(race_id: int):
 @admin_required
 def add_race_rider(race_id: int):
     """
-    Add a rider to this race for the selected category. We look up the Category row by name.
+    Add a rider/device assignment to the selected race category.
+
+    Input Args:
+      race_id: Race primary key.
+
+    Output:
+      Redirect to the edit tab or mapped 400/500 response.
     """
+    category_name = request.form.get("category") or ALLOWED_CATEGORIES[0]
+    try:
+        rider_id = int(request.form.get("rider_id"))
+    except (TypeError, ValueError):
+        return Response("Invalid rider.", status=400)
+    device_id = (request.form.get("device_id") or "").strip()
+
     session = SessionLocal()
     try:
-        category_name = request.form.get("category") or ALLOWED_CATEGORIES[0]
-        rider_id = int(request.form.get("rider_id"))
-        device_id = (request.form.get("device_id") or "").strip()
-
-        # find category.id for (race, category_name)
-        route, cat = _find_or_create_route_for_category(session, race_id, category_name)
-
-        # save RaceRider
-        rr = RaceRider(rider_id=rider_id, device_id=device_id, category_id=cat.id, active=True, recording=True)
-        session.add(rr)
-        session.commit()
-
-        return redirect(url_for("races.edit_race", race_id=race_id, category=category_name))
-    except SQLAlchemyError as e:
-        session.rollback()
-        return Response(f"DB error: {e}", status=500)
+        try:
+            _, category = find_or_create_route_for_category(
+                session,
+                race_id,
+                category_name,
+            )
+            create_race_rider(session, rider_id, device_id, category.id)
+            session.commit()
+        except SQLAlchemyError as error:
+            session.rollback()
+            return Response(f"DB error: {error}", status=500)
+        return redirect(
+            url_for(
+                "races.edit_race",
+                race_id=race_id,
+                category=category_name,
+            )
+        )
     finally:
         session.close()
 
 
-@bp_races.route("/<int:race_id>/riders/<int:race_rider_id>/edit", methods=["POST"])
+@bp_races.route(
+    "/<int:race_id>/riders/<int:race_rider_id>/edit",
+    methods=["POST"],
+)
 @rider_required
 def edit_race_rider(race_id: int, race_rider_id: int):
     """
-    Update device/flags for an existing RaceRider entry.
+    Update one scoped rider assignment's device and flags.
 
-    Access:
-      Admins may update any race entry. Riders may update only entries linked
-      to their own current_user.rider_id.
+    Input Args:
+      race_id: Race primary key.
+      race_rider_id: RaceRider primary key.
+
+    Output:
+      Redirect to the edit tab or mapped 404/500 response.
     """
+    category_name = request.form.get("category") or ALLOWED_CATEGORIES[0]
+    device_id = (request.form.get("device_id") or "").strip()
+    active = request.form.get("active") == "on"
+    recording = request.form.get("recording") == "on"
+
     session = SessionLocal()
     try:
-        category_name = request.form.get("category") or ALLOWED_CATEGORIES[0]
-        device_id = (request.form.get("device_id") or "").strip()
-        active = True if request.form.get("active") == "on" else False
-        recording = True if request.form.get("recording") == "on" else False
-
-        rr = (
-            session.query(RaceRider)
-            .join(Category, RaceRider.category_id == Category.id)
-            .join(Route, Category.route_id == Route.id)
-            .filter(RaceRider.id == race_rider_id, Route.race_id == race_id)
-            .one_or_none()
-        )
-        if not rr:
+        race_rider = get_scoped_race_rider(session, race_id, race_rider_id)
+        if race_rider is None:
             return Response("RaceRider not found.", status=404)
-        require_rider_resource_access(current_user, rr.rider_id)
-
-        rr.device_id = device_id
-        rr.active = active
-        rr.recording = recording
+        require_rider_resource_access(current_user, race_rider.rider_id)
+        update_race_rider(race_rider, device_id, active, recording)
         session.commit()
-
-        return redirect(url_for("races.edit_race", race_id=race_id, category=category_name))
-    except SQLAlchemyError as e:
+        return redirect(
+            url_for(
+                "races.edit_race",
+                race_id=race_id,
+                category=category_name,
+            )
+        )
+    except SQLAlchemyError as error:
         session.rollback()
-        return Response(f"DB error: {e}", status=500)
+        return Response(f"DB error: {error}", status=500)
     finally:
         session.close()
 
 
-@bp_races.route("/<int:race_id>/riders/<int:race_rider_id>/remove", methods=["POST"])
+@bp_races.route(
+    "/<int:race_id>/riders/<int:race_rider_id>/remove",
+    methods=["POST"],
+)
 @rider_required
 def remove_race_rider(race_id: int, race_rider_id: int):
     """
-    Delete a RaceRider row.
+    Remove one scoped rider assignment.
 
-    Access:
-      Admins may remove any race entry. Riders may remove only entries linked
-      to their own current_user.rider_id.
+    Input Args:
+      race_id: Race primary key.
+      race_rider_id: RaceRider primary key.
+
+    Output:
+      Redirect to the edit tab or mapped 404/500 response.
     """
+    category_name = request.form.get("category") or ALLOWED_CATEGORIES[0]
     session = SessionLocal()
     try:
-        category_name = request.form.get("category") or ALLOWED_CATEGORIES[0]
-        rr = (
-            session.query(RaceRider)
-            .join(Category, RaceRider.category_id == Category.id)
-            .join(Route, Category.route_id == Route.id)
-            .filter(RaceRider.id == race_rider_id, Route.race_id == race_id)
-            .one_or_none()
-        )
-        if not rr:
+        race_rider = get_scoped_race_rider(session, race_id, race_rider_id)
+        if race_rider is None:
             return Response("RaceRider not found.", status=404)
-        require_rider_resource_access(current_user, rr.rider_id)
-        session.delete(rr)
+        require_rider_resource_access(current_user, race_rider.rider_id)
+        delete_race_rider(session, race_rider)
         session.commit()
-        return redirect(url_for("races.edit_race", race_id=race_id, category=category_name))
-    except SQLAlchemyError as e:
+        return redirect(
+            url_for(
+                "races.edit_race",
+                race_id=race_id,
+                category=category_name,
+            )
+        )
+    except SQLAlchemyError as error:
         session.rollback()
-        return Response(f"DB error: {e}", status=500)
+        return Response(f"DB error: {error}", status=500)
     finally:
         session.close()

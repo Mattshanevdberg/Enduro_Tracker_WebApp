@@ -1,9 +1,10 @@
 """
 Public rider profile routes.
 
-This module currently provides placeholder routing for the future rider profile
-index. The full page will later show rider profiles and expose edit actions only
-to the linked rider or admins.
+This module remains web-only because the current placeholder has no model access,
+business rules, or reusable parsing to extract into utility/service modules. The
+full page will later show rider profiles and expose edit actions only to the
+linked rider or admins.
 
 Paths
 -----
@@ -25,7 +26,11 @@ def rider_profiles():
       None.
 
     Output:
-      Placeholder page for the future rider profiles experience.
+      Rendered placeholder.html response for the future rider profiles experience.
+
+    Notes:
+      url_for and render_template are Flask-specific response concerns, so the
+      current placeholder correctly remains entirely in the web layer.
     """
     return render_template(
         "placeholder.html",

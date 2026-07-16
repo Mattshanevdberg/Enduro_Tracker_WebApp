@@ -525,25 +525,17 @@ Module notes:
 - Password reset increments `auth_version` so existing sessions stop working.
 - Reset token is never logged or stored directly.
 
-## src/web/rider_profiles.py
+## Rider profiles web layer
 
-Module header documents:
-- `GET /rider`
-
-### bp_rider_profiles
-- Purpose: Flask Blueprint for public rider profile pages.
-- Reads: None at definition time.
-- Writes: route registration for `/rider`.
-- Called from:
-  - `src.main:create_app`, where the blueprint is registered on the Flask app.
+- Parent directory: `src/web`
+- File: `rider_profiles.py`
+- Layer decision: no utility or service module is needed while this route remains a static placeholder with no parsing, model access, or business rules.
 
 ### rider_profiles
-- Purpose: Placeholder for the future public rider profiles page.
-- Reads: None.
-- Writes: None.
-- Returns: rendered `placeholder.html`.
-- Route: `/rider`.
-- Notes: later this page will list rider profiles and expose edit controls only to the linked rider or admins.
+- Description: renders the public `placeholder.html` page for the future rider-profile index at GET `/rider`.
+- Called from: Rider Profiles links in `templates/dashboard.html` and `templates/dashboard_admin.html`.
+- Why this layer: `render_template` and `url_for` are Flask response concerns, and there is no reusable or durable-state logic to extract yet.
+- Future boundary: profile querying and edit rules should move to a service when the real page is implemented.
 
 ## src/auth/decorators.py
 
@@ -667,7 +659,97 @@ Module header documents:
 - `src/utils/*`: pure or low-level reusable helpers. These should avoid Flask route concerns and should not render templates. Good examples: Redis key construction, browser cookie id mechanics, time parsing, GPX conversion, and validation helpers.
 - `src/services/*`: business/application logic that coordinates models, durable state, and domain rules. Good examples: billing-cycle calculation, current quota row creation, quota payload building, and block-reason decisions.
 - `src/web/*`: Flask route/controller layer only. This layer should parse requests, call services/utils, enforce decorators, return `render_template()` or `jsonify()`, and keep route-specific HTTP glue.
-- Notes: when adding new map tile quota functions, first check whether the function belongs in an existing utility or service module before adding another route-local helper. This keeps the Esri quota work aligned with the system design goal of controlling tile-provider costs without mixing provider logic into every route.
+- Notes: when adding functions, first check whether each function belongs in an existing utility or service module before adding another route-local helper. The device registry follows this rule through `src.utils.devices`, `src.services.devices`, and `src.web.devices`; the map quota feature follows it through the equivalent map modules.
+
+## src/utils/devices.py
+
+### Overall description
+- Layer: utility.
+- Purpose: normalize device form values and apply database-independent length/required-field rules.
+- Why here: these functions are pure and reusable; they do not import Flask, SQLAlchemy, or templates.
+
+### normalize_device_form
+- Basic use: trim raw device id, description, and EPC values; convert blank optional values to `None`.
+- Called from: both routes in `src.web.devices` before a device service is called.
+
+### device_form_template_values
+- Basic use: convert normalized optional values back to empty strings for safe creation-form redisplay.
+- Called from: `devices_index` after user-correctable validation errors.
+
+### validate_device_form
+- Basic use: validate required device id, 64-character device-id limit, and 128-character EPC limit.
+- Called from: `create_device` and `update_device` in `src.services.devices`.
+- Notes: uniqueness is deliberately excluded because that requires database state and belongs in the service layer.
+
+## Rider utility layer
+
+- Parent directory: `src/utils`
+- File: `riders.py`
+
+### normalize_rider_form
+- Description: trims rider form fields and converts blank optional team, bike, and bio values to `None`.
+- Called from: `rider_form` in `web/riders.py` for create and edit submissions.
+- Why this layer: normalization is pure reusable input handling with no Flask or database dependency.
+
+### rider_form_values
+- Description: builds template-safe strings from a Rider-like object, normalized dictionary, or empty form.
+- Called from: `rider_form` in `web/riders.py` for initial, edit, error, and success form states.
+- Why this layer: it is pure data shaping that can be reused by any interface presenting rider fields.
+
+### validate_rider_form
+- Description: requires a rider name and restricts the category to the supplied supported categories.
+- Called from: `create_rider` and `update_rider` in `services/riders.py`.
+- Why this layer: these rules depend only on supplied values rather than Flask or database state.
+
+## RFID utility layer
+
+- Parent directory: `src/utils`
+- File: `rfid.py`
+
+### normalize_rfid_filters
+- Description: builds a complete dictionary of trimmed RFID viewer query values and supplies the default limit.
+- Called from: `rfid_index` in `web/rfid.py`.
+- Why this layer: it is pure reusable input normalization with no Flask or database dependency.
+
+### parse_optional_int
+- Description: converts an optional whole-number value to `int` or returns `None` for an empty value.
+- Called from: `parse_rfid_limit` and `list_filtered_rfid_records`.
+- Why this layer: numeric parsing is database-independent reusable validation.
+
+### parse_rfid_limit
+- Description: parses the requested row limit, defaults it to 200, and clamps it between 1 and 1000.
+- Called from: `list_filtered_rfid_records` in `services/rfid.py`.
+- Why this layer: limit parsing is a pure input rule rather than a route or persistence concern.
+
+### datetime_filter_to_epoch
+- Description: converts an optional datetime-local filter to epoch seconds by reusing `iso_to_epoch` from `utils/time.py`.
+- Called from: `list_filtered_rfid_records` for reader and server datetime ranges.
+- Why this layer: it is reusable low-level time parsing with no model or Flask dependency.
+
+## Race utility layer
+
+- Parent directory: `src/utils`
+- File: `races.py`
+
+### DEFAULT_RACE_CATEGORIES
+- Description: aliases the existing shared rider categories for race forms and services.
+- Called from: race utilities, services, and `web/races.py`.
+- Why this layer: it reuses one category definition instead of duplicating labels.
+
+### normalize_race_form
+- Description: normalizes race fields and converts a local date/time pair to `starts_at_epoch`.
+- Called from: `save_race` in `web/races.py`.
+- Why this layer: it is pure form parsing that reuses `datetime_to_epoch` without Flask or model access.
+
+### select_category
+- Description: returns a requested supported category or the first available fallback.
+- Called from: `load_post_race_data` and `load_race_edit_data` in `services/races.py`.
+- Why this layer: category selection is a pure reusable rule.
+
+### parse_manual_time_epoch
+- Description: parses an optional timezone-naive manual time into UTC epoch seconds.
+- Called from: `manual_times` in `web/races.py`.
+- Why this layer: it reuses `iso_to_epoch` and keeps time parsing independent of HTTP and persistence.
 
 ## src/utils/map_tile_quota.py
 
@@ -803,6 +885,266 @@ Module header documents:
 - Writes: None.
 - Functions: None.
 - Notes: service modules sit between Flask routes and low-level utilities/database models. They should contain business rules but should not render templates or define routes.
+
+## src/services/devices.py
+
+### Overall description
+- Layer: service.
+- Purpose: coordinate device queries, uniqueness rules, and create/update mutations without depending on Flask.
+- Why here: these operations use models and durable database state and can be reused by browser routes, future APIs, or commands.
+- Transaction rule: functions stage changes; the calling controller owns commit/rollback.
+
+### DeviceValidationError
+- Basic use: carry one or more user-correctable field or uniqueness messages from the service to its caller.
+- Called from: `create_device` and `update_device`; handled by both device routes.
+
+### list_devices
+- Basic use: return all `Device` rows ordered by immutable device id.
+- Called from: `devices_index` for GET, successful POST, and error redisplay.
+
+### get_device
+- Basic use: load one `Device` by primary key or return `None`.
+- Called from: `device_edit` and `create_device`'s duplicate-id check.
+
+### device_epc_in_use
+- Basic use: test EPC uniqueness, optionally excluding the device currently being edited.
+- Called from: `create_device` and `update_device`.
+
+### create_device
+- Basic use: combine pure field validation with database uniqueness checks, then stage a new `Device` row.
+- Called from: POST `/devices/`.
+
+### update_device
+- Basic use: validate and stage changes to `device_info` and `epc_id` while keeping `Device.id` immutable.
+- Called from: POST `/devices/<device_id>/edit`.
+
+## Rider service layer
+
+- Parent directory: `src/services`
+- File: `riders.py`
+- Transaction rule: service functions stage changes; the calling controller owns commit and rollback.
+
+### RiderValidationError
+- Description: carries one or more user-correctable rider field messages.
+- Called from: raised by `create_rider` and `update_rider`; handled by `rider_form` in `web/riders.py`.
+- Why this layer: it represents a rider business-operation failure without depending on Flask responses.
+
+### RiderProfileLinkError
+- Description: reports that a rider account is missing or already linked and cannot create another profile.
+- Called from: raised by `create_rider`; handled by `rider_form` as a forbidden request.
+- Why this layer: one profile per rider account is a domain rule involving durable User state.
+
+### list_riders
+- Description: returns all Rider rows ordered by name.
+- Called from: `rider_form` before rendering and after a successful save.
+- Why this layer: it is reusable model querying that should not depend on templates or HTTP requests.
+
+### get_rider
+- Description: loads one Rider by primary key or returns `None`.
+- Called from: `rider_form` when resolving GET and POST edit requests.
+- Why this layer: model lookup is durable-state access reusable outside Flask.
+
+### rider_account_has_profile
+- Description: checks whether an active rider account already has a linked `rider_id`.
+- Called from: `rider_form` before allowing `/riders/new`.
+- Why this layer: it applies the one-profile rule and reuses shared `user_has_role` authorization behavior.
+
+### create_rider
+- Description: validates and stages a Rider row; rider accounts are linked to it while admin-created profiles remain unlinked.
+- Called from: `rider_form` for POST `/riders/new`.
+- Why this layer: it coordinates validation, Rider/User models, account linking, and the reused `utc_now` helper.
+
+### update_rider
+- Description: validates and stages changes to a rider's name, category, team, bike, and bio.
+- Called from: `rider_form` for POST `/riders/<rider_id>/edit`.
+- Why this layer: it applies rider mutation rules independently of Flask requests and responses.
+
+## Home service layer
+
+- Parent directory: `src/services`
+- File: `home.py`
+
+### load_race_display_data
+- Description: queries active or all races, orders them by start epoch, prepares display datetimes, and selects the default category.
+- Called from: `_render_dashboard` in `web/home.py`.
+- Why this layer: it coordinates Race model data and reusable dashboard preparation without depending on Flask rendering.
+- Reuse: uses `epoch_to_datetime` from `utils/time.py` and `DEFAULT_RIDER_CATEGORIES` from `utils/riders.py`.
+
+## RFID service layer
+
+- Parent directory: `src/services`
+- File: `rfid.py`
+
+### list_filtered_rfid_records
+- Description: parses normalized filters, applies the RFID database query, orders and limits results, and adds display datetimes.
+- Called from: `rfid_index` in `web/rfid.py`.
+- Why this layer: it coordinates IngestRfid durable state and viewer rules without handling Flask requests or templates.
+- Reuse: uses RFID parsing utilities plus `epoch_to_datetime` from `utils/time.py`.
+
+## Race lifecycle service layer
+
+- Parent directory: `src/services`
+- File: `races.py`
+
+### RaceValidationError / RaceNotFoundError
+- Description: distinguish user-correctable form failures from missing Race rows.
+- Called from: raised by `save_race`/page services and mapped by `web/races.py`.
+- Why this layer: they represent application outcomes without Flask response dependencies.
+
+### get_race
+- Description: loads one Race by primary key.
+- Called from: race save and page-data services.
+- Why this layer: it is reusable durable-state access.
+
+### _prepare_race_display_time
+- Description: populates the existing `race.starts_at` display attribute from `starts_at_epoch`.
+- Called from: `load_post_race_data`.
+- Why this layer: it prepares model-backed application display data while reusing `epoch_to_datetime`.
+
+### save_race
+- Description: validates and stages Race creation or editing.
+- Called from: `save_race` in `web/races.py`.
+- Why this layer: it coordinates validation and model mutation without Flask responses.
+
+### load_post_race_data
+- Description: composes race, category, route GeoJSON, rider, and timing data for the post-race page.
+- Called from: `post_race` in `web/races.py`.
+- Why this layer: it coordinates several domain services into one page-level application operation.
+
+### load_race_edit_data
+- Description: composes the selected Route/Category and rider/device assignment management data.
+- Called from: `edit_race` in `web/races.py`.
+- Why this layer: it builds reusable page data while leaving rendering to the controller.
+
+## Race route service layer
+
+- Parent directory: `src/services`
+- File: `race_routes.py`
+
+### RaceRouteValidationError / RaceRouteNotFoundError
+- Description: distinguish invalid category/GPX input from a missing category route.
+- Called from: route service operations and mapped by `upload_gpx`/`remove_gpx`.
+- Why this layer: they expose route-operation outcomes without Flask dependencies.
+
+### find_or_create_route_for_category
+- Description: returns or stages the Route/Category pair for a race category.
+- Called from: race edit, GPX storage, and entry-add workflows.
+- Why this layer: it coordinates Route and Category durable state.
+
+### list_race_categories
+- Description: returns alphabetically ordered category names attached to a race.
+- Called from: `load_post_race_data`.
+- Why this layer: it is reusable scoped model querying.
+
+### get_category_for_race
+- Description: loads one Category scoped to a race and name.
+- Called from: `load_post_race_data`.
+- Why this layer: it enforces race scoping at the durable-state boundary.
+
+### get_route_for_category
+- Description: loads one Route scoped to a race/category.
+- Called from: GeoJSON retrieval and GPX removal operations.
+- Why this layer: it centralizes the shared scoped query.
+
+### get_route_geojson
+- Description: returns stored route GeoJSON or `None`.
+- Called from: post-race data and `route_geojson`.
+- Why this layer: it exposes reusable route data without HTTP response logic.
+
+### store_route_gpx
+- Description: validates category/GPX input and stages GPX plus converted GeoJSON.
+- Called from: `upload_gpx`.
+- Why this layer: it coordinates GPX conversion with Route persistence.
+
+### clear_route_gpx
+- Description: clears GPX/GeoJSON without deleting the Route row.
+- Called from: `remove_gpx`.
+- Why this layer: it applies the route-removal domain behavior.
+
+## Race-rider service layer
+
+- Parent directory: `src/services`
+- File: `race_riders.py`
+
+### get_scoped_race_rider
+- Description: loads a RaceRider only when it belongs to the requested race.
+- Called from: entry edit/removal and timing services.
+- Why this layer: it centralizes race scoping for authorization-safe operations.
+
+### load_race_rider_management_data
+- Description: builds available riders, devices, current entries, and last-device mappings.
+- Called from: `load_race_edit_data`.
+- Why this layer: it coordinates assignment data and reuses `list_riders` and `list_devices`.
+
+### create_race_rider
+- Description: stages a new active/recording rider-device-category assignment.
+- Called from: `add_race_rider`.
+- Why this layer: it owns RaceRider construction independent of Flask.
+
+### update_race_rider
+- Description: stages device, active, and recording changes.
+- Called from: `edit_race_rider`.
+- Why this layer: it applies assignment mutation rules.
+
+### delete_race_rider
+- Description: stages assignment deletion.
+- Called from: `remove_race_rider`.
+- Why this layer: it encapsulates RaceRider durable-state removal.
+
+## Race timing service layer
+
+- Parent directory: `src/services`
+- File: `race_timing.py`
+
+### RaceRiderTimingNotFoundError / RaceRiderFinishMissingError
+- Description: distinguish a missing scoped entry from an entry that has no finish time to confirm.
+- Called from: timing mutation services and mapped by timing routes.
+- Why this layer: they represent timing-domain outcomes independently of HTTP responses.
+
+### race_rider_timing_payload
+- Description: formats one RaceRider's timing values and warning/confirmation state.
+- Called from: post-race rows, polling, and confirmation responses.
+- Why this layer: it is reusable domain payload building.
+
+### build_post_race_riders
+- Description: combines rider identity/device data with timing payloads for one category.
+- Called from: `load_post_race_data`.
+- Why this layer: it coordinates Rider and RaceRider data for the application view.
+
+### list_race_rider_timings
+- Description: returns timing payloads scoped to a race and optional category.
+- Called from: `race_rider_timings`.
+- Why this layer: it owns scoped timing querying and payload construction.
+
+### update_manual_race_rider_times
+- Description: stages manual timing changes and an optional trimmed TrackHist snapshot.
+- Called from: `manual_times`.
+- Why this layer: it coordinates timing state, track history, GPX conversion, and timestamps.
+
+### confirm_race_rider_finish
+- Description: confirms an existing finish time and clears the multiple-read warning.
+- Called from: `confirm_finish_time`.
+- Why this layer: it applies the RFID finish-confirmation domain rule.
+
+## Race track service layer
+
+- Parent directory: `src/services`
+- File: `race_tracks.py`
+
+### read_track_history_geojson
+- Description: returns the newest historical track GeoJSON scoped to a race entry.
+- Called from: `get_race_rider_track_geojson`.
+- Why this layer: it centralizes the history query and race scoping.
+
+### read_track_cache_geojson
+- Description: returns live cached GeoJSON scoped to a race entry.
+- Called from: `get_race_rider_track_geojson`.
+- Why this layer: it centralizes the cache query and race scoping.
+
+### get_race_rider_track_geojson
+- Description: applies history/cache preference and fallback behavior.
+- Called from: `race_rider_track`.
+- Why this layer: it owns reusable track-selection rules without returning Flask responses.
 
 ## src/services/map_tile_quota.py
 
@@ -1168,45 +1510,30 @@ docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
 ```
 - For risky or destructive migrations, test against a disposable PostgreSQL database before applying them to the main runtime database.
 
-## src/web/home.py
+## Home web layer
 
-Module header documents:
-- `GET /`
-- `GET /dashboard`
-- `GET /dashboard-admin`
+- Parent directory: `src/web`
+- File: `home.py`
 
-### _race_display_data
-- Purpose: Load race rows and add display-friendly datetime values for dashboard templates.
-- Reads: `Race`, `starts_at_epoch`, `active`, and configured categories from `config.yaml`.
-- Writes: temporary `starts_at` display attribute on race objects before rendering.
-- Returns: tuple of races and default configured category.
-- Notes: `active_only=True` is used for the public dashboard; `active_only=False` is used for the admin dashboard.
+### _render_dashboard
+- Description: opens the request-scoped session, calls `load_race_display_data`, and renders the selected dashboard template.
+- Called from: `dashboard` and `dashboard_admin`.
+- Why this layer: it contains shared Flask rendering and session-boundary glue for the two dashboards.
 
 ### home_page (GET `/`)
-- Purpose: Render the public landing page.
-- Reads: None.
-- Writes: None.
-- Renders: `templates/landing.html`.
-- Buttons: View Races, Sign Up, Login.
-- Called from:
-  - Direct public page load at `/`.
+- Description: renders the public `templates/landing.html` page.
+- Called from: direct public page loads and the Landing link on the public dashboard.
+- Why this layer: it is a Flask route whose only responsibility is template rendering.
 
 ### dashboard (GET `/dashboard`)
-- Purpose: Render the public race dashboard with active races only and no management controls.
-- Reads: active `Race` rows and default configured category.
-- Writes: None.
-- Renders: `templates/dashboard.html`.
-- Buttons: Landing, Login, Sign Up, and View Race for each active race.
-- Notes: this is the viewer/rider public dashboard. It intentionally excludes edit race, add race, device, RFID, and other admin controls.
+- Description: calls `_render_dashboard` for active races and renders `templates/dashboard.html`.
+- Called from: landing/dashboard navigation and direct public requests.
+- Why this layer: it selects the public HTTP view while the service owns race retrieval/preparation.
 
 ### dashboard_admin (GET `/dashboard-admin`)
-- Purpose: Render the admin operational dashboard with management controls.
-- Reads: all `Race` rows and default configured category.
-- Writes: None.
-- Renders: `templates/dashboard_admin.html`.
-- Access: protected with `admin_required`.
-- Buttons: Public Dashboard, Input Rider Details, Manage Devices, Add New Race, View RFID Records, Edit race, and Post Race.
-- Notes: this page contains the operational controls that previously lived on `/`.
+- Description: calls `_render_dashboard` for all races and renders `templates/dashboard_admin.html`.
+- Called from: admin login/navigation and direct admin requests.
+- Why this layer: it selects the protected admin HTTP view and applies `admin_required`.
 
 ### Checks
 - Anonymous users can load `/` and `/dashboard`.
@@ -1337,135 +1664,66 @@ src/static/js/
 
 ## src/web/devices.py
 
-### _list_devices
-- Purpose: Helper to fetch all `Device` rows ordered by id.
-- Reads: `Device`.
-- Writes: None.
-- Called from: `devices_index` only (internal helper).
-
-### _epc_in_use
-- Purpose: Check whether an RFID EPC is already assigned to another device.
-- Reads: `Device.epc_id`.
-- Writes: None.
-- Returns: True when another device already uses the EPC.
-- Called from: `devices_index` and `device_edit` only (internal helper).
+### Overall description
+- Layer: web/controller.
+- Purpose: provide the two admin-only device registry routes while delegating validation and durable device rules to utilities/services.
+- Why here: this module contains only Flask request parsing, access decoration, response/template selection, HTTP status mapping, and transaction boundaries.
 
 ### devices_index (GET/POST `/devices/`)
-- Purpose: List devices (GET) and create a new device (POST).
-- Reads: `Device` (list view).
-- Writes: `Device` (new row on POST, including optional `epc_id`).
+- Basic use: GET lists devices; POST normalizes submitted values and calls `create_device`.
+- Layer reason: the function owns HTTP method/form handling, `admin_required`, commit/rollback, template rendering, and response codes.
 - Renders: `templates/devices.html`.
 - Access: active admin account through `admin_required`.
+- Errors: returns 400 for validation/uniqueness problems and 500 for unexpected database errors.
 - Called from:
   - `templates/dashboard_admin.html`: "Manage Devices" button (GET).
   - `templates/devices.html`: "Save" button in "Add a new device" form (POST).
   - `templates/device_edit.html`: "Back to Devices" link (GET).
 
 ### device_edit (GET/POST `/devices/<device_id>/edit`)
-- Purpose: Edit `device_info` and optional `epc_id` for a specific device.
-- Reads: `Device` (by id).
-- Writes: `Device.device_info` and `Device.epc_id` (on POST).
+- Basic use: GET displays one device; POST normalizes editable values and calls `update_device`.
+- Layer reason: the function maps the route path/form and service outcomes to the correct Flask template and HTTP response.
 - Renders: `templates/device_edit.html`.
 - Access: active admin account through `admin_required`.
+- Errors: returns 404 for a missing device, 400 for validation/uniqueness problems, and 500 for unexpected database errors.
+- Notes: the device id stays read-only and immutable.
 - Called from:
   - `templates/devices.html`: "Edit" link in devices table (GET).
   - `templates/device_edit.html`: "Save" button (POST).
 
-## src/web/rfid.py
+## RFID web layer
 
-### _parse_optional_int
-- Purpose: Parse an optional integer filter value from the RFID records query string.
-- Reads/Writes: None.
-- Returns: integer value or None for an empty input.
-- Called from: `rfid_index` only (internal helper).
-
-### _parse_limit
-- Purpose: Parse and clamp the RFID records row limit.
-- Reads: raw limit string from `request.args`.
-- Writes: None.
-- Returns: integer limit between 1 and 1000.
-- Called from: `rfid_index` only (internal helper).
+- Parent directory: `src/web`
+- File: `rfid.py`
 
 ### rfid_index (GET `/rfid/`)
-- Purpose: List recent `IngestRfid` rows with server-side column filters.
-- Reads: `IngestRfid` rows filtered by optional `id`, `epc`, `reader_id`, `ant`, reader datetime range, received datetime range, and `limit`.
-- Writes: None.
-- Renders: `templates/rfid_view.html`.
-- Access: active admin account through `admin_required`.
-- Display: converts `time_stamp_epoch` and `received_at_epoch` to datetimes for the template table.
+- Description: normalizes query parameters, delegates record retrieval to the RFID service, and renders `templates/rfid_view.html`.
 - Called from:
   - `templates/dashboard_admin.html`: "View RFID Records" button (GET).
   - `templates/rfid_view.html`: filter form and "Clear" link (GET).
+- Why this layer: it owns `request.args`, `admin_required`, template selection, session cleanup, and HTTP error mapping.
+- Responses: 200 for a successful view, 400 for invalid filters, and 500 for unexpected database errors.
 
-## src/web/riders.py
+## Rider web layer
 
-### _validate_category
-- Purpose: Helper to validate that a category is in the allowed list.
-- Reads/Writes: None.
-- Called from: `rider_form` only (internal helper).
-
-### _is_rider_user
-- Purpose: Check whether the current account is a rider account.
-- Reads: current user role.
-- Writes: None.
-- Returns: True for rider users; otherwise False.
-- Called from: `_rider_already_exists`, `_can_edit_rider`, and `rider_form`.
-
-### _rider_already_exists
-- Purpose: Check whether a rider user already has a linked Rider profile.
-- Reads: `current_user.rider_id`.
-- Writes: None.
-- Returns: True when a rider account already has a linked Rider row.
-- Called from: `rider_form`.
-- Notes: this prevents normal riders from using `/riders/new` to create multiple Rider rows for the same login account.
-
-### _can_edit_rider
-- Purpose: Check whether the current user can edit a requested Rider row.
-- Reads: current user role and `current_user.rider_id` through `user_can_access_rider_resource`.
-- Writes: None.
-- Returns: True for admins, or for riders editing their own linked Rider row.
-- Called from: `rider_form`.
+- Parent directory: `src/web`
+- File: `riders.py`
 
 ### rider_form (GET/POST `/riders/new` and `/riders/<rider_id>/edit`)
-- Purpose: Create a new rider or edit an existing rider.
-- Reads: `Rider` (list and optional row for editing), current login user, and linked `User.rider_id` when a rider creates their first profile.
-- Writes: `Rider` (insert or update). When a rider creates their first profile, also writes `User.rider_id` and `User.updated_at`.
-- Renders: `templates/riders_form.html`.
-- Access: active rider or admin account through `rider_required`.
-- Notes: admins can create and edit any Rider row. Riders can create one linked Rider row only, and can edit only their own linked Rider row. A rider who already has a linked profile is redirected from `GET /riders/new` to their own edit page.
+- Description: renders the form/list on GET and delegates create or update submissions to the rider service on POST.
 - Called from:
   - `templates/dashboard_admin.html`: "Input Rider Details" button (GET `/riders/new`).
   - `templates/riders_form.html`: "Edit" link in riders table (GET `/riders/<id>/edit`).
   - `templates/riders_form.html`: "Save" button in the rider form (POST create/update).
+- Why this layer: it handles Flask form/path data, `rider_required`, the reused `user_can_access_rider_resource` ownership check, redirects, transactions, templates, and HTTP status codes.
+- Access behavior: admins may create/edit any profile; riders may create one linked profile and edit only their own. GET `/riders/new` redirects an already-linked rider to their edit page.
+- Responses: 200 for successful display/save, 302 for the profile redirect, 400 for validation, 403 for forbidden access/linking, 404 for a missing rider, and 500 for unexpected database errors.
 
-## src/web/races.py
+## Race web layer
 
-### _find_or_create_route_for_category
-- Purpose: Helper to ensure a `(Route, Category)` pair exists for a race/category.
-- Reads: `Route`, `Category`.
-- Writes: `Route`, `Category` (creates rows if missing).
-- Called from: `edit_race`, `upload_gpx`, `add_race_rider` (internal helper).
-
-### _read_track_hist_geojson
-- Purpose: Helper to return the latest `track_hist.geojson` for a `race_rider_id` scoped to the requested race.
-- Reads: `TrackHist`, `RaceRider`, `Category`, `Route`.
-- Writes: None.
-- Returns: `geojson` string or `None` when not found.
-- Called from: `race_rider_track` only (internal helper).
-
-### _read_track_cache_geojson
-- Purpose: Helper to return `track_cache.geojson` for a `race_rider_id` scoped to the requested race.
-- Reads: `TrackCache`, `RaceRider`, `Category`, `Route`.
-- Writes: None.
-- Returns: `geojson` string or `None` when not found.
-- Called from: `race_rider_track` only (internal helper).
-
-### _race_rider_timing_payload
-- Purpose: Helper to format one `RaceRider` timing row for templates and JSON polling.
-- Reads: `RaceRider.start_time_rfid_epoch`, `RaceRider.finish_time_rfid_epoch`, `RaceRider.multiple_rfid_flag`, `RaceRider.finish_time_rfid_confirmed`.
-- Writes: None.
-- Returns: timing display strings, datetime-local input values, RFID warning flag suppressed by confirmed finishes, and RFID finish confirmation flag.
-- Called from: `post_race` and `race_rider_timings` only (internal helper).
+- Parent directory: `src/web`
+- File: `races.py`
+- Layer responsibility: all routes below parse Flask inputs, enforce access decorators, call the focused race services, own commit/rollback, and map outcomes to templates, redirects, JSON, or HTTP errors.
 
 ### _post_race_map_bootstrap_config
 - Purpose: Build safe browser bootstrap configuration for the post-race map.
@@ -1541,8 +1799,8 @@ src/static/js/
 - Reads: `TrackHist`, `TrackCache`, `RaceRider`, `Category`, `Route`.
 - Writes: None.
 - Behavior:
-  - Default: prefers latest `track_hist`, falls back to `track_cache`.
-  - With `?prefer_cache=1`: prefers `track_cache` first (used by live post-race polling), then falls back to `track_hist`.
+  - Preserves the current history-first behavior: latest `track_hist`, then `track_cache` fallback.
+  - History/cache selection and race scoping are delegated to `services/race_tracks.py`.
 - Returns: GeoJSON payload (JSON).
 - Called from:
   - `templates/post_race.html`: rider track checkbox toggles and 5-second live polling for selected riders.
@@ -1705,7 +1963,7 @@ src/static/js/
 - Returns: list of cleaned fix dicts (drops rows with missing lat/lon or zeroed lat/lon pair).
 - Called from:
   - `src/api/ingest.py:upload_text`
-  - `src/web/races.py:manual_times`
+  - `build_track_snapshot_from_raw_text`
 
 ### _build_gpx_string
 - Purpose: Build a GPX 1.1 XML string from cleaned fixes.
@@ -1714,7 +1972,7 @@ src/static/js/
 - Returns: GPX XML string.
 - Called from:
   - `src/api/ingest.py:upload_text`
-  - `src/web/races.py:manual_times`
+  - `build_track_snapshot_from_raw_text`
 
 ### _build_geojson_string
 - Purpose: Build a GeoJSON LineString FeatureCollection from cleaned fixes.
@@ -1723,7 +1981,7 @@ src/static/js/
 - Returns: compact GeoJSON string.
 - Called from:
   - `src/api/ingest.py:upload_text`
-  - `src/web/races.py:manual_times`
+  - `build_track_snapshot_from_raw_text`
 
 ### filter_fixes_by_window
 - Purpose: Trim fixes to a start/finish epoch window (one-sided allowed).
@@ -1732,7 +1990,16 @@ src/static/js/
 - Returns: filtered fixes list.
 - Called from:
   - `src/api/ingest.py:upload_text`
-  - `src/web/races.py:manual_times`
+  - `build_track_snapshot_from_raw_text`
+
+### build_track_snapshot_from_raw_text
+- Purpose: Compose raw-text parsing, timing-window filtering, and GPX/GeoJSON serialization into one public helper.
+- Reads: raw tracker text plus optional start/finish epochs.
+- Writes: None.
+- Returns: `(gpx_text, geojson_text)` or `None` when no fixes remain.
+- Called from:
+  - `services/race_timing.py:update_manual_race_rider_times`
+- Notes: race services no longer import private GPX helper functions directly.
 
 ### build_gpx_for_device
 - Purpose: Query `Point` rows for a device and write a GPX file to disk.
@@ -1757,7 +2024,7 @@ src/static/js/
 - Writes: None.
 - Returns: `(ok, geojson_or_error)` tuple.
 - Called from:
-  - `src/web/races.py:upload_gpx`
+  - `services/race_routes.py:store_route_gpx`
 
 ## src/utils/time.py
 
@@ -1910,6 +2177,74 @@ src/static/js/
 - Behavior: polls every `SLEEP_SEC = 30.0` when idle.
 - Called from:
   - CLI: `python -m src.workers.rfid_worker` (background process).
+
+## tests/test_devices_layers.py
+
+### DeviceLayerTestCase
+- Purpose: test pure normalization/validation plus service create, list, update, immutable-id, and uniqueness behavior.
+- Database safety: uses only an isolated in-memory SQLite `devices` table.
+
+### DeviceRouteTestCase
+- Purpose: smoke-test the unchanged GET/POST device URLs, templates, status codes, create/edit persistence, duplicate rejection, and missing-device response.
+- Isolation: unwraps only the separately tested admin decorator and replaces `SessionLocal` with the in-memory test session factory.
+
+### Run
+```bash
+.venv/bin/python -m unittest tests.test_devices_layers -v
+```
+
+## tests/test_riders_layers.py
+
+### RiderLayerTestCase
+- Purpose: test normalization/validation, create/list/update operations, Rider/User linking, admin-created profiles, and one-profile enforcement.
+- Database safety: uses only isolated in-memory SQLite Rider and User tables.
+
+### RiderRouteTestCase
+- Purpose: smoke-test both rider URL patterns, templates, persistence, validation, redirects, ownership restrictions, and missing-rider responses.
+- Isolation: unwraps only the shared route decorator and replaces `SessionLocal` with the in-memory test session factory.
+
+### Run
+```bash
+.venv/bin/python -m unittest tests.test_riders_layers -v
+```
+
+## tests/test_home_rfid_rider_profiles_layers.py
+
+### HomeLayerTestCase
+- Purpose: test active/all race loading, ordering, display conversion, category selection, and controller template delegation.
+
+### RfidLayerTestCase
+- Purpose: test filter normalization/parsing, query filtering/limits, display values, template rendering, and invalid-filter responses.
+
+### RiderProfilesRouteTestCase
+- Purpose: verify that public GET `/rider` still renders the intended placeholder without unnecessary service/utility layers.
+
+### Database safety
+- Home and RFID tests use isolated in-memory SQLite model tables and do not access configured application databases.
+
+### Run
+```bash
+.venv/bin/python -m unittest tests.test_home_rfid_rider_profiles_layers -v
+```
+
+## tests/test_races_layers.py
+
+### RaceLifecycleAndRouteServiceTestCase
+- Purpose: test race parsing/save behavior, post/edit page composition, category/route creation, GPX validation/storage, GeoJSON retrieval, and route clearing.
+
+### RaceEntryTimingTrackServiceTestCase
+- Purpose: test assignment management, shared rider/device listing reuse, timing payloads, confirmation rules, manual trimmed snapshots, and history/cache fallback.
+
+### RaceControllerTestCase
+- Purpose: smoke-test representative race form, redirect, edit page, route GeoJSON, timing polling, manual-time validation, and finish-confirmation HTTP contracts.
+
+### Database safety
+- Uses isolated in-memory SQLite race-related tables and does not access configured application databases.
+
+### Run
+```bash
+.venv/bin/python -m unittest tests.test_races_layers -v
+```
 
 ## tests/download_latest_track_hist_gpx.py
 

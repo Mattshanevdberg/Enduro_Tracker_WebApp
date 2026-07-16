@@ -225,6 +225,42 @@ def filter_fixes_by_window(
     return trimmed
 
 
+def build_track_snapshot_from_raw_text(
+    raw_text: str,
+    start_epoch: int | None,
+    finish_epoch: int | None,
+    creator: str = "EnduroTracker",
+) -> tuple[str, str] | None:
+    """
+    Build trimmed GPX and GeoJSON snapshots from stored raw tracker text.
+
+    Input Args:
+      raw_text: line-delimited raw tracker text.
+      start_epoch: optional inclusive start of the retained timing window.
+      finish_epoch: optional inclusive end of the retained timing window.
+      creator: GPX creator label, usually including the tracker device id.
+
+    Output:
+      Tuple of GPX text and GeoJSON text, or None when no fixes remain.
+
+    Notes:
+      This public helper composes the existing parser, timing-window filter, and
+      serializers so services do not need to import private GPX functions.
+    """
+    fixes = _parse_text_fixes(raw_text)
+    trimmed = filter_fixes_by_window(
+        fixes,
+        start_epoch=start_epoch,
+        finish_epoch=finish_epoch,
+    )
+    if not trimmed:
+        return None
+    return (
+        _build_gpx_string(trimmed, creator=creator),
+        _build_geojson_string(trimmed),
+    )
+
+
 def build_gpx_for_device(device_id: str, session: Session = SessionLocal, out_dir: str = "logs") -> Tuple[bool, str]:
     """
     Build (or rebuild) a GPX 1.1 file for a given device_id from the points table.
