@@ -1,14 +1,17 @@
 """
-Focused regression tests for home, RFID, and rider-profile route layering.
+Focused regression tests for home, crawler guidance, RFID, and rider-profile
+route layering.
 
-The tests cover dashboard race preparation, RFID filter/query behavior, the
-existing HTTP response contracts, and the intentionally web-only rider profile
-placeholder. Isolated SQLite tables prevent changes to configured databases.
+The tests cover dashboard race preparation, the public robots.txt response,
+RFID filter/query behavior, the existing HTTP response contracts, and the
+intentionally web-only rider profile placeholder. Isolated SQLite tables
+prevent changes to configured databases.
 """
 
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from xml.etree import ElementTree
 
 from flask import Blueprint, Flask
 from sqlalchemy import create_engine
@@ -26,7 +29,7 @@ from src.utils.rfid import (
     parse_optional_int,
     parse_rfid_limit,
 )
-from src.web.home import dashboard, dashboard_admin, home_page
+from src.web.home import bp_home, dashboard, dashboard_admin, home_page
 from src.web.rfid import bp_rfid, rfid_index
 from src.web.rider_profiles import bp_rider_profiles
 
@@ -122,6 +125,70 @@ class HomeLayerTestCase(unittest.TestCase):
             admin_template, admin_context = dashboard_admin.__wrapped__()
             self.assertEqual(admin_template, "dashboard_admin.html")
             self.assertEqual(len(admin_context["races"]), 3)
+
+    def test_robots_txt_returns_same_protected_path_guidance_for_prod_and_dev(self):
+        """Expose identical crawler exclusions through production and dev hosts."""
+        app = Flask(__name__)
+        app.register_blueprint(bp_home)
+
+        expected_content = (
+            "User-agent: *\n"
+            "Allow: /\n"
+            "Disallow: /admin/\n"
+            "Disallow: /api/v1/\n"
+            "Disallow: /dashboard-admin\n"
+            "Disallow: /devices\n"
+            "Disallow: /rfid\n"
+            "Disallow: /riders/\n"
+            "Disallow: /races/new\n"
+            "Disallow: /races/save\n"
+            "Disallow: /races/*/edit\n"
+            "Disallow: /races/*/enter\n"
+            "Disallow: /races/*/post-admin\n"
+            "Disallow: /races/*/route/upload\n"
+            "Disallow: /races/*/route/remove\n"
+            "Disallow: /races/*/riders/\n"
+            "Disallow: /races/*/race-rider/*/manual-times\n"
+            "Disallow: /races/*/race-rider/*/confirm-finish\n"
+            "Sitemap: https://kooksnylive.co.za/sitemap.xml\n"
+        )
+
+        for hostname in ("kooksnylive.co.za", "dev.kooksnylive.co.za"):
+            with self.subTest(hostname=hostname):
+                response = app.test_client().get(
+                    "/robots.txt",
+                    headers={"Host": hostname},
+                )
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.mimetype, "text/plain")
+                self.assertEqual(response.get_data(as_text=True), expected_content)
+
+    def test_sitemap_lists_only_current_canonical_indexable_pages(self):
+        """List the landing page and dashboard while rider remains a placeholder."""
+        app = Flask(__name__)
+        app.register_blueprint(bp_home)
+
+        response = app.test_client().get(
+            "/sitemap.xml",
+            headers={"Host": "kooksnylive.co.za"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.mimetype, "application/xml")
+        sitemap_root = ElementTree.fromstring(response.get_data(as_text=True))
+        namespace = {"sitemap": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+        locations = [
+            location.text
+            for location in sitemap_root.findall("sitemap:url/sitemap:loc", namespace)
+        ]
+        self.assertEqual(
+            locations,
+            [
+                "https://kooksnylive.co.za/",
+                "https://kooksnylive.co.za/dashboard",
+            ],
+        )
+        self.assertNotIn("https://kooksnylive.co.za/rider", locations)
 
 
 class RfidLayerTestCase(unittest.TestCase):

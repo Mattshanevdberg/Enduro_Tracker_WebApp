@@ -11,6 +11,7 @@ ingest to display.
 - Always update function descriptions and keep them in the format currently used.
 - Update `README.md` whenever any changes are made, maintaining the current README format.
 - Reference `Web Application System Design.pdf` when answering questions and performing updates.
+- Whenever routes, hostnames, access controls, or indexing requirements change, review and update the applicable crawler controls (`robots.txt`, sitemap entries, canonical URLs, and `noindex` behavior). Keep intended public viewer pages crawlable, avoid unnecessary crawling of authenticated or operational routes, and never treat crawler directives as access control.
 
 ## compose.yaml
 
@@ -123,11 +124,23 @@ docker compose -p enduro-prod --env-file .env.prod up -d
 - Cloudflare error `1033` usually indicates a public-hostname-to-tunnel routing problem rather than an app crash.
 - When the tunnel connector is healthy but the site still shows `1033`, check that the correct public hostname is attached to the correct tunnel and that the DNS record points at the intended `cfargotunnel.com` target.
 
+### Google Search discovery setup
+- Step 4 - landing-page information: `templates/landing.html` uses the descriptive title `Kooksnylive | Live Enduro and Motocross Race Tracking`, a concise search-result description, and the canonical URL `https://kooksnylive.co.za/` so crawlers can identify the preferred root-domain version of the landing page.
+- Step 5 - crawler guidance: public `GET /robots.txt` allows the intended anonymous viewer pages while asking cooperative crawlers not to visit `/admin/`, `/api/v1/`, `/dashboard-admin`, `/devices`, `/rfid`, `/riders/`, or authenticated race-management paths, including GPX upload/removal. It advertises `https://kooksnylive.co.za/sitemap.xml` as the canonical production sitemap location.
+- Step 6 - XML sitemap: public `GET /sitemap.xml` returns `application/xml` and currently lists only `https://kooksnylive.co.za/` and `https://kooksnylive.co.za/dashboard` as canonical pages intended for search results.
+- Sitemap scope: `/rider` is intentionally omitted while it renders placeholder content. Add it, stable public race pages, and public results only when they provide distinct content that should appear in search results; a route does not need to be listed merely because anonymous users can access it.
+- Host coverage: the host-independent Flask route returns the same protected-path exclusions for `kooksnylive.co.za`, `app.kooksnylive.co.za`, and `dev.kooksnylive.co.za`; automated tests explicitly verify the production root and development host responses. The sitemap remains rooted at the preferred canonical production domain.
+- Public viewer scope: `/`, `/dashboard`, `/rider`, public race pages, public results, and the map/timing resources those pages require remain crawlable, matching the anonymous Viewer responsibilities in `Web Application System Design V4 - 20260224.pdf`.
+- Security note: `robots.txt` is crawler guidance, not access control. Authentication and role decorators remain responsible for protecting private routes, consistent with the lightweight-auth and HTTPS requirements in `Web Application System Design V4 - 20260224.pdf`.
+- Deployment check: after deploying the production image, inspect `https://kooksnylive.co.za/` for the title, description, and canonical link; confirm `https://kooksnylive.co.za/robots.txt` returns the plain-text directives; then confirm `https://kooksnylive.co.za/sitemap.xml` returns valid XML containing only the landing page and dashboard canonical URLs.
+- Search Console: submit `https://kooksnylive.co.za/sitemap.xml` under Sitemaps after the production deployment and monitor its processing status for fetch or URL errors.
+
 ### References used for this setup
 - Cloudflare add-site / nameserver handoff: `https://developers.cloudflare.com/fundamentals/manage-domains/add-site/`
 - Cloudflare Tunnel setup: `https://developers.cloudflare.com/tunnel/setup/`
 - Cloudflare remotely-managed tunnel creation: `https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/get-started/create-remote-tunnel/`
 - Cloudflare error `1033`: `https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-1xxx-errors/error-1033/`
+- Google sitemap creation and submission: `https://developers.google.com/search/docs/crawling-indexing/sitemaps/build-sitemap`
 
 ## .env Files
 
@@ -1525,6 +1538,20 @@ docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
 - Called from: direct public page loads and the Landing link on the public dashboard.
 - Why this layer: it is a Flask route whose only responsibility is template rendering.
 
+### robots_txt (GET `/robots.txt`)
+- Description: returns plain-text crawler guidance that allows public viewer pages, excludes authenticated administration, device, RFID, rider, race-management, and device-ingest paths, and points crawlers to the canonical production sitemap URL.
+- Called from: search-engine and other cooperative web crawlers, plus direct production verification requests.
+- Why this layer: it is a static Flask HTTP response with no reusable parsing, database coordination, or domain logic, so no utility or service module is needed.
+- Security: the directives do not protect routes; login and role decorators remain the access-control boundary.
+- Host behavior: the same response is served through the root production, application, and development hostnames because crawler path coverage is host-independent; the advertised sitemap stays on `https://kooksnylive.co.za`.
+
+### sitemap (GET `/sitemap.xml`)
+- Description: returns a UTF-8 XML sitemap containing the canonical production landing page and public dashboard URLs.
+- Called from: the sitemap directive in `robots.txt`, Google Search Console submissions, and search-engine crawlers.
+- Why this layer: the current sitemap is a static Flask HTTP response with no database coordination or domain rules, so no utility or service module is needed.
+- Scope: `/rider` remains excluded while it is a placeholder. Add stable public rider profiles, race details, and results when those pages provide distinct indexable content.
+- Host behavior: every application hostname can serve the route, but every `<loc>` uses the preferred `https://kooksnylive.co.za` canonical domain.
+
 ### dashboard (GET `/dashboard`)
 - Description: calls `_render_dashboard` for active races and renders `templates/dashboard.html`.
 - Called from: landing/dashboard navigation and direct public requests.
@@ -1537,6 +1564,8 @@ docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
 
 ### Checks
 - Anonymous users can load `/` and `/dashboard`.
+- Anonymous users can load `/robots.txt` as `text/plain` and receive the expected allow, protected-path disallow, and sitemap directives through both production and development hostnames.
+- Anonymous users can load `/sitemap.xml` as `application/xml`; it contains only the canonical landing page and dashboard URLs while `/rider` remains a placeholder.
 - Anonymous users see no management controls on `/dashboard`.
 - Anonymous users are redirected to login for `/dashboard-admin`.
 - Riders are blocked from `/dashboard-admin` with 403.
@@ -2327,6 +2356,7 @@ docker compose -p enduro-dev --env-file .env.dev run --rm -e TEST_EMAIL_TO=you@e
 ### landing.html
 - General: Public landing page.
 - Displays: Kooksnylive entry point and high-level public actions.
+- Search metadata: uses a descriptive live enduro/motocross tracking title and description, and declares `https://kooksnylive.co.za/` as the canonical landing-page URL.
 - Styles: Uses `src/static/css/base.css` for the lean shared base theme.
 - UI actions: "View Races", "Sign Up", "Login".
 - Linked pages (buttons):

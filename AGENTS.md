@@ -8,6 +8,7 @@ These rules apply to all Codex work in this repository.
 4. Reference `Web Application System Design.pdf` when answering questions and performing updates.
 5. Overall python file descriptions should include all the routes that are in the file when relevant, using the current format.
 6. Always test the resulting behaviour and provide manual tests for the developer to perform to ensure that factionality is working.
+7. Whenever routes, hostnames, access controls, or indexing requirements change, review and update the applicable crawler controls (`robots.txt`, sitemap entries, canonical URLs, and `noindex` behavior). Keep intended public viewer pages crawlable, avoid unnecessary crawling of authenticated or operational routes, and never treat crawler directives as access control.
 
 ## Python Layering Rule
 
