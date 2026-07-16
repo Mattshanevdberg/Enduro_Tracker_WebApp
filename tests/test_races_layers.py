@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 from flask import Blueprint, Flask
 from sqlalchemy import create_engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -95,6 +96,11 @@ class RaceDatabaseTestCase(unittest.TestCase):
             connect_args={"check_same_thread": False},
             poolclass=StaticPool,
         )
+        # SQLite disables foreign-key enforcement by default. Enable it in this
+        # isolated connection so the focused tests exercise the same composite
+        # race-scope guarantees that PostgreSQL enforces in production.
+        with self.engine.connect() as connection:
+            connection.exec_driver_sql("PRAGMA foreign_keys = ON")
         for table in (
             Race.__table__,
             Route.__table__,
@@ -129,10 +135,15 @@ class RaceDatabaseTestCase(unittest.TestCase):
             route = Route(race_id=race.id, gpx=VALID_GPX, geojson='{"history":"route"}')
             session.add(route)
             session.flush()
-            category = Category(route_id=route.id, name="Professional")
+            category = Category(
+                route_id=route.id,
+                race_id=race.id,
+                name="Professional",
+            )
             session.add(category)
             session.flush()
             race_rider = RaceRider(
+                race_id=race.id,
                 rider_id=rider_one.id,
                 device_id=device_one.id,
                 category_id=category.id,
@@ -167,6 +178,7 @@ class RaceDatabaseTestCase(unittest.TestCase):
             self.race_id = race.id
             self.category_id = category.id
             self.race_rider_id = race_rider.id
+            self.rider_one_id = rider_one.id
             self.rider_two_id = rider_two.id
         finally:
             session.close()
@@ -281,12 +293,13 @@ class RaceEntryTimingTrackServiceTestCase(RaceDatabaseTestCase):
             self.assertEqual([r.name for r in management["riders"]], ["Bob Rider"])
             new_entry = create_race_rider(
                 session,
+                self.race_id,
                 self.rider_two_id,
                 "pi002",
                 self.category_id,
             )
             session.commit()
-            update_race_rider(new_entry, "pi001", False, False)
+            update_race_rider(new_entry, "pi002", False, False)
             session.commit()
             scoped = get_scoped_race_rider(session, self.race_id, new_entry.id)
             self.assertFalse(scoped.active)
@@ -316,6 +329,97 @@ class RaceEntryTimingTrackServiceTestCase(RaceDatabaseTestCase):
                     self.race_id,
                     self.race_rider_id,
                 )
+        finally:
+            session.close()
+
+    def test_category_scope_name_and_shared_route_constraints(self):
+        """Enforce same-race routes and names while allowing route sharing."""
+        session = self.session_factory()
+        try:
+            shared = Category(
+                route_id=session.get(Category, self.category_id).route_id,
+                race_id=self.race_id,
+                name="Open",
+            )
+            session.add(shared)
+            session.commit()
+            self.assertEqual(shared.race_id, self.race_id)
+
+            second_route = Route(race_id=self.race_id)
+            session.add(second_route)
+            session.flush()
+            session.add(
+                Category(
+                    route_id=second_route.id,
+                    race_id=self.race_id,
+                    name="professional",
+                )
+            )
+            with self.assertRaises(IntegrityError):
+                session.commit()
+            session.rollback()
+
+            other_race = Race(name="Other Race", active=True)
+            session.add(other_race)
+            session.flush()
+            existing_category = session.get(Category, self.category_id)
+            session.add(
+                Category(
+                    route_id=existing_category.route_id,
+                    race_id=other_race.id,
+                    name="Junior",
+                )
+            )
+            with self.assertRaises(IntegrityError):
+                session.commit()
+        finally:
+            session.close()
+
+    def test_race_rider_scope_and_per_race_uniqueness_constraints(self):
+        """Reject cross-race categories and duplicate rider/device assignments."""
+        session = self.session_factory()
+        try:
+            duplicate_rider = RaceRider(
+                race_id=self.race_id,
+                rider_id=self.rider_one_id,
+                device_id="pi002",
+                category_id=self.category_id,
+                active=True,
+                recording=True,
+            )
+            session.add(duplicate_rider)
+            with self.assertRaises(IntegrityError):
+                session.commit()
+            session.rollback()
+
+            duplicate_device = RaceRider(
+                race_id=self.race_id,
+                rider_id=self.rider_two_id,
+                device_id="pi001",
+                category_id=self.category_id,
+                active=True,
+                recording=True,
+            )
+            session.add(duplicate_device)
+            with self.assertRaises(IntegrityError):
+                session.commit()
+            session.rollback()
+
+            other_race = Race(name="Cross-scope Race", active=True)
+            session.add(other_race)
+            session.flush()
+            session.add(
+                RaceRider(
+                    race_id=other_race.id,
+                    rider_id=self.rider_two_id,
+                    device_id="pi002",
+                    category_id=self.category_id,
+                    active=True,
+                    recording=True,
+                )
+            )
+            with self.assertRaises(IntegrityError):
+                session.commit()
         finally:
             session.close()
 

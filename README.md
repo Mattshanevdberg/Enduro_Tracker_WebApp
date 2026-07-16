@@ -1040,7 +1040,7 @@ Module notes:
 - Why this layer: they expose route-operation outcomes without Flask dependencies.
 
 ### find_or_create_route_for_category
-- Description: returns or stages the Route/Category pair for a race category.
+- Description: returns or stages the Route/Category pair for a race category and writes the race id onto both rows so the composite same-race foreign key is satisfied.
 - Called from: race edit, GPX storage, and entry-add workflows.
 - Why this layer: it coordinates Route and Category durable state.
 
@@ -1080,7 +1080,7 @@ Module notes:
 - File: `race_riders.py`
 
 ### get_scoped_race_rider
-- Description: loads a RaceRider only when it belongs to the requested race.
+- Description: loads a RaceRider only when its explicit, database-enforced `race_id` matches the requested race.
 - Called from: entry edit/removal and timing services.
 - Why this layer: it centralizes race scoping for authorization-safe operations.
 
@@ -1090,7 +1090,7 @@ Module notes:
 - Why this layer: it coordinates assignment data and reuses `list_riders` and `list_devices`.
 
 ### create_race_rider
-- Description: stages a new active/recording rider-device-category assignment.
+- Description: stages a new active/recording rider-device-category assignment with the explicit race id required by the composite Category scope and per-race uniqueness constraints.
 - Called from: `add_race_rider`.
 - Why this layer: it owns RaceRider construction independent of Flask.
 
@@ -1486,6 +1486,7 @@ Module header documents:
 ### Current baseline
 - Purpose: the active Alembic baseline is [438e4bd69220_baseline_schema.py](/home/matthew/Desktop/Master_Dev/Enduro_Tracker_WebApp/migrations/versions/438e4bd69220_baseline_schema.py), which can build the current PostgreSQL schema from an empty database.
 - Notes: legacy pre-baseline revisions are kept in [migrations/versions_legacy](/home/matthew/Desktop/Master_Dev/Enduro_Tracker_WebApp/migrations/versions_legacy) for reference only and are no longer part of the active migration chain.
+- Current head: [a7c4e2f91b6d_strengthen_race_category_scope.py](/home/matthew/Desktop/Master_Dev/Enduro_Tracker_WebApp/migrations/versions/a7c4e2f91b6d_strengthen_race_category_scope.py) backfills explicit race scope onto `categories` and `race_riders`, then adds composite same-race foreign keys, race-level category-name uniqueness, and one-rider/one-device-per-race constraints.
 
 ### Standard change process
 - Step 1: edit [models.py](/home/matthew/Desktop/Master_Dev/Enduro_Tracker_WebApp/src/db/models.py) first because the SQLAlchemy models remain the schema source of truth.
@@ -2259,10 +2260,10 @@ src/static/js/
 ## tests/test_races_layers.py
 
 ### RaceLifecycleAndRouteServiceTestCase
-- Purpose: test race parsing/save behavior, post/edit page composition, category/route creation, GPX validation/storage, GeoJSON retrieval, and route clearing.
+- Purpose: test race parsing/save behavior, post/edit page composition, category/route creation, GPX validation/storage, GeoJSON retrieval, route clearing, shared routes, same-race composite references, and case-insensitive category-name uniqueness.
 
 ### RaceEntryTimingTrackServiceTestCase
-- Purpose: test assignment management, shared rider/device listing reuse, timing payloads, confirmation rules, manual trimmed snapshots, and history/cache fallback.
+- Purpose: test assignment management, per-race rider/device uniqueness, cross-race Category rejection, shared rider/device listing reuse, timing payloads, confirmation rules, manual trimmed snapshots, and history/cache fallback.
 
 ### RaceControllerTestCase
 - Purpose: smoke-test representative race form, redirect, edit page, route GeoJSON, timing polling, manual-time validation, and finish-confirmation HTTP contracts.
@@ -2343,9 +2344,9 @@ docker compose -p enduro-dev --env-file .env.dev run --rm -e TEST_EMAIL_TO=you@e
 - `map_tile_browser_blocks`: browser-level tile block history for admin visibility and early release. Columns: `id`, `browser_cookie_id`, `user_id`, `reason`, `tiles_at_block`, `blocked_at`, `blocked_until`, `released_at`, `released_by_user_id`, `release_reason`, `created_at`, `updated_at`. Relationships: optionally links to the affected `users` row and to the admin `users` row that released the block. Conditions: `browser_cookie_id`, `reason`, `blocked_at`, `blocked_until`, `created_at`, and `updated_at` are required. Notes: Redis remains the enforcement store for short-lived browser blocks; this table records block history and admin reset state. Quota admin actions should be recorded in `auth_audit_events` rather than a separate map-specific audit table.
 - Migration: the map tile quota tables are created by `migrations/versions/4578a2e08ba3_add_esri_tile_quota_tables.py`. The migration is manually written because the dev database may already contain these tables from `Base.metadata.create_all()`; clean databases still receive normal `CREATE TABLE` operations.
 - `races`: event metadata (name, description, website, starts/ends, active flag). Columns: `id`, `name`, `description`, `website`, `starts_at`, `starts_at_epoch`, `ends_at`, `ends_at_epoch`, `active`. Relationships: one race can have many `route` rows via `route.race_id -> races.id`. Conditions: `name` and `active` are required (`NOT NULL`) and `active` defaults to `true`.
-- `route`: per-race route geometry storage (gpx/geojson). Columns: `id`, `race_id`, `geojson`, `gpx`. Relationships: belongs to one `race` and can have many `categories` via `categories.route_id -> route.id`. Conditions: `race_id` is required (`NOT NULL`) and must reference an existing `races.id`.
-- `categories`: category labels tied to a route; unique per route. Columns: `id`, `route_id`, `name`. Relationships: belongs to one `route` and is referenced by many `race_riders`, plus one-to-one cache/history links in `leaderboard_cache` and `leaderboard_hist`. Conditions: unique constraint `ux_route_category_name` enforces unique `name` per `route_id`.
-- `race_riders`: joins rider, device, and category for a race; stores timing and status flags. Columns: `id`, `rider_id`, `device_id`, `category_id`, `comm_setting`, `active`, `recording`, `start_time_rfid`, `start_time_rfid_epoch`, `finish_time_rfid`, `finish_time_rfid_epoch`, `start_time_pi`, `start_time_pi_epoch`, `finish_time_pi`, `finish_time_pi_epoch`, `multiple_rfid_flag`, `finish_time_rfid_confirmed`. Relationships: each row belongs to one `rider`, one `device`, and one `category`, with one-to-one links to `track_cache` and `track_hist`. Conditions: `rider_id`, `device_id`, `category_id`, `active`, `recording`, `multiple_rfid_flag`, and `finish_time_rfid_confirmed` are required, with `active`/`recording` defaulting to `true` and RFID flags defaulting to `false`.
+- `route`: per-race route geometry storage (gpx/geojson). Columns: `id`, `race_id`, `geojson`, `gpx`. Relationships: belongs to one `race` and can have many shared `categories`. Conditions: `race_id` is required and references `races.id`; `ux_route_id_race_id` exposes the exact composite key required by category race-scope enforcement.
+- `categories`: race-scoped category labels tied to a route. Columns: `id`, `route_id`, `race_id`, `name`. Relationships: belongs to one same-race `route`, can share that route with other categories, and is referenced by many `race_riders`, plus leaderboard cache/history links. Conditions: `(route_id, race_id) -> route(id, race_id)` prevents cross-race route assignment; `ux_categories_id_race_id` provides the entry-scope target; `ux_categories_race_name_ci` makes trimmed names case-insensitively unique per race; `ck_categories_name_trimmed_nonempty` rejects blank or padded names.
+- `race_riders`: joins a rider, device, race, and category while storing timing and status flags. Columns: `id`, `race_id`, `rider_id`, `device_id`, `category_id`, `comm_setting`, `active`, `recording`, `start_time_rfid`, `start_time_rfid_epoch`, `finish_time_rfid`, `finish_time_rfid_epoch`, `start_time_pi`, `start_time_pi_epoch`, `finish_time_pi`, `finish_time_pi_epoch`, `multiple_rfid_flag`, `finish_time_rfid_confirmed`. Relationships: each row belongs to one rider, device, and same-race category, with one-to-one links to track cache/history. Conditions: `(category_id, race_id) -> categories(id, race_id)` prevents cross-race category assignment; `ux_race_riders_race_rider` permits one entry per rider per race; `ux_race_riders_race_device` permits one assignment per device per race; required status/timing flags retain their existing defaults.
 - `leaderboard_cache`: live leaderboard snapshot per category. Columns: `category_id`, `payload_json`, `etag`, `updated_at`, `updated_at_epoch`. Relationships: one-to-one with `categories` via `category_id` as both foreign key and primary key. Conditions: `payload_json` and `updated_at` are required (`NOT NULL`).
 - `track_cache`: live track geojson per race_rider. Columns: `race_rider_id`, `geojson`, `etag`, `updated_at`, `updated_at_epoch`. Relationships: one-to-one with `race_riders` via `race_rider_id` as both foreign key and primary key. Conditions: `updated_at` is required (`NOT NULL`).
 - `leaderboard_hist`: archived leaderboard snapshots per category. Columns: `id`, `category_id`, `payload_json`, `official_pdf`, `updated_at`, `updated_at_epoch`. Relationships: many history rows can belong to one `category` via `category_id -> categories.id`. Conditions: `category_id`, `payload_json`, and `updated_at` are required (`NOT NULL`).

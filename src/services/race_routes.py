@@ -50,7 +50,11 @@ def find_or_create_route_for_category(
     route = (
         session.query(Route)
         .join(Category, Category.route_id == Route.id)
-        .filter(Route.race_id == race_id, Category.name == category_name)
+        .filter(
+            Route.race_id == race_id,
+            Category.race_id == race_id,
+            Category.name == category_name,
+        )
         .one_or_none()
     )
     if route is not None:
@@ -58,6 +62,7 @@ def find_or_create_route_for_category(
             session.query(Category)
             .filter(
                 Category.route_id == route.id,
+                Category.race_id == race_id,
                 Category.name == category_name,
             )
             .one()
@@ -67,7 +72,14 @@ def find_or_create_route_for_category(
     route = Route(race_id=race_id, geojson=None, gpx=None)
     session.add(route)
     session.flush()
-    category = Category(route_id=route.id, name=category_name)
+    # Persist the explicit race scope alongside the route link. The database's
+    # composite foreign key then guarantees this Category cannot be attached to
+    # a Route owned by another Race.
+    category = Category(
+        route_id=route.id,
+        race_id=race_id,
+        name=category_name,
+    )
     session.add(category)
     session.flush()
     return route, category
@@ -89,7 +101,7 @@ def list_race_categories(session, race_id: int) -> list[str]:
         for row in (
             session.query(Category.name)
             .join(Route, Category.route_id == Route.id)
-            .filter(Route.race_id == race_id)
+            .filter(Route.race_id == race_id, Category.race_id == race_id)
             .order_by(Category.name.asc())
             .all()
         )
@@ -115,7 +127,11 @@ def get_category_for_race(
     return (
         session.query(Category)
         .join(Route, Category.route_id == Route.id)
-        .filter(Route.race_id == race_id, Category.name == category_name)
+        .filter(
+            Route.race_id == race_id,
+            Category.race_id == race_id,
+            Category.name == category_name,
+        )
         .one_or_none()
     )
 
@@ -139,7 +155,11 @@ def get_route_for_category(
     return (
         session.query(Route)
         .join(Category, Category.route_id == Route.id)
-        .filter(Route.race_id == race_id, Category.name == category_name)
+        .filter(
+            Route.race_id == race_id,
+            Category.race_id == race_id,
+            Category.name == category_name,
+        )
         .one_or_none()
     )
 

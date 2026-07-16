@@ -607,7 +607,13 @@ def add_race_rider(race_id: int):
                 race_id,
                 category_name,
             )
-            create_race_rider(session, rider_id, device_id, category.id)
+            create_race_rider(
+                session,
+                race_id,
+                rider_id,
+                device_id,
+                category.id,
+            )
             session.commit()
         except SQLAlchemyError as error:
             session.rollback()

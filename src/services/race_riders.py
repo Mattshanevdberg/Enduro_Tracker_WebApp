@@ -18,7 +18,7 @@ Existing rider/device listing services are reused so ordering rules are not
 duplicated across feature services.
 """
 
-from src.db.models import Category, RaceRider, Route
+from src.db.models import RaceRider
 from src.services.devices import list_devices
 from src.services.riders import list_riders
 
@@ -41,9 +41,10 @@ def get_scoped_race_rider(
     """
     return (
         session.query(RaceRider)
-        .join(Category, RaceRider.category_id == Category.id)
-        .join(Route, Category.route_id == Route.id)
-        .filter(RaceRider.id == race_rider_id, Route.race_id == race_id)
+        .filter(
+            RaceRider.id == race_rider_id,
+            RaceRider.race_id == race_id,
+        )
         .one_or_none()
     )
 
@@ -94,6 +95,7 @@ def load_race_rider_management_data(session, category_id: int) -> dict:
 
 def create_race_rider(
     session,
+    race_id: int,
     rider_id: int,
     device_id: str,
     category_id: int,
@@ -103,6 +105,7 @@ def create_race_rider(
 
     Input Args:
       session: active SQLAlchemy session.
+      race_id: Race primary key shared by the entry and selected Category.
       rider_id: Rider primary key.
       device_id: selected Device primary key.
       category_id: Category primary key.
@@ -111,6 +114,7 @@ def create_race_rider(
       Newly staged active/recording RaceRider row. The caller must commit.
     """
     race_rider = RaceRider(
+        race_id=race_id,
         rider_id=rider_id,
         device_id=device_id,
         category_id=category_id,
