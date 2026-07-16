@@ -1,61 +1,67 @@
 """
-Landing and dashboard routes.
+Landing and dashboard HTTP controllers.
 
-The public landing page is separate from the operational dashboards. Viewers can
-reach the public race dashboard without logging in, while the admin dashboard
-keeps the management controls that used to live on the home page.
+Routes
+------
+GET /
+    Render the public landing page.
+GET /dashboard
+    Render the public dashboard with active races.
+GET /dashboard-admin
+    Render the admin operational dashboard with all races.
 
-Paths
------
-GET /                -> Public landing page with view races, signup, and login actions
-GET /dashboard       -> Public active-race dashboard for viewers, riders, and admins
-GET /dashboard-admin -> Admin-only operational dashboard with management controls
+Dashboard race queries and display preparation live in src.services.home. This
+module retains only Flask access control, session boundaries, and rendering.
 """
 
 from flask import Blueprint, render_template
 
 from src.auth.decorators import admin_required
-from src.db.models import SessionLocal, Race, config as app_config
-from src.utils.time import epoch_to_datetime
+from src.db.models import SessionLocal
+from src.services.home import load_race_display_data
+from src.utils.riders import DEFAULT_RIDER_CATEGORIES
 
 bp_home = Blueprint("home", __name__)
 
 
-def _race_display_data(active_only: bool = False):
+def _render_dashboard(template_name: str, active_only: bool):
     """
-    Load races and add display-friendly datetime fields.
+    Render a dashboard using service-prepared race display data.
 
     Input Args:
-      active_only: when True, return only active races.
+      template_name: dashboard template selected by the route.
+      active_only: whether the service should return only active races.
 
     Output:
-      Tuple of race list and default configured category.
+      Rendered Flask dashboard response.
+
+    Notes:
+      This remains in the web layer because it owns Flask template rendering and
+      the request-scoped SQLAlchemy session boundary shared by both dashboards.
     """
     session = SessionLocal()
     try:
-        query = session.query(Race)
-        if active_only:
-            query = query.filter(Race.active.is_(True))
-        races = query.order_by(Race.starts_at_epoch.asc()).all()
+        races, default_category = load_race_display_data(
+            session,
+            active_only=active_only,
+            categories=DEFAULT_RIDER_CATEGORIES,
+        )
+        return render_template(
+            template_name,
+            races=races,
+            default_category=default_category,
+        )
     finally:
         session.close()
-
-    # Convert epochs to datetimes for display in the template.
-    for race in races:
-        if race.starts_at_epoch is not None:
-            race.starts_at = epoch_to_datetime(race.starts_at_epoch)
-        else:
-            race.starts_at = None
-
-    categories = app_config.get("categories") or ["Professional", "Open", "Junior"]
-    default_category = categories[0] if categories else ""
-    return races, default_category
 
 
 @bp_home.route("/")
 def home_page():
     """
     Render the public landing page.
+
+    Output:
+      Rendered landing.html response.
     """
     return render_template("landing.html")
 
@@ -64,24 +70,20 @@ def home_page():
 def dashboard():
     """
     Render the public dashboard with active races only.
+
+    Output:
+      Rendered dashboard.html response.
     """
-    races, default_category = _race_display_data(active_only=True)
-    return render_template(
-        "dashboard.html",
-        races=races,
-        default_category=default_category,
-    )
+    return _render_dashboard("dashboard.html", active_only=True)
 
 
 @bp_home.route("/dashboard-admin")
 @admin_required
 def dashboard_admin():
     """
-    Render the admin operational dashboard.
+    Render the admin operational dashboard with all races.
+
+    Output:
+      Rendered dashboard_admin.html response.
     """
-    races, default_category = _race_display_data(active_only=False)
-    return render_template(
-        "dashboard_admin.html",
-        races=races,
-        default_category=default_category,
-    )
+    return _render_dashboard("dashboard_admin.html", active_only=False)
