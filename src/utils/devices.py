@@ -7,6 +7,8 @@ normalize_device_form
     Trim submitted device values and represent blank optional values as None.
 device_form_template_values
     Convert normalized values into strings that are safe to redisplay in forms.
+normalize_device_boolean
+    Convert checkbox/API values into a durable boolean.
 validate_device_form
     Apply database-independent device id and RFID EPC length rules.
 
@@ -19,10 +21,27 @@ MAX_DEVICE_ID_LENGTH = 64
 MAX_DEVICE_EPC_LENGTH = 128
 
 
+def normalize_device_boolean(value) -> bool:
+    """
+    Normalize a device availability checkbox or API boolean.
+
+    Input Args:
+      value: boolean or common submitted truthy string.
+
+    Output:
+      True only for explicit truthy values.
+    """
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def normalize_device_form(
     device_id: str | None,
     device_info: str | None,
     epc_id: str | None,
+    returned=True,
+    active=True,
 ) -> dict:
     """
     Normalize raw device form values.
@@ -31,6 +50,8 @@ def normalize_device_form(
       device_id: raw tracker device identifier.
       device_info: raw optional descriptive text.
       epc_id: raw optional RFID EPC value.
+      returned: raw returned-state checkbox/API value.
+      active: raw active-state checkbox/API value.
 
     Output:
       Dictionary with trimmed values and None for blank optional fields.
@@ -39,6 +60,8 @@ def normalize_device_form(
         "id": (device_id or "").strip(),
         "device_info": (device_info or "").strip() or None,
         "epc_id": (epc_id or "").strip() or None,
+        "returned": normalize_device_boolean(returned),
+        "active": normalize_device_boolean(active),
     }
 
 
@@ -56,6 +79,8 @@ def device_form_template_values(form: dict) -> dict:
         "id": form.get("id") or "",
         "device_info": form.get("device_info") or "",
         "epc_id": form.get("epc_id") or "",
+        "returned": bool(form.get("returned")),
+        "active": bool(form.get("active")),
     }
 
 

@@ -126,7 +126,7 @@ docker compose -p enduro-prod --env-file .env.prod up -d
 
 ### Google Search discovery setup
 - Step 4 - landing-page information: `templates/landing.html` uses the descriptive title `Kooksnylive | Live Enduro and Motocross Race Tracking`, a concise search-result description, and the canonical URL `https://kooksnylive.co.za/` so crawlers can identify the preferred root-domain version of the landing page.
-- Step 5 - crawler guidance: public `GET /robots.txt` allows the intended anonymous viewer pages while asking cooperative crawlers not to visit `/admin/`, `/api/v1/`, `/dashboard-admin`, `/devices`, `/rfid`, `/riders/`, or authenticated race-management paths, including named-route/category creation and GPX upload/removal. It advertises `https://kooksnylive.co.za/sitemap.xml` as the canonical production sitemap location.
+- Step 5 - crawler guidance: public `GET /robots.txt` allows the intended anonymous viewer pages while asking cooperative crawlers not to visit `/admin/`, `/api/v1/`, `/dashboard-admin`, `/devices`, `/rfid`, `/riders/`, or authenticated race-management paths, including rider/admin entry, named-route/category mutation, and GPX upload/removal. It advertises `https://kooksnylive.co.za/sitemap.xml` as the canonical production sitemap location.
 - Step 6 - XML sitemap: public `GET /sitemap.xml` returns `application/xml` and currently lists only `https://kooksnylive.co.za/` and `https://kooksnylive.co.za/dashboard` as canonical pages intended for search results.
 - Sitemap scope: `/rider` is intentionally omitted while it renders placeholder content. Add it, stable public race pages, and public results only when they provide distinct content that should appear in search results; a route does not need to be listed merely because anonymous users can access it.
 - Host coverage: the host-independent Flask route returns the same protected-path exclusions for `kooksnylive.co.za`, `app.kooksnylive.co.za`, and `dev.kooksnylive.co.za`; automated tests explicitly verify the production root and development host responses. The sitemap remains rooted at the preferred canonical production domain.
@@ -682,11 +682,15 @@ Module notes:
 - Why here: these functions are pure and reusable; they do not import Flask, SQLAlchemy, or templates.
 
 ### normalize_device_form
-- Basic use: trim raw device id, description, and EPC values; convert blank optional values to `None`.
+- Basic use: trim raw device id, description, and EPC values; convert blank optional values to `None`; normalize returned/active checkbox values.
 - Called from: both routes in `src.web.devices` before a device service is called.
 
+### normalize_device_boolean
+- Basic use: convert browser checkbox strings, API-style truthy values, or booleans into returned/active state.
+- Called from: `normalize_device_form`.
+
 ### device_form_template_values
-- Basic use: convert normalized optional values back to empty strings for safe creation-form redisplay.
+- Basic use: convert normalized optional values back to empty strings while retaining returned/active booleans for safe creation-form redisplay.
 - Called from: `devices_index` after user-correctable validation errors.
 
 ### validate_device_form
@@ -710,7 +714,7 @@ Module notes:
 - Why this layer: it is pure data shaping that can be reused by any interface presenting rider fields.
 
 ### validate_rider_form
-- Description: requires a rider name and restricts the category to the supplied supported categories.
+- Description: requires a rider name; race categories are intentionally absent from rider profiles.
 - Called from: `create_rider` and `update_rider` in `services/riders.py`.
 - Why this layer: these rules depend only on supplied values rather than Flask or database state.
 
@@ -742,12 +746,12 @@ Module notes:
 ## Race utility layer
 
 - Parent directory: `src/utils`
-- File: `races.py`
+- Files: `races.py`, `race_entry.py`
 
-### DEFAULT_RACE_CATEGORIES
-- Description: retains the legacy shared rider-category default for callers outside dynamic race setup; race administration now reads categories from the database.
-- Called from: the optional default in `select_category` and legacy display preparation.
-- Why this layer: it preserves compatibility while race routes/categories move to durable per-race configuration.
+### normalize_race_entry_form
+- Description: parses the selected `category_id` plus the rider's current-device and previous-device confirmation answers; rider identity is deliberately excluded from submitted self-entry data.
+- Called from: the rider and administrator entry workflows in `web/races.py`.
+- Why this layer: it is pure form normalization and validation with no Flask, model, or database dependency.
 
 ### normalize_route_name / normalize_category_name
 - Description: trim submitted descriptive route names and race category labels before validation or persistence.
@@ -764,10 +768,10 @@ Module notes:
 - Called from: `save_race` in `web/races.py`.
 - Why this layer: it is pure form parsing that reuses `datetime_to_epoch` without Flask or model access.
 
-### select_category
-- Description: returns a requested supported category or the first available fallback.
-- Called from: `load_post_race_data` and `load_race_edit_data` in `services/races.py`.
-- Why this layer: category selection is a pure reusable rule.
+### parse_positive_id
+- Description: parses required or optional positive database identifiers used by category, rider, and route HTTP selections.
+- Called from: race controllers before invoking race-scoped services.
+- Why this layer: identifier parsing is pure validation and does not belong to Flask or persistence logic.
 
 ### parse_manual_time_epoch
 - Description: parses an optional timezone-naive manual time into UTC epoch seconds.
@@ -934,11 +938,11 @@ Module notes:
 - Called from: `create_device` and `update_device`.
 
 ### create_device
-- Basic use: combine pure field validation with database uniqueness checks, then stage a new `Device` row.
+- Basic use: combine pure field validation with database uniqueness checks, then stage a new `Device` row including returned/active availability state.
 - Called from: POST `/devices/`.
 
 ### update_device
-- Basic use: validate and stage changes to `device_info` and `epc_id` while keeping `Device.id` immutable.
+- Basic use: validate and stage changes to `device_info`, `epc_id`, `returned`, and `active` while keeping `Device.id` immutable.
 - Called from: POST `/devices/<device_id>/edit`.
 
 ## Rider service layer
@@ -978,7 +982,7 @@ Module notes:
 - Why this layer: it coordinates validation, Rider/User models, account linking, and the reused `utc_now` helper.
 
 ### update_rider
-- Description: validates and stages changes to a rider's name, category, team, bike, and bio.
+- Description: validates and stages changes to a rider's name, team, bike, and bio. Category is selected only when entering a race.
 - Called from: `rider_form` for POST `/riders/<rider_id>/edit`.
 - Why this layer: it applies rider mutation rules independently of Flask requests and responses.
 
@@ -988,10 +992,10 @@ Module notes:
 - File: `home.py`
 
 ### load_race_display_data
-- Description: queries active or all races, orders them by start epoch, prepares display datetimes, and selects the default category.
+- Description: queries active or all races, orders them by start epoch, and prepares display datetimes.
 - Called from: `_render_dashboard` in `web/home.py`.
 - Why this layer: it coordinates Race model data and reusable dashboard preparation without depending on Flask rendering.
-- Reuse: uses `epoch_to_datetime` from `utils/time.py` and `DEFAULT_RIDER_CATEGORIES` from `utils/riders.py`.
+- Reuse: uses `epoch_to_datetime` from `utils/time.py`.
 
 ## RFID service layer
 
@@ -1064,19 +1068,39 @@ Module notes:
 - Called from: `add_race_category`.
 - Why this layer: it coordinates the two supported category-creation workflows while keeping the controller thin.
 
+### rename_race_route / rename_race_category
+- Description: rename same-race routes/categories while maintaining normalized, case-insensitive identities.
+- Called from: route rename and category edit POST controllers.
+- Why this layer: durable naming and uniqueness rules belong at the service boundary.
+
+### reorder_race_category
+- Description: move a category to a positive display position and deterministically renumber the race's categories.
+- Called from: `edit_race_category`.
+- Why this layer: ordering is a multi-row durable-state operation.
+
+### set_race_category_archived
+- Description: archive or restore a category without deleting historical race entries.
+- Called from: `edit_race_category`.
+- Why this layer: archive visibility is a category domain rule.
+
+### assign_race_category_route
+- Description: reassign a category only to another Route owned by the same Race.
+- Called from: `edit_race_category`.
+- Why this layer: it enforces the same-race route rule before the composite database constraint.
+
+### list_race_category_records
+- Description: returns active or all category records in configured display order.
+- Called from: race edit, post-race, and entry composition.
+- Why this layer: it centralizes archive filtering and category ordering.
+
 ### list_race_routes
 - Description: returns a race's named routes in case-insensitive name order.
 - Called from: `load_race_edit_data`.
 - Why this layer: it provides reusable race-scoped route selection data.
 
-### list_race_categories
-- Description: returns alphabetically ordered category names attached to a race.
-- Called from: `load_post_race_data`.
-- Why this layer: it is reusable scoped model querying.
-
 ### get_category_for_race
-- Description: loads one Category scoped to a race and name.
-- Called from: `load_post_race_data`.
+- Description: loads one active Category by `category_id` with explicit race scope; archived access must be requested explicitly for administration.
+- Called from: race edit, post-race, GPX, manual assignment, and deletion operations.
 - Why this layer: it enforces race scoping at the durable-state boundary.
 
 ### get_route_for_category
@@ -1085,9 +1109,19 @@ Module notes:
 - Why this layer: it centralizes the shared scoped query.
 
 ### get_route_geojson
-- Description: returns stored route GeoJSON or `None`.
+- Description: returns stored route GeoJSON for a race-scoped `category_id`, or `None`.
 - Called from: post-race data and `route_geojson`.
 - Why this layer: it exposes reusable route data without HTTP response logic.
+
+### category_is_unused / delete_unused_race_category
+- Description: inspect every direct Category consumer (`RaceRider`, `LeaderboardCache`, and `LeaderboardHist`) and hard-delete only a category with no current or historical references; referenced categories must be archived.
+- Called from: the guarded category deletion POST controller.
+- Why this layer: historical-reference checks and durable deletion belong in one transactional domain operation.
+
+### delete_unused_race_route
+- Description: hard-delete a same-race Route only when no active or archived Category references it.
+- Called from: the guarded route deletion POST controller.
+- Why this layer: shared-route safety must be checked against durable category relationships rather than trusted form state.
 
 ### store_route_gpx
 - Description: validates category/GPX input and stages GPX plus converted GeoJSON.
@@ -1128,6 +1162,24 @@ Module notes:
 - Description: stages assignment deletion.
 - Called from: `remove_race_rider`.
 - Why this layer: it encapsulates RaceRider durable-state removal.
+
+## Automatic race-entry service layer
+
+- Parent directory: `src/services`
+- File: `race_entry.py`
+
+### get_rider_previous_device_id / load_race_entry_page_data
+- Description: resolve a rider's most recent device assignment and compose the active-race/category entry page without changing inventory or assignment state.
+- Called from: `enter_race` and the automatic assignment service.
+- Why this layer: these functions coordinate Race, Rider, Category, RaceRider, and Device history independently of HTTP rendering.
+
+### assign_device_and_create_entry
+- Description: creates one race-scoped RaceRider while locking the selected Device row with `FOR UPDATE SKIP LOCKED`; it prefers an eligible prior device, otherwise selects an active/returned device unused in the requested race.
+- Outcomes: `reused_previous`, `assigned_available`, `replacement_required`, or `none_available`.
+- Inventory discrepancy rule: `Device.returned` represents confirmed physical custody and is never changed by automatic assignment. If a rider confirms possession of their prior active, race-unused device while that device is marked `returned=True`, entry succeeds, the flag remains true, and the result reports an inventory discrepancy for administrator review.
+- Replacement rule: an inactive prior device, a prior device already used in the race, or a rejected/unidentified suggestion requires an active, returned, race-unused replacement. If none exists, no RaceRider is created.
+- Called from: `enter_race`.
+- Why this layer: candidate selection, locking, durable assignment, and outcome rules are one transactional domain operation rather than controller logic.
 
 ## Race timing service layer
 
@@ -1511,7 +1563,7 @@ Module header documents:
 ### Current baseline
 - Purpose: the active Alembic baseline is [438e4bd69220_baseline_schema.py](/home/matthew/Desktop/Master_Dev/Enduro_Tracker_WebApp/migrations/versions/438e4bd69220_baseline_schema.py), which can build the current PostgreSQL schema from an empty database.
 - Notes: legacy pre-baseline revisions are kept in [migrations/versions_legacy](/home/matthew/Desktop/Master_Dev/Enduro_Tracker_WebApp/migrations/versions_legacy) for reference only and are no longer part of the active migration chain.
-- Current head: [b8d5f3a02c7e_add_named_shared_routes.py](/home/matthew/Desktop/Master_Dev/Enduro_Tracker_WebApp/migrations/versions/b8d5f3a02c7e_add_named_shared_routes.py) adds and backfills `route.name`, then enforces trimmed, non-empty, case-insensitively unique route names per race. It follows [a7c4e2f91b6d_strengthen_race_category_scope.py](/home/matthew/Desktop/Master_Dev/Enduro_Tracker_WebApp/migrations/versions/a7c4e2f91b6d_strengthen_race_category_scope.py), which supplies the composite race-scope constraints used by shared routes.
+- Current head: [c9e6a4b13d8f_add_device_and_category_admin_fields.py](/home/matthew/Desktop/Master_Dev/Enduro_Tracker_WebApp/migrations/versions/c9e6a4b13d8f_add_device_and_category_admin_fields.py) marks existing devices active/returned, adds normalized/order/archive category state, and removes `riders.category`. It follows the named shared-route and race-scope migrations.
 
 ### Standard change process
 - Step 1: edit [models.py](/home/matthew/Desktop/Master_Dev/Enduro_Tracker_WebApp/src/db/models.py) first because the SQLAlchemy models remain the schema source of truth.
@@ -1637,7 +1689,7 @@ src/static/css/
 - Notes: stylesheet order matters. Shared files should define the default look, while page files should only add or override what that page genuinely needs.
 
 ### Current base.css usage
-- Purpose: Provide the lean shared static stylesheet for the Flask-rendered UI, currently applied to `templates/landing.html`, `templates/dashboard.html`, `templates/dashboard_admin.html`, `templates/placeholder.html`, `templates/login.html`, `templates/signup.html`, `templates/forgot_password.html`, `templates/reset_password.html`, `templates/riders_form.html`, `templates/devices.html`, `templates/device_edit.html`, `templates/rfid_view.html`, `templates/race_form.html`, and `templates/post_race.html`.
+- Purpose: Provide the lean shared static stylesheet for the Flask-rendered UI, currently applied to `templates/landing.html`, `templates/dashboard.html`, `templates/dashboard_admin.html`, `templates/placeholder.html`, `templates/login.html`, `templates/signup.html`, `templates/forgot_password.html`, `templates/reset_password.html`, `templates/riders_form.html`, `templates/devices.html`, `templates/device_edit.html`, `templates/rfid_view.html`, `templates/race_form.html`, `templates/race_entry.html`, and `templates/post_race.html`.
 - Reads: CSS custom properties defined in `:root` for navy, white, forest green, neutral surfaces, borders, text, and shadows.
 - Writes: Browser presentation only; no application data is changed.
 - Styles: theme variables, page shell, page header, primary buttons, section titles, muted text, empty state, and mobile layout adjustments.
@@ -1679,6 +1731,7 @@ src/static/js/
     polling.js
   pages/
     race-form.js
+    race-entry.js
     post-race.js
 ```
 - How it works: A template loads the component files it needs first, then loads its page file last. The page file reads DOM elements and `data-*` attributes, calls shared helpers, and owns event listeners for that page. For example, `race-form.js` can initialise the GPX route preview and rider/device auto-fill, while `post-race.js` can initialise route/track maps, live timing polling, track toggles, and the manual timing modal.
@@ -1708,12 +1761,14 @@ src/static/js/
 
 ### Current JS usage
 - Purpose: Record the current incremental JavaScript migration state.
-- Current state: `src/static/js/components/forms.js`, `src/static/js/components/maps.js`, `src/static/js/pages/race-form.js`, and `src/static/js/pages/post-race.js` exist. Templates load their required component files before their page file.
+- Current state: `src/static/js/components/forms.js`, `src/static/js/components/maps.js`, `src/static/js/pages/race-form.js`, `src/static/js/pages/race-entry.js`, and `src/static/js/pages/post-race.js` exist. Templates load their required component files before their page file.
 - `components/forms.js`: contains shared `data-auto-submit` select handling used by the category controls in `templates/race_form.html` and `templates/post_race.html`.
 - `components/maps.js`: contains shared Leaflet map creation, selected-category route fetching, GeoJSON layer creation, map-bounds fitting, basemap switching, and Esri tile-usage reporting helpers used by the race form and post-race pages.
 - `components/maps.js`: retains the OpenStreetMap base-layer helper and adds Esri satellite attach/remove helpers. The race form uses the existing OSM default. The post-race page creates an empty map, fits its selected route or rider track first, then attaches the backend-approved basemap so it requests only tiles near the visible course. After fitting the selected route it limits panning and minimum zoom to bounds padded by 25% on every side. It will use the retained OSM layer whenever `/api/map/config-status` does not allow satellite imagery. When Esri is attached, `createEsriTileUsageReporter` counts newly observed Esri tile resources and posts batched `tiles_delta` values to `/api/map/tile-usage`.
 - `pages/race-form.js`: contains race-form-only GPX upload validation and rider/device auto-fill behaviour. It uses the shared form/map helpers for category auto-submit and route preview. The GPX input uses native required-field validation so an empty upload is blocked before navigation even when JavaScript is unavailable; the script supplies the GPX-specific text for the browser validation popup. The script reads the race id and category from `#map` data attributes and the rider/device mapping from the `#last-device-by-rider-data` JSON data node.
+- `pages/race-entry.js`: contains entry-page-only administrator rider auto-submit and conditionally shows/requires the prior-device confirmation answer when the rider says they currently hold a device.
 - `pages/post-race.js`: contains post-race-only live track/timing polling, track overlay controls, map size preferences, finish confirmation, Esri tile-usage reporter startup, and the manual timing/TXT upload modal. It reads safe bootstrap endpoint/page configuration from `#post-race-map-config`, fits the route before attaching the base layer, fetches `/api/map/config-status`, and only uses Esri satellite imagery when that response allows it. If the backend blocks satellite access, the tile-usage endpoint later returns `satelliteAllowed=false`, or the status request fails, it attaches OpenStreetMap and shows the configured unavailable message.
+- Category-id asset cache control: templates append `v=20260720-category-id-v1` to the changed map and race page JavaScript URLs. This forces browsers and intermediate caches to fetch the `category_id` implementation instead of retaining the earlier category-name request code after deployment.
 - Notes: `components/polling.js` does not exist yet because polling is currently used only by the post-race page. Move polling code there only when another page needs the same stable behaviour.
 - External map dependencies: `templates/post_race.html` loads Leaflet 1.9.4, Esri Leaflet 3.0.19, and Esri Leaflet Vector 4.3.2 in that order. The Esri libraries make `L.esri.Vector.vectorBasemapLayer(...)` available for the later satellite-basemap implementation; loading them alone does not make an Esri request or replace the current OpenStreetMap layer.
 
@@ -1808,18 +1863,23 @@ src/static/js/
 - Called from:
   - `templates/dashboard.html`: "View Race" button in active races table.
   - `templates/dashboard_admin.html`: "Post Race" button in races table.
-  - `templates/post_race.html`: category `<select>` `onchange` (GET with `?category=`).
+  - `templates/post_race.html`: category `<select>` auto-submit (GET with `?category_id=`).
 
-### enter_race (GET `/races/<race_id>/enter`)
-- Purpose: Placeholder for future rider/admin race entry.
-- Reads: None.
-- Writes: None.
-- Renders: `templates/placeholder.html`.
-- Access: active rider or admin account through `rider_required`.
+### enter_race (GET/POST `/races/<race_id>/enter`)
+- Purpose: Let an authenticated rider enter themselves through a staged category/device workflow and automatic locked device assignment.
+- Reads: active `Race`, active/non-archived race-scoped `Category` rows and their shared `Route`, selected `Rider`, prior/current `RaceRider` assignments, and `Device` availability state.
+- Writes: one `RaceRider` on a successful assignment; never changes `Device.returned` or `Device.active`.
+- Renders: `templates/race_entry.html`.
+- Access: active rider account through `rider_required`; administrators are redirected to the separate admin endpoint.
 - Called from:
   - `templates/dashboard.html`: "Enter Race" button.
-  - `templates/dashboard_admin.html`: "Enter Race" button.
-- Notes: later this will allow riders to enter races, choose category, see approval status, and use automatic device assignment.
+- Notes: rider identity always comes from `current_user.rider_id`; submitted `rider_id` values are ignored. The confirmation shows both assigned category and device. Candidate rows are locked with PostgreSQL `FOR UPDATE SKIP LOCKED`.
+
+### enter_race_admin (GET/POST `/races/<race_id>/entries/new`)
+- Purpose: Provide the equivalent staged automatic-entry workflow when an administrator enters a selected rider on their behalf.
+- Access: active admin account through `admin_required`.
+- Identity boundary: submitted `rider_id` is accepted only on this explicitly administrator-authorized endpoint.
+- Called from: `templates/dashboard_admin.html`: "Enter Rider" button.
 
 ### post_race_admin (GET `/races/<race_id>/post-admin`)
 - Purpose: Placeholder for future admin post-race controls.
@@ -1864,7 +1924,7 @@ src/static/js/
 - Purpose: Return live `RaceRider` start/end timing values for the post-race riders table.
 - Reads: `RaceRider`, `Category`, `Route`.
 - Writes: None.
-- Query params: `category` optionally scopes results to the selected post-race category.
+- Query params: `category_id` optionally scopes results to the selected post-race category.
 - Returns: JSON payload with current timing display strings, datetime-local input strings, `multiple_rfid_flag`, and `finish_time_rfid_confirmed`.
 - Called from:
   - `templates/post_race.html`: 5-second polling refresh for start/end timing cells, RFID warning state, and confirmation button state.
@@ -1906,7 +1966,7 @@ src/static/js/
 - Access: active admin account through `admin_required`.
 - Called from:
   - `templates/dashboard_admin.html`: "Edit" button in races table.
-  - `templates/race_form.html`: category `<select>` `onchange` (GET with `?category=`).
+  - `templates/race_form.html`: category `<select>` auto-submit (GET with `?category_id=`).
   - Redirect from `save_race` after a successful save.
 
 ### add_race_route (POST `/races/<race_id>/routes/add`)
@@ -1916,12 +1976,34 @@ src/static/js/
 - Access: active admin account through `admin_required`.
 - Called from: `templates/race_form.html`: "Add Route" form.
 
+### rename_route (POST `/races/<race_id>/routes/<route_id>/rename`)
+- Purpose: Rename a same-race Route while preserving case-insensitive uniqueness.
+- Writes: `Route.name`.
+- Access: active admin account through `admin_required`.
+- Called from: `templates/race_form.html`: "Rename Route" forms.
+
+### delete_route (POST `/races/<race_id>/routes/<route_id>/delete`)
+- Purpose: Hard-delete a Route only when no active or archived category uses it.
+- Access: active admin account through `admin_required`.
+- Conflict behavior: returns HTTP 409 when the route is referenced.
+
 ### add_race_category (POST `/races/<race_id>/categories/add`)
 - Purpose: Create a freely named Category on an existing Route or create a new named Route inline.
 - Reads: same-race `Route` and `Category` names.
 - Writes: one `Category` and optionally one `Route`.
 - Access: active admin account through `admin_required`.
 - Called from: `templates/race_form.html`: "Add Category" form.
+
+### edit_race_category (POST `/races/<race_id>/categories/<category_id>/edit`)
+- Purpose: Rename, reorder, archive/restore, and reassign a race category.
+- Writes: `Category.name`, `name_normalized`, `display_order`, `archived`, and `route_id`.
+- Access: active admin account through `admin_required`.
+- Called from: `templates/race_form.html`: "Save Category" forms.
+
+### delete_race_category (POST `/races/<race_id>/categories/<category_id>/delete`)
+- Purpose: Hard-delete only never-used categories; referenced categories retain their IDs and must be archived instead.
+- Access: active admin account through `admin_required`.
+- Conflict behavior: returns HTTP 409 when RaceRider or leaderboard data references the category.
 
 ### upload_gpx (POST `/races/<race_id>/route/upload`)
 - Purpose: Upload a GPX file and store both GPX and GeoJSON on `Route`.
@@ -2250,7 +2332,7 @@ src/static/js/
 ## tests/test_devices_layers.py
 
 ### DeviceLayerTestCase
-- Purpose: test pure normalization/validation plus service create, list, update, immutable-id, and uniqueness behavior.
+- Purpose: test pure normalization/validation plus returned/active state, service create/list/update, immutable-id, and uniqueness behavior.
 - Database safety: uses only an isolated in-memory SQLite `devices` table.
 
 ### DeviceRouteTestCase
@@ -2265,7 +2347,7 @@ src/static/js/
 ## tests/test_riders_layers.py
 
 ### RiderLayerTestCase
-- Purpose: test normalization/validation, create/list/update operations, Rider/User linking, admin-created profiles, and one-profile enforcement.
+- Purpose: test category-free rider normalization/validation, create/list/update operations, Rider/User linking, admin-created profiles, and one-profile enforcement.
 - Database safety: uses only isolated in-memory SQLite Rider and User tables.
 
 ### RiderRouteTestCase
@@ -2280,7 +2362,7 @@ src/static/js/
 ## tests/test_home_rfid_rider_profiles_layers.py
 
 ### HomeLayerTestCase
-- Purpose: test active/all race loading, ordering, display conversion, category selection, and controller template delegation.
+- Purpose: test active/all race loading, ordering, display conversion, and controller template delegation without hard-coded category defaults.
 
 ### RfidLayerTestCase
 - Purpose: test filter normalization/parsing, query filtering/limits, display values, template rendering, and invalid-filter responses.
@@ -2299,13 +2381,16 @@ src/static/js/
 ## tests/test_races_layers.py
 
 ### RaceLifecycleAndRouteServiceTestCase
-- Purpose: test race parsing/save behavior, read-only empty edit-page composition, independent and inline named-route creation, categories attached to new/existing shared routes, GPX validation/storage, GeoJSON retrieval, route clearing, same-race composite references, and case-insensitive route/category-name uniqueness.
+- Purpose: test race parsing/save behavior, `category_id` page composition, route/category create/rename/reorder/archive/reassignment, guarded unused deletion, shared routes, GPX storage/clearing, same-race references, and normalized case-insensitive uniqueness.
 
 ### RaceEntryTimingTrackServiceTestCase
 - Purpose: test assignment management, per-race rider/device uniqueness, cross-race Category rejection, shared rider/device listing reuse, timing payloads, confirmation rules, manual trimmed snapshots, and history/cache fallback.
 
+### AutomaticRaceEntryServiceTestCase
+- Purpose: test form parsing, prior-device preference, confirmed-held-device custody preservation, returned-inventory discrepancy reporting, replacement selection, unavailable-device rollback, archived category rejection, and duplicate rider prevention.
+
 ### RaceControllerTestCase
-- Purpose: smoke-test representative race form, save redirect, explicit route/category POSTs (including a shared route), edit page, route GeoJSON, timing polling, manual-time validation, and finish-confirmation HTTP contracts.
+- Purpose: smoke-test race form/save, route create/rename, category create/edit/archive, shared routes, `category_id` consumers, administrator entry, authenticated-rider identity isolation, assigned category/device display, route GeoJSON, timing polling, manual-time validation, and finish-confirmation HTTP contracts.
 
 ### Database safety
 - Uses isolated in-memory SQLite race-related tables and does not access configured application databases.
@@ -2372,9 +2457,9 @@ docker compose -p enduro-dev --env-file .env.dev run --rm -e TEST_EMAIL_TO=you@e
 - Schema management: Alembic migrations are the source of truth for database schema. Runtime app, ingest, and worker startup must not call `Base.metadata.create_all()` because that can create tables outside migration history and confuse Alembic autogenerate. The legacy `init_db()` helper remains in `src/db/models.py` only for deliberate manual development use.
 - `ingest_raw`: raw device uploads (payload JSON, received/processed timestamps, parse error). Columns: `id`, `device_id`, `payload_json`, `received_at`, `received_at_epoch`, `processed_at`, `processed_at_epoch`, `parse_error`. Relationships: no enforced foreign-key relationship; records are associated to devices by `device_id` value only. Conditions: `device_id` and `payload_json` are required (`NOT NULL`).
 - `ingest_rfid`: raw RFID reader tag events. Columns: `id`, `epc`, `rssi`, `ant`, `time_stamp_epoch`, `reader_id`, `avg_rssi`, `received_at_epoch`, `processed_at_epoch`, `process_error`. Relationships: view-only link to `devices` through `ingest_rfid.epc == devices.epc_id` so unknown/false RFID reads can still be stored. Conditions: `epc` is required (`NOT NULL`); `time_stamp_epoch`, `reader_id`, and `processed_at_epoch` are indexed for worker lookups.
-- `devices`: registered hardware devices; referenced by race_riders. Columns: `id`, `device_info`, `epc_id`. Relationships: one device can map to many `race_riders` entries via `race_riders.device_id -> devices.id`, and can view many `ingest_rfid` rows through matching EPC values. Conditions: primary-key uniqueness on `id`; unique constraint `ux_devices_epc_id` enforces at most one device per non-null EPC tag.
+- `devices`: registered hardware devices; referenced by race_riders. Columns: `id`, `device_info`, `epc_id`, `returned`, `active`. Relationships: one device can map to many `race_riders` entries via `race_riders.device_id -> devices.id`, and can view many `ingest_rfid` rows through matching EPC values. Conditions: returned/active are required booleans defaulting true; primary-key uniqueness on `id`; `ux_devices_epc_id` enforces at most one device per non-null EPC tag.
 - `points`: parsed GNSS fixes per device (t_epoch, lat/lon, optional metrics). Columns: `id`, `device_id`, `t_epoch`, `lat`, `lon`, `ele`, `sog`, `cog`, `fx`, `hdop`, `nsat`, `received_at`, `received_at_epoch`. Relationships: no enforced foreign key to `devices`; points are linked to `race_riders` through a view-only `device_id` join. Conditions: unique constraint `ux_points_device_time` enforces one row per (`device_id`, `t_epoch`).
-- `riders`: core athlete details (name, team, bike, bio). Columns: `id`, `name`, `bike`, `bio`, `team`, `category`. Relationships: one rider can have many `race_riders` entries via `race_riders.rider_id -> riders.id`, and can optionally have one linked login account via `users.rider_id -> riders.id`. Conditions: `name` is required (`NOT NULL`).
+- `riders`: race-independent athlete details. Columns: `id`, `name`, `bike`, `bio`, `team`. Relationships: one rider can have many category-specific `race_riders` entries via `race_riders.rider_id -> riders.id`, and can optionally have one linked login account via `users.rider_id -> riders.id`. Conditions: `name` is required; no category is stored on the profile.
 - `users`: browser login accounts for riders and admins. Columns: `id`, `first_name`, `last_name`, `username`, `username_normalized`, `email`, `email_normalized`, `password_hash`, `role`, `rider_id`, `is_active`, `auth_version`, `created_at`, `updated_at`, `last_login_at`. Relationships: optionally links one account to one `rider`, has many `auth_tokens`, and can be actor/target for `auth_audit_events`. Conditions: role is constrained to `rider` or `admin`; `username_normalized`, `email_normalized`, and non-null `rider_id` are unique; passwords are stored only as hashes. Notes: the model uses Flask-Login's `UserMixin` for standard login-session helpers such as `get_id()`.
 - `auth_tokens`: one-time hashed authentication tokens, currently for password reset. Columns: `id`, `user_id`, `purpose`, `token_hash`, `expires_at`, `used_at`, `created_at`. Relationships: belongs to one `user`. Conditions: `user_id`, `purpose`, `token_hash`, `expires_at`, and `created_at` are required; raw tokens are never stored.
 - `auth_audit_events`: security-relevant account event history. Columns: `id`, `actor_user_id`, `target_user_id`, `action`, `metadata_json`, `created_at`. Relationships: optional actor and target links to `users`. Conditions: `action` and `created_at` are required; metadata must not contain passwords, raw reset tokens, or other secrets.
@@ -2384,7 +2469,7 @@ docker compose -p enduro-dev --env-file .env.dev run --rm -e TEST_EMAIL_TO=you@e
 - Migration: the map tile quota tables are created by `migrations/versions/4578a2e08ba3_add_esri_tile_quota_tables.py`. The migration is manually written because the dev database may already contain these tables from `Base.metadata.create_all()`; clean databases still receive normal `CREATE TABLE` operations.
 - `races`: event metadata (name, description, website, starts/ends, active flag). Columns: `id`, `name`, `description`, `website`, `starts_at`, `starts_at_epoch`, `ends_at`, `ends_at_epoch`, `active`. Relationships: one race can have many `route` rows via `route.race_id -> races.id`. Conditions: `name` and `active` are required (`NOT NULL`) and `active` defaults to `true`.
 - `route`: named per-race route geometry storage. Columns: `id`, `race_id`, `name`, `geojson`, `gpx`. Relationships: belongs to one `race` and can have many shared `categories`. Conditions: `race_id` and `name` are required; `ck_route_name_trimmed_nonempty` rejects blank/padded names; `ux_route_race_name_ci` makes names case-insensitively unique per race; `ux_route_id_race_id` exposes the exact composite key required by category race-scope enforcement.
-- `categories`: race-scoped category labels tied to a route. Columns: `id`, `route_id`, `race_id`, `name`. Relationships: belongs to one same-race `route`, can share that route with other categories, and is referenced by many `race_riders`, plus leaderboard cache/history links. Conditions: `(route_id, race_id) -> route(id, race_id)` prevents cross-race route assignment; `ux_categories_id_race_id` provides the entry-scope target; `ux_categories_race_name_ci` makes trimmed names case-insensitively unique per race; `ck_categories_name_trimmed_nonempty` rejects blank or padded names.
+- `categories`: race-scoped category labels tied to a route. Columns: `id`, `route_id`, `race_id`, `name`, `name_normalized`, `display_order`, `archived`. Relationships: belongs to one same-race `route`, can share that route with other categories, and is referenced by race entries and leaderboard history. Conditions: the composite route key prevents cross-race assignment; normalized names are unique per race; names must be trimmed/non-empty; normalized identity must equal `lower(name)`; order must be positive. Archived rows retain history but are excluded from active selection.
 - `race_riders`: joins a rider, device, race, and category while storing timing and status flags. Columns: `id`, `race_id`, `rider_id`, `device_id`, `category_id`, `comm_setting`, `active`, `recording`, `start_time_rfid`, `start_time_rfid_epoch`, `finish_time_rfid`, `finish_time_rfid_epoch`, `start_time_pi`, `start_time_pi_epoch`, `finish_time_pi`, `finish_time_pi_epoch`, `multiple_rfid_flag`, `finish_time_rfid_confirmed`. Relationships: each row belongs to one rider, device, and same-race category, with one-to-one links to track cache/history. Conditions: `(category_id, race_id) -> categories(id, race_id)` prevents cross-race category assignment; `ux_race_riders_race_rider` permits one entry per rider per race; `ux_race_riders_race_device` permits one assignment per device per race; required status/timing flags retain their existing defaults.
 - `leaderboard_cache`: live leaderboard snapshot per category. Columns: `category_id`, `payload_json`, `etag`, `updated_at`, `updated_at_epoch`. Relationships: one-to-one with `categories` via `category_id` as both foreign key and primary key. Conditions: `payload_json` and `updated_at` are required (`NOT NULL`).
 - `track_cache`: live track geojson per race_rider. Columns: `race_rider_id`, `geojson`, `etag`, `updated_at`, `updated_at_epoch`. Relationships: one-to-one with `race_riders` via `race_rider_id` as both foreign key and primary key. Conditions: `updated_at` is required (`NOT NULL`).
@@ -2431,7 +2516,7 @@ docker compose -p enduro-dev --env-file .env.dev run --rm -e TEST_EMAIL_TO=you@e
 - General: Admin operational dashboard.
 - Displays: All races table (name, start, website, active).
 - Styles: Uses `src/static/css/base.css` for the lean shared base theme and `src/static/css/tables.css` for the race-list table.
-- UI actions: "Public Dashboard", "Input Rider Details", "Manage Devices", "Add New Race", "View RFID Records", "Rider Profiles", "User Management", "Edit", "Post Race", "Post Admin", "Enter Race", "Results".
+- UI actions: "Public Dashboard", "Input Rider Details", "Manage Devices", "Add New Race", "View RFID Records", "Rider Profiles", "User Management", "Edit", "Post Race", "Post Admin", "Enter Rider", "Results".
 - Linked pages (buttons):
   - "Public Dashboard" → `/dashboard`.
   - "Input Rider Details" → `/riders/new` (riders form page).
@@ -2443,11 +2528,11 @@ docker compose -p enduro-dev --env-file .env.dev run --rm -e TEST_EMAIL_TO=you@e
   - "Edit" → `/races/<id>/edit` (race edit page).
   - "Post Race" → `/races/<id>/post` (current post-race page).
   - "Post Admin" → `/races/<id>/post-admin`.
-  - "Enter Race" → `/races/<id>/enter`.
+  - "Enter Rider" → `/races/<id>/entries/new`.
   - "Results" → `/races/<id>/results`.
 - Pulls: `races`, `default_category`.
 - Pushes: none (links only).
-- Routes called: `/dashboard-admin`, `/dashboard`, `/riders/new`, `/devices/`, `/races/new`, `/rfid/`, `/rider`, `/admin/users`, `/races/<id>/edit`, `/races/<id>/post`, `/races/<id>/post-admin`, `/races/<id>/enter`, `/races/<id>/results`.
+- Routes called: `/dashboard-admin`, `/dashboard`, `/riders/new`, `/devices/`, `/races/new`, `/rfid/`, `/rider`, `/admin/users`, `/races/<id>/edit`, `/races/<id>/post`, `/races/<id>/post-admin`, `/races/<id>/entries/new`, `/races/<id>/results`.
 - Embedded scripts: none.
 - Notes: protected by admin access.
 
@@ -2460,32 +2545,32 @@ docker compose -p enduro-dev --env-file .env.dev run --rm -e TEST_EMAIL_TO=you@e
   - Back button target is supplied by each route.
 - Pulls: `title`, `description`, `route`, `access`, `back_url`, `back_label`.
 - Pushes: none.
-- Routes called: `/rider`, `/races/<id>/enter`, `/races/<id>/post-admin`, `/races/<id>/results`, `/admin/users`.
+- Routes called: `/rider`, `/races/<id>/post-admin`, `/races/<id>/results`, `/admin/users`.
 - Embedded scripts: none.
 
 ### devices.html
 - General: Device list and create form.
-- Displays: Device ID, RFID EPC, Device Info.
+- Displays: Device ID, RFID EPC, Device Info, Returned, and Active state.
 - Styles: Uses `src/static/css/base.css` for the lean shared base theme, `src/static/css/forms.css` for the device form panel and messages, and `src/static/css/tables.css` for the device table.
 - UI actions: "Save" (create), "Edit", "Back to Admin Dashboard".
 - Linked pages (buttons):
   - "Back to Admin Dashboard" → `/dashboard-admin`.
   - "Edit" → `/devices/<id>/edit` (device edit page).
 - Pulls: `devices`, `message`, `success`, `form`.
-- Pushes: POST create device with optional RFID EPC.
+- Pushes: POST create device with optional RFID EPC and returned/active toggles.
 - Routes called: `/devices/` (GET/POST), `/devices/<id>/edit`, `/dashboard-admin`.
 - Embedded scripts: none.
 
 ### device_edit.html
-- General: Edit a single device's info and RFID EPC.
-- Displays: Device ID (read-only), Device Info, RFID EPC.
+- General: Edit a single device's info, RFID EPC, returned state, and active state.
+- Displays: Device ID (read-only), Device Info, RFID EPC, Returned, and Active toggles.
 - Styles: Uses `src/static/css/base.css` for the lean shared base theme and `src/static/css/forms.css` for the edit form panel, inputs, status messages, and form action layout.
 - UI actions: "Save", "Back to Devices", "Admin Dashboard".
 - Linked pages (buttons):
   - "Back to Devices" → `/devices/` (devices list page).
   - "Admin Dashboard" → `/dashboard-admin`.
 - Pulls: `device`, `message`, `success`.
-- Pushes: POST update device info and optional RFID EPC.
+- Pushes: POST update device info, optional RFID EPC, returned, and active state.
 - Routes called: `/devices/<id>/edit`, `/devices/`, `/dashboard-admin`.
 - Embedded scripts: none.
 
@@ -2504,33 +2589,44 @@ docker compose -p enduro-dev --env-file .env.dev run --rm -e TEST_EMAIL_TO=you@e
 
 ### riders_form.html
 - General: Create/edit rider form with riders list.
-- Displays: Rider fields and riders table.
+- Displays: race-independent rider name, team, bike, and bio fields plus the riders table.
 - Styles: Uses `src/static/css/base.css` for the lean shared base theme, `src/static/css/forms.css` for the rider form panel and messages, and `src/static/css/tables.css` for the riders table.
 - UI actions: "Save", "Edit", "Back to Admin Dashboard".
 - Linked pages (buttons/links):
   - "Back to Admin Dashboard" → `/dashboard-admin`.
   - "Edit" → `/riders/<id>/edit` (loads rider into form).
-- Pulls: `categories`, `riders`, `form`, `editing_rider`, `message`, `success`.
+- Pulls: `riders`, `form`, `editing_rider`, `message`, `success`.
 - Pushes: POST create/update rider.
 - Routes called: `/riders/new`, `/riders/<id>/edit`, `/dashboard-admin`.
 - Embedded scripts: none.
 
 ### race_form.html
-- General: Create/edit a race, independently create named routes, attach freely named categories to new or existing routes, upload shared-route GPX, and manage category riders.
-- Displays: Race fields, route/category creation forms, existing category selector, selected route name/map preview, and rider/device tables.
+- General: Create/edit a race, independently create/rename/delete-unused named routes, create/rename/reorder/archive/reassign/delete-unused categories, upload shared-route GPX, and manage category riders using stable `category_id` values.
+- Displays: Race fields, route/category administration forms, active category selector, selected route name/map preview, and rider/device tables.
 - Styles: Uses `src/static/css/base.css` for the lean shared base theme, `src/static/css/forms.css` for form controls and row actions, `src/static/css/tables.css` for the rider assignment table, `src/static/css/maps.css` for the Leaflet route preview container, and `src/static/css/race-form.css` for race-form-only layout.
-- UI actions: "Save Changes", "Add Route", "Add Category", category dropdown (reload), "Upload GPX", "Remove GPX", "Save" (add rider), "Edit" (update rider entry), "Remove" (delete entry), "Back".
+- UI actions: "Save Changes", "Add Route", "Rename Route", guarded "Delete if unused", "Add Category", "Save Category", category dropdown, GPX upload/removal, and rider entry management.
 - Linked pages (buttons/links):
   - "Back" → `/dashboard-admin`.
   - "Open Website" → external race website URL (if set).
-- Pulls: `race`, `routes`, `categories`, `selected_category`, `route`, `geojson`, `riders`, `devices`, `race_riders`, `last_device_by_rider`.
-- Pushes: POST save race, create route/category, upload/remove GPX, and add/edit/remove riders.
-- Routes called: `/races/save`, `/races/<id>/edit?category=...`, `/races/<id>/routes/add`, `/races/<id>/categories/add`, `/races/<id>/route/upload`, `/races/<id>/route/remove`, `/races/<id>/route/geojson`, `/races/<id>/riders/add`, `/races/<id>/riders/<race_rider_id>/edit`, `/races/<id>/riders/<race_rider_id>/remove`.
+- Pulls: `race`, `routes`, `category_records`, active `categories`, `selected_category`, `route`, `geojson`, `riders`, `devices`, `race_riders`, `last_device_by_rider`.
+- Pushes: POST save race, create/rename routes, create/edit categories, upload/remove GPX, and add/edit/remove riders.
+- Routes called: `/races/save`, `/races/<id>/edit?category_id=...`, `/races/<id>/routes/add`, `/races/<id>/routes/<route_id>/rename`, `/races/<id>/routes/<route_id>/delete`, `/races/<id>/categories/add`, `/races/<id>/categories/<category_id>/edit`, `/races/<id>/categories/<category_id>/delete`, plus GPX and rider management routes carrying `category_id`.
 - Embedded scripts:
   - Category route selection: enables and requires the inline new-route name only when "Create a new route" is selected.
   - GPX upload validation: native required-field validation blocks an empty file submission with a browser popup; JavaScript supplies the GPX-specific popup text.
   - Shared form/map scripts: auto-submit the category selector and fetch/render the route GeoJSON through `components/forms.js` and `components/maps.js`.
   - Rider add helper: auto-fills device based on `last_device_by_rider` mapping.
+
+### race_entry.html
+- General: Staged rider/admin race-entry page backed by automatic device assignment; self-entry and admin-on-behalf entry use separate authorization boundaries.
+- Displays: selected rider, active category selection with route names, their most recent assigned device, current-device questions, assigned category and device, existing category/device entry, and any inventory discrepancy requiring admin review.
+- Styles: Uses `src/static/css/base.css` and `src/static/css/forms.css`.
+- UI actions: administrator rider selection, category selection, current-device answer, prior-device confirmation when applicable, and "Enter Race".
+- Pulls: `race`, `riders`, `selected_rider`, `categories`, `previous_device_id`, `existing_entry`, `result`, `message`, and `success`.
+- Pushes: POST rider/category and device answers; successful requests create one RaceRider, while unavailable replacement requests create none.
+- Routes called: rider GET/POST `/races/<id>/enter`, admin GET/POST `/races/<id>/entries/new`, and the appropriate dashboard back link.
+- Search metadata: `noindex,nofollow`; authenticated operational entry pages remain disallowed by `robots.txt` and are not included in the sitemap.
+- Embedded scripts: shared form auto-submit plus `pages/race-entry.js` conditional prior-device confirmation behavior.
 
 ### post_race.html
 - General: Post-race review with route map and rider tracks.
@@ -2541,7 +2637,7 @@ docker compose -p enduro-dev --env-file .env.dev run --rm -e TEST_EMAIL_TO=you@e
   - "Back to Dashboard" → `/dashboard`.
 - Pulls: `race`, `categories`, `selected_category`, `geojson`, `riders`, `has_multiple_rfid_flag`.
 - Pushes: Fetch route GeoJSON, fetch map config status, POST Esri tile-usage deltas, fetch stored rider track (cache-first for live polling), fetch live rider timing values, POST manual timing edits, POST finish timing confirmation, POST TXT log ingest.
-- Routes called: `/races/<id>/post?category=...`, `/races/<id>/route/geojson?category=...`, `/api/map/config-status`, `/api/map/tile-usage`, `/races/<id>/race-rider/<id>/track`, `/races/<id>/race-rider/<id>/track?prefer_cache=1`, `/races/<id>/race-rider-timings?category=...`, `/races/<id>/race-rider/<id>/manual-times`, `/races/<id>/race-rider/<id>/confirm-finish`, `/api/v1/upload-text`.
+- Routes called: `/races/<id>/post?category_id=...`, `/races/<id>/route/geojson?category_id=...`, `/api/map/config-status`, `/api/map/tile-usage`, `/races/<id>/race-rider/<id>/track`, `/races/<id>/race-rider/<id>/track?prefer_cache=1`, `/races/<id>/race-rider-timings?category_id=...`, `/races/<id>/race-rider/<id>/manual-times`, `/races/<id>/race-rider/<id>/confirm-finish`, `/api/v1/upload-text`.
 - Embedded scripts:
   - Shared form/map scripts: auto-submit the category selector and initialise the Leaflet route map through `components/forms.js` and `components/maps.js`.
   - Esri quota integration: fetch config-status after route bounds are fitted, count Esri tile resources, POST tile deltas to `/api/map/tile-usage`, and switch to OpenStreetMap when the backend blocks satellite access.

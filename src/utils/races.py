@@ -13,21 +13,19 @@ validate_route_name
     Validate a normalized descriptive route name.
 validate_category_name
     Validate a normalized race category name.
-select_category
-    Select a requested category or fall back to the first available category.
+parse_positive_id
+    Parse a required or optional positive database identifier.
 parse_manual_time_epoch
     Parse an optional timezone-naive manual timing value into epoch seconds.
 
 These helpers avoid Flask, SQLAlchemy, and templates while reusing the existing
-application time conversion rules and shared rider/race category defaults.
+application time conversion rules.
 """
 
 from datetime import datetime
 
-from src.utils.riders import DEFAULT_RIDER_CATEGORIES
 from src.utils.time import datetime_to_epoch, iso_to_epoch
 
-DEFAULT_RACE_CATEGORIES = DEFAULT_RIDER_CATEGORIES
 MAX_ROUTE_NAME_LENGTH = 128
 MAX_CATEGORY_NAME_LENGTH = 64
 
@@ -129,23 +127,32 @@ def normalize_race_form(values) -> dict:
     }
 
 
-def select_category(requested, categories=DEFAULT_RACE_CATEGORIES) -> str | None:
+def parse_positive_id(value, required: bool = False) -> int | None:
     """
-    Select a supported category with a stable fallback.
+    Parse a positive database identifier without any Flask dependency.
 
     Input Args:
-      requested: raw requested category name.
-      categories: ordered iterable of available category names.
+      value: raw identifier value.
+      required: whether a missing value is invalid.
 
     Output:
-      Requested category when supported, otherwise the first available category,
-      or None when no categories are available.
+      Positive integer or None for an allowed missing value.
+
+    Raises:
+      ValueError when the value is malformed, non-positive, or required but
+      missing.
     """
-    available = tuple(categories or ())
-    normalized = (requested or "").strip()
-    if normalized in available:
-        return normalized
-    return available[0] if available else None
+    if value is None or str(value).strip() == "":
+        if required:
+            raise ValueError("A selection is required.")
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError("Selection must be a positive number.") from error
+    if parsed < 1:
+        raise ValueError("Selection must be a positive number.")
+    return parsed
 
 
 def parse_manual_time_epoch(value) -> int | None:

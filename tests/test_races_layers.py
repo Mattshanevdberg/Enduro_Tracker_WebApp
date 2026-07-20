@@ -21,6 +21,8 @@ from sqlalchemy.pool import StaticPool
 from src.db.models import (
     Category,
     Device,
+    LeaderboardCache,
+    LeaderboardHist,
     Race,
     RaceRider,
     Rider,
@@ -34,16 +36,28 @@ from src.services.race_riders import (
     load_race_rider_management_data,
     update_race_rider,
 )
+from src.services.race_entry import (
+    RaceEntryValidationError,
+    assign_device_and_create_entry,
+    get_rider_previous_device_id,
+)
 from src.services.race_routes import (
     RaceRouteNotFoundError,
     RaceRouteValidationError,
+    assign_race_category_route,
     clear_route_gpx,
     create_race_category,
     create_race_category_with_route,
     create_race_route,
+    delete_unused_race_category,
+    delete_unused_race_route,
     get_route_geojson,
-    list_race_categories,
+    list_race_category_records,
     list_race_routes,
+    rename_race_category,
+    rename_race_route,
+    reorder_race_category,
+    set_race_category_archived,
     store_route_gpx,
 )
 from src.services.race_timing import (
@@ -63,19 +77,25 @@ from src.services.races import (
     save_race,
 )
 from src.utils.races import (
-    DEFAULT_RACE_CATEGORIES,
     normalize_race_form,
     parse_manual_time_epoch,
-    select_category,
+    parse_positive_id,
 )
+from src.utils.race_entry import normalize_race_entry_form
 from src.web.races import (
     add_race_category,
     add_race_route,
     bp_races,
     confirm_finish_time,
+    delete_race_category,
+    delete_route,
     edit_race,
+    edit_race_category,
+    enter_race,
+    enter_race_admin,
     manual_times,
     new_race,
+    rename_route,
     save_race as save_race_route,
 )
 
@@ -110,6 +130,8 @@ class RaceDatabaseTestCase(unittest.TestCase):
             Race.__table__,
             Route.__table__,
             Category.__table__,
+            LeaderboardCache.__table__,
+            LeaderboardHist.__table__,
             Rider.__table__,
             Device.__table__,
             RaceRider.__table__,
@@ -131,8 +153,8 @@ class RaceDatabaseTestCase(unittest.TestCase):
                 starts_at_epoch=1_700_000_000,
                 active=True,
             )
-            rider_one = Rider(name="Alice Rider", category="Professional")
-            rider_two = Rider(name="Bob Rider", category="Open")
+            rider_one = Rider(name="Alice Rider")
+            rider_two = Rider(name="Bob Rider")
             device_one = Device(id="pi001", device_info="Primary")
             device_two = Device(id="pi002", device_info="Backup")
             session.add_all([race, rider_one, rider_two, device_one, device_two])
@@ -149,6 +171,9 @@ class RaceDatabaseTestCase(unittest.TestCase):
                 route_id=route.id,
                 race_id=race.id,
                 name="Professional",
+                name_normalized="professional",
+                display_order=1,
+                archived=False,
             )
             session.add(category)
             session.flush()
@@ -215,7 +240,9 @@ class RaceLifecycleAndRouteServiceTestCase(RaceDatabaseTestCase):
         )
         self.assertEqual(form["name"], "New Race")
         self.assertIsInstance(form["starts_at_epoch"], int)
-        self.assertEqual(select_category("Bad", DEFAULT_RACE_CATEGORIES), "Professional")
+        self.assertEqual(parse_positive_id("42", required=True), 42)
+        with self.assertRaises(ValueError):
+            parse_positive_id("Professional", required=True)
         self.assertIsInstance(parse_manual_time_epoch("2026-07-16T10:30:00"), int)
         with self.assertRaises(ValueError):
             parse_manual_time_epoch("not-a-time")
@@ -244,17 +271,17 @@ class RaceLifecycleAndRouteServiceTestCase(RaceDatabaseTestCase):
             post_data = load_post_race_data(
                 session,
                 self.race_id,
-                "Professional",
+                self.category_id,
             )
             self.assertEqual(post_data["race"].name, "Layered Race")
-            self.assertEqual(post_data["selected_category"], "Professional")
+            self.assertEqual(post_data["selected_category"].id, self.category_id)
             self.assertEqual(post_data["riders"][0]["name"], "Alice Rider")
             self.assertTrue(post_data["has_multiple_rfid_flag"])
 
             edit_data = load_race_edit_data(
                 session,
                 self.race_id,
-                "Professional",
+                self.category_id,
             )
             self.assertEqual(edit_data["route"].race_id, self.race_id)
             self.assertEqual(edit_data["route"].name, "Main Course")
@@ -294,18 +321,21 @@ class RaceLifecycleAndRouteServiceTestCase(RaceDatabaseTestCase):
             store_route_gpx(
                 session,
                 self.race_id,
-                "Open",
+                category.id,
                 VALID_GPX,
             )
             session.commit()
-            self.assertIn("FeatureCollection", get_route_geojson(session, self.race_id, "Open"))
+            self.assertIn("FeatureCollection", get_route_geojson(session, self.race_id, category.id))
             self.assertEqual(
-                get_route_geojson(session, self.race_id, "Junior"),
-                get_route_geojson(session, self.race_id, "Open"),
+                get_route_geojson(session, self.race_id, shared_category.id),
+                get_route_geojson(session, self.race_id, category.id),
             )
             self.assertEqual(
-                list_race_categories(session, self.race_id),
-                ["Junior", "Open", "Professional"],
+                [
+                    row.name
+                    for row in list_race_category_records(session, self.race_id)
+                ],
+                ["Professional", "Open", "Junior"],
             )
 
             with self.assertRaises(RaceRouteValidationError):
@@ -330,15 +360,104 @@ class RaceLifecycleAndRouteServiceTestCase(RaceDatabaseTestCase):
                 store_route_gpx(
                     session,
                     self.race_id,
-                    "Unsupported",
+                    999999,
                     VALID_GPX,
                 )
-            clear_route_gpx(session, self.race_id, "Open")
+            clear_route_gpx(session, self.race_id, category.id)
             session.commit()
             self.assertIsNone(route.geojson)
-            self.assertIsNone(get_route_geojson(session, self.race_id, "Junior"))
+            self.assertIsNone(get_route_geojson(session, self.race_id, shared_category.id))
             with self.assertRaises(RaceRouteNotFoundError):
-                clear_route_gpx(session, self.race_id, "Elite")
+                clear_route_gpx(session, self.race_id, 999999)
+        finally:
+            session.close()
+
+    def test_category_and_route_administration_operations(self):
+        """Rename, order, archive, restore, and reassign durable race setup."""
+        session = self.session_factory()
+        try:
+            route = create_race_route(session, self.race_id, "Junior Course")
+            category = create_race_category(
+                session,
+                self.race_id,
+                route.id,
+                "Junior",
+            )
+            rename_race_route(
+                session,
+                self.race_id,
+                route.id,
+                "Youth Course",
+            )
+            rename_race_category(
+                session,
+                self.race_id,
+                category.id,
+                "Youth",
+            )
+            reorder_race_category(session, self.race_id, category.id, 1)
+            main_route_id = session.get(Category, self.category_id).route_id
+            assign_race_category_route(
+                session,
+                self.race_id,
+                category.id,
+                main_route_id,
+            )
+            set_race_category_archived(
+                session,
+                self.race_id,
+                category.id,
+                True,
+            )
+            session.commit()
+
+            self.assertEqual(route.name, "Youth Course")
+            self.assertEqual(category.name_normalized, "youth")
+            self.assertEqual(category.display_order, 1)
+            self.assertEqual(category.route_id, main_route_id)
+            self.assertNotIn(
+                "Youth",
+                [
+                    row.name
+                    for row in list_race_category_records(session, self.race_id)
+                ],
+            )
+            all_categories = list_race_category_records(
+                session,
+                self.race_id,
+                include_archived=True,
+            )
+            self.assertTrue(
+                next(row for row in all_categories if row.id == category.id).archived
+            )
+
+            set_race_category_archived(
+                session,
+                self.race_id,
+                category.id,
+                False,
+            )
+            session.commit()
+            self.assertEqual(
+                list_race_category_records(session, self.race_id)[0].name,
+                "Youth",
+            )
+
+            # A setup-only category and its now-unreferenced former route may
+            # be removed, while the category holding RaceRider history may not.
+            delete_unused_race_category(session, self.race_id, category.id)
+            session.flush()
+            delete_unused_race_route(session, self.race_id, route.id)
+            with self.assertRaisesRegex(
+                RaceRouteValidationError,
+                "Archive this category",
+            ):
+                delete_unused_race_category(
+                    session,
+                    self.race_id,
+                    self.category_id,
+                )
+            session.rollback()
         finally:
             session.close()
 
@@ -393,6 +512,228 @@ class RaceEntryTimingTrackServiceTestCase(RaceDatabaseTestCase):
         finally:
             session.close()
 
+
+class AutomaticRaceEntryServiceTestCase(RaceDatabaseTestCase):
+    """Exercise automatic assignment outcomes and inventory invariants."""
+
+    def _create_previous_assignment(
+        self,
+        session,
+        rider_id: int,
+        device_id: str,
+    ) -> RaceRider:
+        """Create an older race assignment used as device history."""
+        previous_race = Race(name="Previous Race", active=False)
+        session.add(previous_race)
+        session.flush()
+        previous_route = Route(
+            race_id=previous_race.id,
+            name="Previous Course",
+        )
+        session.add(previous_route)
+        session.flush()
+        previous_category = Category(
+            route_id=previous_route.id,
+            race_id=previous_race.id,
+            name="Previous Category",
+            name_normalized="previous category",
+            display_order=1,
+            archived=False,
+        )
+        session.add(previous_category)
+        session.flush()
+        previous_entry = RaceRider(
+            race_id=previous_race.id,
+            rider_id=rider_id,
+            device_id=device_id,
+            category_id=previous_category.id,
+            active=False,
+            recording=False,
+        )
+        session.add(previous_entry)
+        session.flush()
+        return previous_entry
+
+    def test_entry_form_parsing_and_previous_available_reuse(self):
+        """Parse answers and prefer an active returned previous device."""
+        form, errors = normalize_race_entry_form(
+            {
+                "category_id": str(self.category_id),
+                "has_device": "no",
+            }
+        )
+        self.assertEqual(errors, [])
+        self.assertFalse(form["has_device"])
+        self.assertNotIn("rider_id", form)
+
+        session = self.session_factory()
+        try:
+            self._create_previous_assignment(
+                session,
+                self.rider_two_id,
+                "pi002",
+            )
+            session.commit()
+            self.assertEqual(
+                get_rider_previous_device_id(session, self.rider_two_id),
+                "pi002",
+            )
+            device = session.get(Device, "pi002")
+            original_returned = device.returned
+            result = assign_device_and_create_entry(
+                session,
+                self.race_id,
+                self.rider_two_id,
+                self.category_id,
+                has_device=False,
+                confirms_previous_device=False,
+            )
+            session.commit()
+            self.assertEqual(result.outcome, "reused_previous")
+            self.assertEqual(result.assigned_device_id, "pi002")
+            self.assertEqual(result.assigned_category_id, self.category_id)
+            self.assertEqual(result.assigned_category_name, "Professional")
+            self.assertEqual(device.returned, original_returned)
+        finally:
+            session.close()
+
+    def test_confirmed_held_device_ignores_returned_without_mutating_it(self):
+        """Reuse a confirmed held device marked unreturned and preserve custody."""
+        session = self.session_factory()
+        try:
+            self._create_previous_assignment(
+                session,
+                self.rider_two_id,
+                "pi002",
+            )
+            device = session.get(Device, "pi002")
+            device.returned = False
+            session.commit()
+
+            result = assign_device_and_create_entry(
+                session,
+                self.race_id,
+                self.rider_two_id,
+                self.category_id,
+                has_device=True,
+                confirms_previous_device=True,
+            )
+            session.commit()
+            self.assertEqual(result.outcome, "reused_previous")
+            self.assertFalse(result.inventory_discrepancy)
+            self.assertFalse(device.returned)
+        finally:
+            session.close()
+
+    def test_confirmed_returned_device_reports_inventory_discrepancy(self):
+        """Assign a confirmed device marked in stock and report the mismatch."""
+        session = self.session_factory()
+        try:
+            self._create_previous_assignment(
+                session,
+                self.rider_two_id,
+                "pi002",
+            )
+            device = session.get(Device, "pi002")
+            device.returned = True
+            session.commit()
+
+            result = assign_device_and_create_entry(
+                session,
+                self.race_id,
+                self.rider_two_id,
+                self.category_id,
+                has_device=True,
+                confirms_previous_device=True,
+            )
+            session.commit()
+            self.assertTrue(result.inventory_discrepancy)
+            self.assertIn("Inventory discrepancy", result.message)
+            self.assertTrue(device.returned)
+        finally:
+            session.close()
+
+    def test_unusable_previous_gets_replacement_and_none_available_creates_none(self):
+        """Replace an unusable held device or report no available inventory."""
+        session = self.session_factory()
+        try:
+            self._create_previous_assignment(
+                session,
+                self.rider_two_id,
+                "pi001",
+            )
+            session.commit()
+            replacement = assign_device_and_create_entry(
+                session,
+                self.race_id,
+                self.rider_two_id,
+                self.category_id,
+                has_device=True,
+                confirms_previous_device=True,
+            )
+            session.commit()
+            self.assertEqual(replacement.outcome, "replacement_required")
+            self.assertEqual(replacement.assigned_device_id, "pi002")
+
+            session.delete(replacement.race_rider)
+            session.get(Device, "pi002").active = False
+            session.commit()
+            none_available = assign_device_and_create_entry(
+                session,
+                self.race_id,
+                self.rider_two_id,
+                self.category_id,
+                has_device=False,
+                confirms_previous_device=False,
+            )
+            self.assertEqual(none_available.outcome, "none_available")
+            self.assertIsNone(none_available.race_rider)
+            self.assertEqual(
+                session.query(RaceRider)
+                .filter(
+                    RaceRider.race_id == self.race_id,
+                    RaceRider.rider_id == self.rider_two_id,
+                )
+                .count(),
+                0,
+            )
+        finally:
+            session.close()
+
+    def test_duplicate_rider_and_archived_category_are_rejected(self):
+        """Reject an existing race rider and categories closed to entry."""
+        session = self.session_factory()
+        try:
+            with self.assertRaisesRegex(
+                RaceEntryValidationError,
+                "already entered",
+            ):
+                assign_device_and_create_entry(
+                    session,
+                    self.race_id,
+                    self.rider_one_id,
+                    self.category_id,
+                    has_device=False,
+                    confirms_previous_device=False,
+                )
+            category = session.get(Category, self.category_id)
+            category.archived = True
+            session.commit()
+            with self.assertRaisesRegex(
+                RaceEntryValidationError,
+                "active category",
+            ):
+                assign_device_and_create_entry(
+                    session,
+                    self.race_id,
+                    self.rider_two_id,
+                    self.category_id,
+                    has_device=False,
+                    confirms_previous_device=False,
+                )
+        finally:
+            session.close()
+
     def test_category_scope_name_and_shared_route_constraints(self):
         """Enforce same-race routes and names while allowing route sharing."""
         session = self.session_factory()
@@ -401,6 +742,9 @@ class RaceEntryTimingTrackServiceTestCase(RaceDatabaseTestCase):
                 route_id=session.get(Category, self.category_id).route_id,
                 race_id=self.race_id,
                 name="Open",
+                name_normalized="open",
+                display_order=2,
+                archived=False,
             )
             session.add(shared)
             session.commit()
@@ -414,6 +758,9 @@ class RaceEntryTimingTrackServiceTestCase(RaceDatabaseTestCase):
                     route_id=second_route.id,
                     race_id=self.race_id,
                     name="professional",
+                    name_normalized="professional",
+                    display_order=3,
+                    archived=False,
                 )
             )
             with self.assertRaises(IntegrityError):
@@ -429,6 +776,9 @@ class RaceEntryTimingTrackServiceTestCase(RaceDatabaseTestCase):
                     route_id=existing_category.route_id,
                     race_id=other_race.id,
                     name="Junior",
+                    name_normalized="junior",
+                    display_order=1,
+                    archived=False,
                 )
             )
             with self.assertRaises(IntegrityError):
@@ -563,8 +913,14 @@ class RaceControllerTestCase(RaceDatabaseTestCase):
             "races.new_race": new_race,
             "races.save_race": save_race_route,
             "races.edit_race": edit_race,
+            "races.enter_race": enter_race,
+            "races.enter_race_admin": enter_race_admin,
             "races.add_race_route": add_race_route,
             "races.add_race_category": add_race_category,
+            "races.rename_route": rename_route,
+            "races.edit_race_category": edit_race_category,
+            "races.delete_race_category": delete_race_category,
+            "races.delete_route": delete_route,
             "races.manual_times": manual_times,
             "races.confirm_finish_time": confirm_finish_time,
         }.items():
@@ -572,15 +928,16 @@ class RaceControllerTestCase(RaceDatabaseTestCase):
 
         self.client = self.app.test_client()
         self.session_patch = patch("src.web.races.SessionLocal", new=self.session_factory)
+        self.current_user = SimpleNamespace(
+            id=1,
+            role="admin",
+            rider_id=None,
+            is_authenticated=True,
+            is_active=True,
+        )
         self.user_patch = patch(
             "src.web.races.current_user",
-            new=SimpleNamespace(
-                id=1,
-                role="admin",
-                rider_id=None,
-                is_authenticated=True,
-                is_active=True,
-            ),
+            new=self.current_user,
         )
         self.session_patch.start()
         self.user_patch.start()
@@ -628,7 +985,7 @@ class RaceControllerTestCase(RaceDatabaseTestCase):
             },
         )
         self.assertEqual(category_response.status_code, 302)
-        self.assertIn("category=Junior+Women", category_response.headers["Location"])
+        self.assertRegex(category_response.headers["Location"], r"category_id=\d+")
         shared_response = self.client.post(
             f"/races/{created_race_id}/categories/add",
             data={
@@ -637,16 +994,97 @@ class RaceControllerTestCase(RaceDatabaseTestCase):
             },
         )
         self.assertEqual(shared_response.status_code, 302)
+        rename_response = self.client.post(
+            f"/races/{created_race_id}/routes/{created_route_id}/rename",
+            data={"route_name": "Renamed Course"},
+        )
+        self.assertEqual(rename_response.status_code, 302)
+        session = self.session_factory()
+        try:
+            junior_men = session.query(Category).filter_by(
+                race_id=created_race_id,
+                name="Junior Men",
+            ).one()
+            junior_men_id = junior_men.id
+        finally:
+            session.close()
+        edit_category_response = self.client.post(
+            f"/races/{created_race_id}/categories/{junior_men_id}/edit",
+            data={
+                "category_name": "Youth Men",
+                "display_order": "1",
+                "route_id": str(created_route_id),
+                "archived": "on",
+            },
+        )
+        self.assertEqual(edit_category_response.status_code, 302)
+        self.assertEqual(
+            self.client.post(
+                f"/races/{self.race_id}/categories/{self.category_id}/delete"
+            ).status_code,
+            409,
+        )
+        self.assertEqual(
+            self.client.post(
+                f"/races/{created_race_id}/routes/{created_route_id}/delete"
+            ).status_code,
+            409,
+        )
+        self.assertEqual(
+            self.client.post(
+                f"/races/{created_race_id}/categories/{junior_men_id}/delete"
+            ).status_code,
+            302,
+        )
 
-        self.assertEqual(self.client.get(f"/races/{self.race_id}/edit").status_code, 200)
+        edit_page = self.client.get(
+            f"/races/{self.race_id}/edit?category_id={self.category_id}"
+        )
+        self.assertEqual(edit_page.status_code, 200)
+        self.assertIn(
+            f'data-category-id="{self.category_id}"'.encode(),
+            edit_page.data,
+        )
+        self.assertIn(b"maps.js?v=20260720-category-id-v1", edit_page.data)
+        self.assertIn(b"race-form.js?v=20260720-category-id-v1", edit_page.data)
+        self.assertEqual(
+            self.client.get(
+                f"/races/{self.race_id}/edit?category_id=999999"
+            ).status_code,
+            400,
+        )
+        self.assertEqual(
+            self.client.get(
+                f"/races/{self.race_id}/post?category_id=999999"
+            ).status_code,
+            400,
+        )
+        entry_get = self.client.get(
+            f"/races/{self.race_id}/entries/new?rider_id={self.rider_two_id}"
+            f"&category_id={self.category_id}"
+        )
+        self.assertEqual(entry_get.status_code, 200)
+        self.assertIn(b"Does the rider currently have a device", entry_get.data)
+        entry_post = self.client.post(
+            f"/races/{self.race_id}/entries/new",
+            data={
+                "rider_id": str(self.rider_two_id),
+                "category_id": str(self.category_id),
+                "has_device": "no",
+            },
+        )
+        self.assertEqual(entry_post.status_code, 200)
+        self.assertIn(b"Assigned device pi002", entry_post.data)
+        self.assertIn(b"Category: <strong>Professional</strong>", entry_post.data)
+        self.assertIn(b"Assigned device: <strong>pi002</strong>", entry_post.data)
         geojson_response = self.client.get(
-            f"/races/{self.race_id}/route/geojson?category=Professional"
+            f"/races/{self.race_id}/route/geojson?category_id={self.category_id}"
         )
         self.assertEqual(geojson_response.status_code, 200)
         self.assertEqual(json.loads(geojson_response.data), {"history": "route"})
 
         timing_response = self.client.get(
-            f"/races/{self.race_id}/race-rider-timings?category=Professional"
+            f"/races/{self.race_id}/race-rider-timings?category_id={self.category_id}"
         )
         self.assertEqual(timing_response.status_code, 200)
         self.assertEqual(timing_response.get_json()["riders"][0]["race_rider_id"], self.race_rider_id)
@@ -661,6 +1099,41 @@ class RaceControllerTestCase(RaceDatabaseTestCase):
         )
         self.assertEqual(confirm_response.status_code, 200)
         self.assertTrue(confirm_response.get_json()["timing"]["finish_time_rfid_confirmed"])
+
+    def test_self_entry_ignores_every_submitted_rider_id(self):
+        """Derive self-entry identity only from the authenticated rider account."""
+        self.current_user.role = "rider"
+        self.current_user.rider_id = self.rider_one_id
+
+        response = self.client.get(
+            f"/races/{self.race_id}/enter?rider_id={self.rider_two_id}"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Alice Rider", response.data)
+        self.assertIn(b"Professional", response.data)
+        self.assertIn(b"pi001", response.data)
+
+        malicious_post = self.client.post(
+            f"/races/{self.race_id}/enter",
+            data={
+                "rider_id": str(self.rider_two_id),
+                "category_id": str(self.category_id),
+                "has_device": "no",
+            },
+        )
+        self.assertEqual(malicious_post.status_code, 400)
+        session = self.session_factory()
+        try:
+            self.assertIsNone(
+                session.query(RaceRider)
+                .filter_by(
+                    race_id=self.race_id,
+                    rider_id=self.rider_two_id,
+                )
+                .one_or_none()
+            )
+        finally:
+            session.close()
 
 
 if __name__ == "__main__":

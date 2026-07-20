@@ -341,7 +341,6 @@ def signup():
 
         rider = Rider(
             name=f"{form['first_name']} {form['last_name']}".strip(),
-            category=None,
             team=None,
             bike=None,
             bio=None,

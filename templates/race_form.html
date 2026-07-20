@@ -77,6 +77,28 @@
         <button class="btn race-align-end" type="submit">Add Route</button>
       </form>
 
+      {% if routes %}
+        <div class="race-admin-list">
+          <h3>Existing Routes</h3>
+          {% for race_route in routes %}
+            <form method="post" action="{{ url_for('races.rename_route', race_id=race.id, route_id=race_route.id) }}" class="row race-route-edit">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+              <div class="race-field-wide">
+                <label for="route_name_{{ race_route.id }}">Route Name</label>
+                <input id="route_name_{{ race_route.id }}" name="route_name" maxlength="128" value="{{ race_route.name }}" required />
+              </div>
+              <button class="btn race-align-end" type="submit">Rename Route</button>
+              <button
+                class="btn race-align-end"
+                type="submit"
+                formaction="{{ url_for('races.delete_route', race_id=race.id, route_id=race_route.id) }}"
+                onclick="return confirm('Delete this route? This is allowed only when no category uses it.');"
+              >Delete if unused</button>
+            </form>
+          {% endfor %}
+        </div>
+      {% endif %}
+
       <!-- A category can select an existing route or create a named route inline. -->
       <form method="post" action="{{ url_for('races.add_race_category', race_id=race.id) }}" class="race-category-add">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
@@ -104,14 +126,56 @@
         </div>
       </form>
 
+      {% if category_records %}
+        <div class="race-admin-list">
+          <h3>Category Administration</h3>
+          {% for category_record in category_records %}
+            <form method="post" action="{{ url_for('races.edit_race_category', race_id=race.id, category_id=category_record.id) }}" class="race-category-edit">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+              <div class="row">
+                <div class="race-field-wide">
+                  <label for="category_name_{{ category_record.id }}">Category Name</label>
+                  <input id="category_name_{{ category_record.id }}" name="category_name" maxlength="64" value="{{ category_record.name }}" required />
+                </div>
+                <div class="race-field-narrow">
+                  <label for="display_order_{{ category_record.id }}">Order</label>
+                  <input id="display_order_{{ category_record.id }}" name="display_order" type="number" min="1" value="{{ category_record.display_order }}" required />
+                </div>
+                <div class="race-field-wide">
+                  <label for="route_id_{{ category_record.id }}">Route</label>
+                  <select id="route_id_{{ category_record.id }}" name="route_id" required>
+                    {% for race_route in routes %}
+                      <option value="{{ race_route.id }}" {{ 'selected' if race_route.id == category_record.route_id else '' }}>{{ race_route.name }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+              </div>
+              <div class="row">
+                <label>
+                  <input type="checkbox" name="archived" {{ 'checked' if category_record.archived else '' }} />
+                  Archived
+                </label>
+                <button class="btn" type="submit">Save Category</button>
+                <button
+                  class="btn"
+                  type="submit"
+                  formaction="{{ url_for('races.delete_race_category', race_id=race.id, category_id=category_record.id) }}"
+                  onclick="return confirm('Delete this unused category? Referenced categories must be archived.');"
+                >Delete if unused</button>
+              </div>
+            </form>
+          {% endfor %}
+        </div>
+      {% endif %}
+
       {% if categories %}
         <hr class="race-section-divider" />
         <form method="get" action="{{ url_for('races.edit_race', race_id=race.id) }}" class="row">
           <!-- Switching category reloads its shared route, GPX, and entries. -->
-          <label for="category">Manage Category</label>
-          <select id="category" name="category" data-auto-submit>
+          <label for="category_id">Manage Category</label>
+          <select id="category_id" name="category_id" data-auto-submit>
             {% for c in categories %}
-              <option value="{{ c }}" {{ 'selected' if c == selected_category else '' }}>{{ c }}</option>
+              <option value="{{ c.id }}" {{ 'selected' if c.id == selected_category.id else '' }}>{{ c.name }}</option>
             {% endfor %}
           </select>
         </form>
@@ -120,14 +184,14 @@
         <!-- Upload GPX onto the selected category's shared Route row. -->
         <form id="gpx-upload-form" method="post" action="{{ url_for('races.upload_gpx', race_id=race.id) }}" enctype="multipart/form-data" class="row race-gpx-upload">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
-          <input type="hidden" name="category" value="{{ selected_category }}"/>
+          <input type="hidden" name="category_id" value="{{ selected_category.id }}"/>
           <input id="gpx-file" type="file" name="gpx_file" accept=".gpx" required />
           <button class="btn" type="submit">Upload GPX</button>
         </form>
 
         <form method="post" action="{{ url_for('races.remove_gpx', race_id=race.id) }}" class="row race-gpx-remove">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
-          <input type="hidden" name="category" value="{{ selected_category }}"/>
+          <input type="hidden" name="category_id" value="{{ selected_category.id }}"/>
           <button class="btn" type="submit">Remove GPX</button>
         </form>
 
@@ -136,7 +200,7 @@
           id="map"
           class="map-preview"
           data-race-id="{{ race.id }}"
-          data-category="{{ selected_category }}"
+          data-category-id="{{ selected_category.id }}"
         ></div>
         <script type="application/json" id="last-device-by-rider-data">
           {{ (last_device_by_rider or {}) | tojson }}
@@ -151,13 +215,13 @@
 
   <!-- Riders table (bottom, full width) -->
   <div class="full">
-    <h2>Riders{% if selected_category %} (Category: {{ selected_category }}){% endif %}</h2>
+    <h2>Riders{% if selected_category %} (Category: {{ selected_category.name }}){% endif %}</h2>
 
     {% if race and selected_category %}
       <!-- Add new rider to this race/category -->
       <form method="post" action="{{ url_for('races.add_race_rider', race_id=race.id) }}" class="row race-rider-add">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
-        <input type="hidden" name="category" value="{{ selected_category }}"/>
+        <input type="hidden" name="category_id" value="{{ selected_category.id }}"/>
 
         <!-- Rider selection with datalist auto-complete -->
         <div class="race-field-wide">
@@ -212,14 +276,12 @@
                 <td><input type="checkbox" name="active" {{ 'checked' if row.active else '' }} /></td>
                 <td><input type="checkbox" name="recording" {{ 'checked' if row.recording else '' }} /></td>
                 <td>
-                  <input type="hidden" name="category" value="{{ selected_category }}"/>
                   <button class="btn" type="submit">Edit</button>
                 </td>
               </form>
               <td>
                 <form method="post" action="{{ url_for('races.remove_race_rider', race_id=race.id, race_rider_id=row.id) }}" onsubmit="return confirm('Remove rider from race?');">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
-                  <input type="hidden" name="category" value="{{ selected_category }}"/>
                   <button class="btn" type="submit">Remove</button>
                 </form>
               </td>
@@ -240,9 +302,9 @@
 
 {% if race %}
   {% if selected_category %}
-  <script defer src="{{ url_for('static', filename='js/components/maps.js') }}"></script>
+  <script defer src="{{ url_for('static', filename='js/components/maps.js', v='20260720-category-id-v1') }}"></script>
   {% endif %}
-<script defer src="{{ url_for('static', filename='js/pages/race-form.js') }}"></script>
+<script defer src="{{ url_for('static', filename='js/pages/race-form.js', v='20260720-category-id-v1') }}"></script>
 {% endif %}
 </body>
 </html>

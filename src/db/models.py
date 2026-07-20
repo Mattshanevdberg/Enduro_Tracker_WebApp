@@ -159,6 +159,8 @@ class Device(Base):
       id          : device identifier used by trackers and race_riders
       device_info : optional descriptive text for the hardware
       epc_id      : optional unique RFID EPC/tag assigned to this device
+      returned    : whether the physical tracker has been returned
+      active      : whether the tracker is eligible for future assignment
 
     Relationship:
       - One Device can have many IngestRfid rows when ingest_rfid.epc matches epc_id.
@@ -169,6 +171,8 @@ class Device(Base):
     id = Column(String(64), primary_key=True)
     device_info = Column(Text, nullable=True)
     epc_id = Column(String(128), nullable=True)
+    returned = Column(Boolean, nullable=False, default=True, server_default="true")
+    active = Column(Boolean, nullable=False, default=True, server_default="true")
 
     # EPC values must map to at most one Device. PostgreSQL still permits multiple
     # NULL values, which is useful while older devices have not been assigned tags yet.
@@ -257,7 +261,6 @@ class Rider(Base):
     bike = Column(String(128), nullable=True)
     bio = Column(Text, nullable=True)
     team = Column(String(128), nullable=True)
-    category = Column(String(64), nullable=True)
 
     race_entries = relationship("RaceRider", back_populates="rider")
     user_account = relationship("User", back_populates="rider", uselist=False)
@@ -636,6 +639,9 @@ class Category(Base):
     (route_id, race_id) foreign key requires every Category to use a Route from
     the same Race. Category names are trimmed/non-empty and are unique without
     regard to case within one Race, even when categories use different routes.
+    Normalized names support deterministic uniqueness, display_order controls
+    organiser-defined ordering, and archived hides retired categories without
+    deleting historical race entries.
     """
 
     __tablename__ = "categories"
@@ -644,10 +650,13 @@ class Category(Base):
     route_id = Column(Integer, nullable=False, index=True)
     race_id = Column(Integer, ForeignKey("races.id", ondelete="RESTRICT"), nullable=False, index=True)
     name = Column(String(64), nullable=False) # store the label (e.g., "Professional", "Open", "Junior")
+    name_normalized = Column(String(64), nullable=False)
+    display_order = Column(Integer, nullable=False, default=1, server_default="1")
+    archived = Column(Boolean, nullable=False, default=False, server_default="false")
 
     # The (id, race_id) key is the exact composite target used by RaceRider.
     # The route/race foreign key protects against cross-race route assignment.
-    # The expression index allows different races to reuse a label while
+    # The normalized name permits different races to reuse a label while
     # treating labels such as "Open" and "open" as duplicates in one race.
     __table_args__ = (
         ForeignKeyConstraint(
@@ -657,18 +666,28 @@ class Category(Base):
             ondelete="RESTRICT",
         ),
         UniqueConstraint("id", "race_id", name="ux_categories_id_race_id"),
+        UniqueConstraint(
+            "race_id",
+            "name_normalized",
+            name="ux_categories_race_name_normalized",
+        ),
         CheckConstraint(
             "name = trim(name) AND length(name) > 0",
             name="ck_categories_name_trimmed_nonempty",
         ),
+        CheckConstraint(
+            "name_normalized = lower(name)",
+            name="ck_categories_name_normalized",
+        ),
+        CheckConstraint(
+            "display_order >= 1",
+            name="ck_categories_display_order_positive",
+        ),
         Index(
-            "ux_categories_race_name_ci",
+            "ix_categories_race_archive_order",
             "race_id",
-            # The adjacent check constraint guarantees stored names are already
-            # trimmed, so lower(name) is sufficient and reflects cleanly through
-            # Alembic/PostgreSQL without an equivalent-expression false diff.
-            func.lower(name),
-            unique=True,
+            "archived",
+            "display_order",
         ),
     )
 

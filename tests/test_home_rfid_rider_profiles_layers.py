@@ -85,10 +85,10 @@ class HomeLayerTestCase(unittest.TestCase):
         self.engine.dispose()
 
     def test_dashboard_service_filters_orders_and_prepares_display_values(self):
-        """Load active/all races with ordered display datetimes and category."""
+        """Load active/all races with ordered display datetimes."""
         session = self.session_factory()
         try:
-            active_races, default_category = load_race_display_data(
+            active_races = load_race_display_data(
                 session,
                 active_only=True,
             )
@@ -97,15 +97,12 @@ class HomeLayerTestCase(unittest.TestCase):
                 ["Early Active", "Later Active"],
             )
             self.assertTrue(all(race.starts_at is not None for race in active_races))
-            self.assertEqual(default_category, "Professional")
 
-            all_races, custom_default = load_race_display_data(
+            all_races = load_race_display_data(
                 session,
                 active_only=False,
-                categories=("Custom",),
             )
             self.assertEqual(len(all_races), 3)
-            self.assertEqual(custom_default, "Custom")
         finally:
             session.close()
 
@@ -144,6 +141,7 @@ class HomeLayerTestCase(unittest.TestCase):
             "Disallow: /races/save\n"
             "Disallow: /races/*/edit\n"
             "Disallow: /races/*/enter\n"
+            "Disallow: /races/*/entries/\n"
             "Disallow: /races/*/post-admin\n"
             "Disallow: /races/*/routes/\n"
             "Disallow: /races/*/categories/\n"

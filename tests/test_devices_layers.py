@@ -61,14 +61,26 @@ class DeviceLayerTestCase(unittest.TestCase):
         form = normalize_device_form("  pi001  ", "  Test tracker  ", "  EPC-1  ")
         self.assertEqual(
             form,
-            {"id": "pi001", "device_info": "Test tracker", "epc_id": "EPC-1"},
+            {
+                "id": "pi001",
+                "device_info": "Test tracker",
+                "epc_id": "EPC-1",
+                "returned": True,
+                "active": True,
+            },
         )
         self.assertEqual(device_form_template_values(form), form)
 
         blank_form = normalize_device_form(" ", " ", " ")
         self.assertEqual(
             device_form_template_values(blank_form),
-            {"id": "", "device_info": "", "epc_id": ""},
+            {
+                "id": "",
+                "device_info": "",
+                "epc_id": "",
+                "returned": True,
+                "active": True,
+            },
         )
         self.assertEqual(validate_device_form(blank_form), ["Device ID is required."])
 
@@ -106,6 +118,8 @@ class DeviceLayerTestCase(unittest.TestCase):
             session.commit()
             self.assertEqual(first_device.id, "pi001")
             self.assertEqual(first_device.device_info, "Updated")
+            self.assertTrue(first_device.returned)
+            self.assertTrue(first_device.active)
 
             with self.assertRaisesRegex(DeviceValidationError, "already linked"):
                 update_device(
@@ -176,7 +190,13 @@ class DeviceRouteTestCase(unittest.TestCase):
 
         create_response = self.client.post(
             "/devices/",
-            data={"id": "pi010", "device_info": "Route test", "epc_id": "EPC-10"},
+            data={
+                "id": "pi010",
+                "device_info": "Route test",
+                "epc_id": "EPC-10",
+                "returned": "on",
+                "active": "on",
+            },
         )
         self.assertEqual(create_response.status_code, 200)
         self.assertIn(b"Device &#39;pi010&#39; created", create_response.data)
@@ -191,7 +211,11 @@ class DeviceRouteTestCase(unittest.TestCase):
         self.assertEqual(self.client.get("/devices/pi010/edit").status_code, 200)
         edit_response = self.client.post(
             "/devices/pi010/edit",
-            data={"device_info": "Updated route test", "epc_id": "EPC-11"},
+            data={
+                "device_info": "Updated route test",
+                "epc_id": "EPC-11",
+                "returned": "on",
+            },
         )
         self.assertEqual(edit_response.status_code, 200)
 
@@ -200,6 +224,8 @@ class DeviceRouteTestCase(unittest.TestCase):
             device = verification_session.get(Device, "pi010")
             self.assertEqual(device.device_info, "Updated route test")
             self.assertEqual(device.epc_id, "EPC-11")
+            self.assertTrue(device.returned)
+            self.assertFalse(device.active)
         finally:
             verification_session.close()
 

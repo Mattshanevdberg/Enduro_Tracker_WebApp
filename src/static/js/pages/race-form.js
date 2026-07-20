@@ -59,7 +59,7 @@ Future extraction guidance:
   // embedding Jinja expressions in this external JavaScript file.
   const mapElement = document.getElementById('map');
   const raceId = mapElement?.dataset?.raceId || '';
-  const category = mapElement?.dataset?.category || '';
+  const categoryId = mapElement?.dataset?.categoryId || '';
 
   if (mapElement && raceId && !window.EnduroMaps) {
     console.error('Shared map helpers are unavailable; skipping map preview setup.');
@@ -68,7 +68,7 @@ Future extraction guidance:
     if (!map) {
       console.error('Leaflet is unavailable; skipping map preview setup.');
     } else {
-      window.EnduroMaps.fetchRouteGeojson(raceId, category)
+      window.EnduroMaps.fetchRouteGeojson(raceId, categoryId)
       .then(geojson => {
         const layer = window.EnduroMaps.addGeojsonLayer(map, geojson);
         window.EnduroMaps.fitMapToLayer(map, layer);

@@ -304,10 +304,10 @@ window.EnduroMaps = (function initialiseEnduroMaps() {
 
   // Fetch the selected category route without embedding server template syntax
   // in a page script. The route endpoint is shared by both map pages.
-  function fetchRouteGeojson(raceId, category) {
+  function fetchRouteGeojson(raceId, categoryId) {
     const encodedRaceId = encodeURIComponent(raceId || '');
-    const encodedCategory = encodeURIComponent(category || '');
-    return fetch(`/races/${encodedRaceId}/route/geojson?category=${encodedCategory}`)
+    const encodedCategoryId = encodeURIComponent(categoryId || '');
+    return fetch(`/races/${encodedRaceId}/route/geojson?category_id=${encodedCategoryId}`)
       .then(response => {
         if (!response.ok) {
           throw new Error('Route request failed.');

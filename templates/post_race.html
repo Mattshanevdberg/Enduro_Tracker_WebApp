@@ -54,16 +54,22 @@
       {% if categories %}
         <!-- Category picker: drives which route we show below. -->
         <form class="category-form" method="get" action="{{ url_for('races.post_race', race_id=race.id) }}">
-          <label for="category">Category</label>
-          <select id="category" name="category" data-auto-submit>
+          <label for="category_id">Category</label>
+          <select id="category_id" name="category_id" data-auto-submit>
             {% for cat in categories %}
-              <option value="{{ cat }}" {{ 'selected' if cat == selected_category else '' }}>{{ cat }}</option>
+              <option value="{{ cat.id }}" {{ 'selected' if cat.id == selected_category.id else '' }}>{{ cat.name }}</option>
             {% endfor %}
           </select>
         </form>
 
         <div class="map-wrapper">
-          <div id="map" class="map-canvas" data-race-id="{{ race.id }}" data-category="{{ selected_category or '' }}"></div>
+          <div
+            id="map"
+            class="map-canvas"
+            data-race-id="{{ race.id }}"
+            data-category-id="{{ selected_category.id if selected_category else '' }}"
+            data-category-name="{{ selected_category.name if selected_category else '' }}"
+          ></div>
         </div>
         {# Safe bootstrap only. Esri config/key must come from /api/map/config-status after quota checks. #}
         <script id="post-race-map-config" type="application/json">{{ public_map_config | tojson }}</script>
@@ -87,7 +93,7 @@
 
     <!-- Right column: riders linked to this race/category -->
     <div class="riders-column">
-      <h3>Riders for {{ selected_category or 'category' }}</h3>
+      <h3>Riders for {{ selected_category.name if selected_category else 'category' }}</h3>
       {% if riders %}
         <div class="table-card riders-table-wrap">
           <table class="riders-table">
@@ -182,8 +188,8 @@
     </div>
   </div>
 
-  <script defer src="{{ url_for('static', filename='js/components/maps.js') }}"></script>
-  <script defer src="{{ url_for('static', filename='js/pages/post-race.js') }}"></script>
+  <script defer src="{{ url_for('static', filename='js/components/maps.js', v='20260720-category-id-v1') }}"></script>
+  <script defer src="{{ url_for('static', filename='js/pages/post-race.js', v='20260720-category-id-v1') }}"></script>
   {% endif %}
 </body>
 </html>

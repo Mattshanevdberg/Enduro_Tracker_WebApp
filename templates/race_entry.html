@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Enter {{ race.name }}</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex,nofollow" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/forms.css') }}" />
+  </head>
+  <body>
+    <main class="page-shell">
+      <header class="page-header">
+        <h1>Enter {{ race.name }}</h1>
+        <p>Select a race category and confirm the rider's current device situation.</p>
+      </header>
+
+      <div class="stack">
+        <a class="btn" href="{{ url_for('home.dashboard_admin') if include_rider_selector else url_for('home.dashboard') }}">Back to Dashboard</a>
+      </div>
+
+      {% if message %}
+        <div class="msg {{ 'ok' if success else 'err' }}">
+          {{ message }}
+          {% if result and result.inventory_discrepancy %}
+            <strong>Device inventory requires administrator review.</strong>
+          {% endif %}
+        </div>
+      {% endif %}
+
+      {% if result and result.race_rider %}
+        <section class="content-panel">
+          <h2>Entry confirmed</h2>
+          <p>Category: <strong>{{ result.assigned_category_name }}</strong></p>
+          <p>Assigned device: <strong>{{ result.assigned_device_id }}</strong></p>
+        </section>
+      {% endif %}
+
+      {% if include_rider_selector %}
+        <section class="content-panel">
+          <form method="get" action="{{ url_for('races.enter_race_admin', race_id=race.id) }}" class="form-grid">
+            <label for="rider_selector">Rider</label>
+            <select id="rider_selector" name="rider_id" data-auto-submit required>
+              <option value="">-- select rider --</option>
+              {% for rider in riders %}
+                <option value="{{ rider.id }}" {{ 'selected' if selected_rider and rider.id == selected_rider.id else '' }}>{{ rider.name }}</option>
+              {% endfor %}
+            </select>
+          </form>
+        </section>
+      {% endif %}
+
+      {% if selected_rider %}
+        <section class="content-panel">
+          <h2>{{ selected_rider.name }}</h2>
+          <p>
+            Previous assigned device:
+            <strong>{{ previous_device_id or 'No previous device found' }}</strong>
+          </p>
+
+          {% if existing_entry %}
+            <p class="msg ok">
+              This rider is already entered in category
+              <strong>{{ existing_entry.category.name }}</strong> with device
+              <strong>{{ existing_entry.device_id }}</strong>. No new entry was created.
+            </p>
+          {% elif not categories %}
+            <p class="msg err">This race has no active category available for entry.</p>
+          {% else %}
+            <form
+              method="get"
+              action="{{ url_for('races.enter_race_admin' if include_rider_selector else 'races.enter_race', race_id=race.id) }}"
+              class="form-grid"
+            >
+              {% if include_rider_selector %}
+                <input type="hidden" name="rider_id" value="{{ selected_rider.id }}" />
+              {% endif %}
+              <label for="category_id">Category *</label>
+              <select id="category_id" name="category_id" data-auto-submit required>
+                <option value="">-- select category --</option>
+                {% for category in categories %}
+                  <option value="{{ category.id }}" {{ 'selected' if selected_category and selected_category.id == category.id else '' }}>{{ category.name }} — {{ category.route.name }}</option>
+                {% endfor %}
+              </select>
+            </form>
+
+            {% if selected_category %}
+            <form method="post" action="{{ url_for('races.enter_race_admin' if include_rider_selector else 'races.enter_race', race_id=race.id) }}" class="form-grid" id="race-entry-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+              <input type="hidden" name="category_id" value="{{ selected_category.id }}" />
+              {% if include_rider_selector %}
+                <input type="hidden" name="rider_id" value="{{ selected_rider.id }}" />
+              {% endif %}
+              <p>Entering category: <strong>{{ selected_category.name }}</strong></p>
+
+              <fieldset>
+                <legend>Does the rider currently have a device? *</legend>
+                <label><input type="radio" name="has_device" value="no" required /> No</label>
+                <label><input type="radio" name="has_device" value="yes" required /> Yes</label>
+              </fieldset>
+
+              <fieldset id="previous-device-confirmation">
+                <legend>
+                  Is {{ previous_device_id or 'the suggested previous device' }} the device currently held?
+                </legend>
+                <label><input type="radio" name="confirms_previous_device" value="yes" /> Yes</label>
+                <label><input type="radio" name="confirms_previous_device" value="no" /> No / cannot identify it</label>
+              </fieldset>
+
+              <div class="actions">
+                <button class="btn" type="submit">Enter Race</button>
+              </div>
+            </form>
+            {% endif %}
+          {% endif %}
+        </section>
+      {% elif not include_rider_selector %}
+        <p class="msg err">No linked rider profile is available.</p>
+      {% endif %}
+    </main>
+
+    <script defer src="{{ url_for('static', filename='js/components/forms.js') }}"></script>
+    <script defer src="{{ url_for('static', filename='js/pages/race-entry.js', v='20260720-category-id-v1') }}"></script>
+  </body>
+</html>

@@ -10,9 +10,9 @@ get_device
 device_epc_in_use
     Check whether an RFID EPC belongs to another device.
 create_device
-    Validate uniqueness and stage a new Device row.
+    Validate uniqueness and stage a new Device row with availability state.
 update_device
-    Validate uniqueness and update a Device row's editable fields.
+    Validate uniqueness and update a Device row's editable/availability fields.
 
 The service coordinates device domain rules with SQLAlchemy state but does not
 depend on Flask or render templates. Its caller owns commit and rollback so an
@@ -115,6 +115,8 @@ def create_device(session, form: dict) -> Device:
         id=device_id,
         device_info=form.get("device_info"),
         epc_id=epc_id,
+        returned=bool(form.get("returned")),
+        active=bool(form.get("active")),
     )
     session.add(device)
     return device
@@ -151,6 +153,8 @@ def update_device(session, device: Device, form: dict) -> Device:
 
     device.device_info = form.get("device_info")
     device.epc_id = epc_id
+    device.returned = bool(form.get("returned"))
+    device.active = bool(form.get("active"))
 
     if errors:
         raise DeviceValidationError(errors)

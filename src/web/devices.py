@@ -57,6 +57,8 @@ def devices_index():
                 request.form.get("id"),
                 request.form.get("device_info"),
                 request.form.get("epc_id"),
+                request.form.get("returned"),
+                request.form.get("active"),
             )
             try:
                 device = create_device(session, form)
@@ -79,7 +81,13 @@ def devices_index():
             devices=list_devices(session),
             message=message,
             success=is_ok,
-            form={"id": "", "device_info": "", "epc_id": ""},
+            form={
+                "id": "",
+                "device_info": "",
+                "epc_id": "",
+                "returned": True,
+                "active": True,
+            },
         )
     except IntegrityError:
         session.rollback()
@@ -88,7 +96,13 @@ def devices_index():
             devices=list_devices(session),
             message="A device with that ID or RFID EPC already exists.",
             success=False,
-            form={"id": "", "device_info": "", "epc_id": ""},
+            form={
+                "id": "",
+                "device_info": "",
+                "epc_id": "",
+                "returned": True,
+                "active": True,
+            },
         ), 400
     except SQLAlchemyError as error:
         session.rollback()
@@ -97,7 +111,13 @@ def devices_index():
             devices=list_devices(session),
             message=f"DB error: {error}",
             success=False,
-            form={"id": "", "device_info": "", "epc_id": ""},
+            form={
+                "id": "",
+                "device_info": "",
+                "epc_id": "",
+                "returned": True,
+                "active": True,
+            },
         ), 500
     finally:
         session.close()
@@ -132,6 +152,8 @@ def device_edit(device_id: str):
                 device_id,
                 request.form.get("device_info"),
                 request.form.get("epc_id"),
+                request.form.get("returned"),
+                request.form.get("active"),
             )
             try:
                 update_device(session, device, form)
