@@ -2339,6 +2339,10 @@ src/static/js/
 - Purpose: smoke-test the unchanged GET/POST device URLs, templates, status codes, create/edit persistence, duplicate rejection, and missing-device response.
 - Isolation: unwraps only the separately tested admin decorator and replaces `SessionLocal` with the in-memory test session factory.
 
+### DeviceAuthorizationTestCase
+- Purpose: exercise the real `admin_required` wrapper, prove rider and inactive-admin POST requests cannot change `returned`/`active`, and verify an active admin can explicitly toggle handout, return, active, and inactive combinations.
+- Database safety: uses an isolated in-memory SQLite `devices` table and patches only the authenticated user/session boundary.
+
 ### Run
 ```bash
 .venv/bin/python -m unittest tests.test_devices_layers -v
@@ -2387,7 +2391,7 @@ src/static/js/
 - Purpose: test assignment management, per-race rider/device uniqueness, cross-race Category rejection, shared rider/device listing reuse, timing payloads, confirmation rules, manual trimmed snapshots, and history/cache fallback.
 
 ### AutomaticRaceEntryServiceTestCase
-- Purpose: test form parsing, prior-device preference, confirmed-held-device custody preservation, returned-inventory discrepancy reporting, replacement selection, unavailable-device rollback, archived category rejection, and duplicate rider prevention.
+- Purpose: test form parsing, forged device-id exclusion, prior-device preference, every active/returned availability combination, inactive-held-device replacement, confirmed-held-device custody preservation, returned-inventory discrepancy reporting, already-used-device replacement, unavailable-device rollback, cross-race Category tampering, archived category rejection, and duplicate rider prevention.
 
 ### RaceControllerTestCase
 - Purpose: smoke-test race form/save, route create/rename, category create/edit/archive, shared routes, `category_id` consumers, administrator entry, authenticated-rider identity isolation, assigned category/device display, route GeoJSON, timing polling, manual-time validation, and finish-confirmation HTTP contracts.
@@ -2399,6 +2403,21 @@ src/static/js/
 ```bash
 .venv/bin/python -m unittest tests.test_races_layers -v
 ```
+
+## tests/test_race_entry_postgresql_integration.py
+
+### PostgreSQLRaceEntryIntegrationTestCase
+- Purpose: verify `FOR UPDATE SKIP LOCKED` prevents two concurrent transactions from selecting one available Device, and verify PostgreSQL rejects duplicate rider/device assignments plus cross-race Category tampering through the composite foreign key.
+- Safety gate: skipped unless `RUN_POSTGRES_INTEGRATION=1`; run it only against a disposable database because fixtures are committed for cross-session visibility and then cleaned up.
+- Recommended workflow: start an isolated temporary PostgreSQL Compose project, apply `alembic upgrade head`, run the command below inside its application/migrator container, and tear the project down afterward.
+
+### Run against a disposable migrated PostgreSQL database
+```bash
+RUN_POSTGRES_INTEGRATION=1 python -m unittest tests.test_race_entry_postgresql_integration -v
+```
+
+### Ordinary discovery behavior
+- `python -m unittest discover -s tests -v` discovers these tests but reports them as skipped unless the explicit integration safety gate is enabled.
 
 ## tests/download_latest_track_hist_gpx.py
 

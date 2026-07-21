@@ -560,11 +560,15 @@ class AutomaticRaceEntryServiceTestCase(RaceDatabaseTestCase):
             {
                 "category_id": str(self.category_id),
                 "has_device": "no",
+                # Device ids are never accepted from the entry form. A forged
+                # value must not override server-resolved device history.
+                "device_id": "pi001",
             }
         )
         self.assertEqual(errors, [])
         self.assertFalse(form["has_device"])
         self.assertNotIn("rider_id", form)
+        self.assertNotIn("device_id", form)
 
         session = self.session_factory()
         try:
@@ -653,8 +657,47 @@ class AutomaticRaceEntryServiceTestCase(RaceDatabaseTestCase):
         finally:
             session.close()
 
-    def test_unusable_previous_gets_replacement_and_none_available_creates_none(self):
-        """Replace an unusable held device or report no available inventory."""
+    def test_inactive_confirmed_previous_requires_active_returned_replacement(self):
+        """Never reuse an inactive held device regardless of returned state."""
+        session = self.session_factory()
+        try:
+            self._create_previous_assignment(
+                session,
+                self.rider_two_id,
+                "pi002",
+            )
+            previous = session.get(Device, "pi002")
+            previous.active = False
+            previous.returned = False
+            session.add(
+                Device(
+                    id="pi003",
+                    device_info="Replacement",
+                    active=True,
+                    returned=True,
+                )
+            )
+            session.commit()
+
+            result = assign_device_and_create_entry(
+                session,
+                self.race_id,
+                self.rider_two_id,
+                self.category_id,
+                has_device=True,
+                confirms_previous_device=True,
+            )
+            session.commit()
+            self.assertEqual(result.outcome, "replacement_required")
+            self.assertEqual(result.previous_device_id, "pi002")
+            self.assertEqual(result.assigned_device_id, "pi003")
+            self.assertFalse(previous.active)
+            self.assertFalse(previous.returned)
+        finally:
+            session.close()
+
+    def test_device_already_used_in_race_gets_fallback_or_none_available(self):
+        """Replace a prior device already used in-race or create no entry."""
         session = self.session_factory()
         try:
             self._create_previous_assignment(
@@ -673,6 +716,7 @@ class AutomaticRaceEntryServiceTestCase(RaceDatabaseTestCase):
             )
             session.commit()
             self.assertEqual(replacement.outcome, "replacement_required")
+            self.assertEqual(replacement.previous_device_id, "pi001")
             self.assertEqual(replacement.assigned_device_id, "pi002")
 
             session.delete(replacement.race_rider)
@@ -696,6 +740,87 @@ class AutomaticRaceEntryServiceTestCase(RaceDatabaseTestCase):
                 )
                 .count(),
                 0,
+            )
+        finally:
+            session.close()
+
+    def test_available_pool_requires_both_active_and_returned(self):
+        """Exercise every active/returned combination during assignment."""
+        session = self.session_factory()
+        try:
+            candidate = session.get(Device, "pi002")
+            for active, returned, should_assign in (
+                (False, False, False),
+                (False, True, False),
+                (True, False, False),
+                (True, True, True),
+            ):
+                with self.subTest(active=active, returned=returned):
+                    candidate.active = active
+                    candidate.returned = returned
+                    session.commit()
+                    result = assign_device_and_create_entry(
+                        session,
+                        self.race_id,
+                        self.rider_two_id,
+                        self.category_id,
+                        has_device=False,
+                        confirms_previous_device=False,
+                    )
+                    if should_assign:
+                        self.assertEqual(result.assigned_device_id, "pi002")
+                        self.assertEqual(result.outcome, "assigned_available")
+                        self.assertEqual(candidate.returned, returned)
+                        self.assertEqual(candidate.active, active)
+                        session.delete(result.race_rider)
+                        session.commit()
+                    else:
+                        self.assertEqual(result.outcome, "none_available")
+                        self.assertIsNone(result.race_rider)
+                        session.rollback()
+        finally:
+            session.close()
+
+    def test_cross_race_category_tampering_is_rejected_by_service(self):
+        """Reject a category id owned by another race before assignment."""
+        session = self.session_factory()
+        try:
+            other_race = Race(name="Tampering Race", active=True)
+            session.add(other_race)
+            session.flush()
+            other_route = Route(race_id=other_race.id, name="Other Course")
+            session.add(other_route)
+            session.flush()
+            other_category = Category(
+                route_id=other_route.id,
+                race_id=other_race.id,
+                name="Other Category",
+                name_normalized="other category",
+                display_order=1,
+                archived=False,
+            )
+            session.add(other_category)
+            session.commit()
+
+            with self.assertRaisesRegex(
+                RaceEntryValidationError,
+                "active category for this race",
+            ):
+                assign_device_and_create_entry(
+                    session,
+                    self.race_id,
+                    self.rider_two_id,
+                    other_category.id,
+                    has_device=False,
+                    confirms_previous_device=False,
+                )
+            self.assertIsNone(
+                session.query(RaceRider)
+                .filter_by(
+                    race_id=self.race_id,
+                    rider_id=self.rider_two_id,
+                )
+                .one_or_none()
             )
         finally:
             session.close()
