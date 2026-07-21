@@ -12,7 +12,7 @@
     <main class="page-shell">
       <header class="page-header">
         <h1>{{ 'Edit Rider' if editing_rider else 'Input Rider Details' }}</h1>
-        <p>Create rider profiles and keep category, team, bike, and bio details ready for race setup.</p>
+        <p>Create rider profiles and keep team, bike, and bio details ready for race setup.</p>
       </header>
 
       {% if message %}
@@ -25,14 +25,6 @@
           {% if editing_rider %}<input type="hidden" name="rider_id" value="{{ editing_rider.id }}"/>{% endif %}
           <label for="name">Full name *</label>
           <input id="name" name="name" placeholder="Name Surname" required value="{{ form.name or '' }}"/>
-
-          <label for="category">Category *</label>
-          <select id="category" name="category" required>
-            <option value="">-- select --</option>
-            {% for opt in categories %}
-              <option value="{{ opt }}" {{ 'selected' if form.category==opt else '' }}>{{ opt }}</option>
-            {% endfor %}
-          </select>
 
           <label for="team">Team</label>
           <input id="team" name="team" placeholder="Optional" value="{{ form.team or '' }}"/>
@@ -57,7 +49,6 @@
             <thead>
               <tr>
                 <th>Name</th>
-                <th>Category</th>
                 <th>Team</th>
                 <th>Bike</th>
                 <th>Bio</th>
@@ -68,7 +59,6 @@
               {% for r in riders %}
                 <tr>
                   <td>{{ r.name }}</td>
-                  <td>{{ r.category }}</td>
                   <td>{{ r.team or '—' }}</td>
                   <td>{{ r.bike or '—' }}</td>
                   <td>{{ r.bio or '—' }}</td>

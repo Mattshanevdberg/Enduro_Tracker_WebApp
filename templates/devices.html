@@ -36,6 +36,9 @@
           <label for="epc_id">RFID EPC</label>
           <input id="epc_id" name="epc_id" maxlength="128" value="{{ form.epc_id }}" placeholder="Optional RFID tag EPC"/>
 
+          <label><input type="checkbox" name="returned" {{ 'checked' if form.returned else '' }}/> Returned</label>
+          <label><input type="checkbox" name="active" {{ 'checked' if form.active else '' }}/> Active</label>
+
           <div class="actions">
             <button class="btn" type="submit">Save</button>
           </div>
@@ -46,7 +49,7 @@
       <div class="table-card">
         <table>
           <thead>
-            <tr><th>Device ID</th><th>RFID EPC</th><th>Info</th><th>Actions</th></tr>
+            <tr><th>Device ID</th><th>RFID EPC</th><th>Info</th><th>Returned</th><th>Active</th><th>Actions</th></tr>
           </thead>
           <tbody>
             {% for d in devices %}
@@ -54,10 +57,12 @@
                 <td><code>{{ d.id }}</code></td>
                 <td><code>{{ d.epc_id or '' }}</code></td>
                 <td class="pre-wrap">{{ d.device_info or '' }}</td>
+                <td>{{ 'Yes' if d.returned else 'No' }}</td>
+                <td>{{ 'Yes' if d.active else 'No' }}</td>
                 <td class="actions"><a class="btn" href="{{ url_for('devices.device_edit', device_id=d.id) }}">Edit</a></td>
               </tr>
             {% else %}
-              <tr><td colspan="4">No devices yet.</td></tr>
+              <tr><td colspan="6">No devices yet.</td></tr>
             {% endfor %}
           </tbody>
         </table>

@@ -27,7 +27,6 @@ from src.services.riders import (
     update_rider,
 )
 from src.utils.riders import (
-    DEFAULT_RIDER_CATEGORIES,
     normalize_rider_form,
     rider_form_values,
     validate_rider_form,
@@ -85,10 +84,9 @@ class RiderLayerTestCase(RiderDatabaseTestCase):
     """Exercise rider utilities and services independently of Flask routes."""
 
     def test_normalization_form_values_and_validation(self):
-        """Normalize rider values and enforce name/category rules."""
+        """Normalize rider values and enforce required profile rules."""
         form = normalize_rider_form(
             "  Alex Rider  ",
-            " Professional ",
             "  Enduro Team ",
             " ",
             "  Test bio  ",
@@ -97,7 +95,6 @@ class RiderLayerTestCase(RiderDatabaseTestCase):
             form,
             {
                 "name": "Alex Rider",
-                "category": "Professional",
                 "team": "Enduro Team",
                 "bike": None,
                 "bio": "Test bio",
@@ -106,13 +103,10 @@ class RiderLayerTestCase(RiderDatabaseTestCase):
         self.assertEqual(rider_form_values(form)["bike"], "")
         self.assertEqual(validate_rider_form(form), [])
 
-        invalid_form = normalize_rider_form(" ", "Unsupported", None, None, None)
+        invalid_form = normalize_rider_form(" ", None, None, None)
         self.assertEqual(
             validate_rider_form(invalid_form),
-            [
-                "Name is required.",
-                "Category must be one of: Professional, Open, Junior.",
-            ],
+            ["Name is required."],
         )
 
     def test_create_update_list_and_rider_account_link_rules(self):
@@ -136,7 +130,7 @@ class RiderLayerTestCase(RiderDatabaseTestCase):
 
             rider = create_rider(
                 session,
-                normalize_rider_form("Riley Rider", "Open", None, "Bike", None),
+                normalize_rider_form("Riley Rider", None, "Bike", None),
                 user,
             )
             session.commit()
@@ -145,7 +139,7 @@ class RiderLayerTestCase(RiderDatabaseTestCase):
 
             admin_rider = create_rider(
                 session,
-                normalize_rider_form("Admin Entry", "Junior", None, None, None),
+                normalize_rider_form("Admin Entry", None, None, None),
                 authenticated_user(),
             )
             session.commit()
@@ -156,7 +150,7 @@ class RiderLayerTestCase(RiderDatabaseTestCase):
 
             update_rider(
                 admin_rider,
-                normalize_rider_form("Updated Entry", "Professional", "Team", None, None),
+                normalize_rider_form("Updated Entry", "Team", None, None),
             )
             session.commit()
             self.assertEqual(get_rider(session, admin_rider.id).team, "Team")
@@ -164,7 +158,7 @@ class RiderLayerTestCase(RiderDatabaseTestCase):
             with self.assertRaises(RiderProfileLinkError):
                 create_rider(
                     session,
-                    normalize_rider_form("Second Profile", "Open", None, None, None),
+                    normalize_rider_form("Second Profile", None, None, None),
                     user,
                 )
             session.rollback()
@@ -172,7 +166,7 @@ class RiderLayerTestCase(RiderDatabaseTestCase):
             with self.assertRaisesRegex(RiderValidationError, "Name is required"):
                 update_rider(
                     admin_rider,
-                    normalize_rider_form("", DEFAULT_RIDER_CATEGORIES[0], None, None, None),
+                    normalize_rider_form("", None, None, None),
                 )
         finally:
             session.close()
@@ -227,14 +221,13 @@ class RiderRouteTestCase(RiderDatabaseTestCase):
             "/riders/new",
             data={
                 "name": "Route Rider",
-                "category": "Open",
                 "team": "Route Team",
                 "bike": "Route Bike",
                 "bio": "Route Bio",
             },
         )
         self.assertEqual(create_response.status_code, 200)
-        self.assertIn(b"Saved rider: Route Rider (Open).", create_response.data)
+        self.assertIn(b"Saved rider: Route Rider.", create_response.data)
 
         verification_session = self.session_factory()
         try:
@@ -249,7 +242,6 @@ class RiderRouteTestCase(RiderDatabaseTestCase):
             data={
                 "rider_id": str(rider_id),
                 "name": "Updated Route Rider",
-                "category": "Professional",
                 "team": "Updated Team",
                 "bike": "",
                 "bio": "",
@@ -259,7 +251,7 @@ class RiderRouteTestCase(RiderDatabaseTestCase):
 
         invalid_response = self.client.post(
             "/riders/new",
-            data={"name": "", "category": "Unsupported"},
+            data={"name": ""},
         )
         self.assertEqual(invalid_response.status_code, 400)
         self.assertIn(b"Name is required", invalid_response.data)
@@ -269,8 +261,8 @@ class RiderRouteTestCase(RiderDatabaseTestCase):
         """Keep one-profile redirects and rider ownership enforcement intact."""
         session = self.session_factory()
         try:
-            owned = Rider(name="Owned Rider", category="Open")
-            other = Rider(name="Other Rider", category="Junior")
+            owned = Rider(name="Owned Rider")
+            other = Rider(name="Other Rider")
             session.add_all([owned, other])
             session.commit()
             owned_id = owned.id

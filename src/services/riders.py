@@ -20,7 +20,7 @@ models, and remains independent of Flask requests, templates, and responses.
 
 from src.auth.decorators import user_has_role
 from src.db.models import Rider, User
-from src.utils.riders import DEFAULT_RIDER_CATEGORIES, validate_rider_form
+from src.utils.riders import validate_rider_form
 from src.utils.time import utc_now
 
 
@@ -90,7 +90,6 @@ def create_rider(
     session,
     form: dict,
     acting_user,
-    allowed_categories=DEFAULT_RIDER_CATEGORIES,
 ) -> Rider:
     """
     Validate and stage a new rider profile.
@@ -99,7 +98,6 @@ def create_rider(
       session: active SQLAlchemy session.
       form: normalized rider values from src.utils.riders.normalize_rider_form.
       acting_user: authenticated rider or admin initiating the operation.
-      allowed_categories: iterable of supported rider category names.
 
     Output:
       Newly staged Rider row. The caller must commit the transaction.
@@ -112,13 +110,12 @@ def create_rider(
       Admin-created profiles remain unlinked. A rider-created profile is linked
       to the durable User row in the same transaction.
     """
-    errors = validate_rider_form(form, allowed_categories)
+    errors = validate_rider_form(form)
     if errors:
         raise RiderValidationError(errors)
 
     rider = Rider(
         name=form["name"],
-        category=form["category"],
         team=form.get("team"),
         bike=form.get("bike"),
         bio=form.get("bio"),
@@ -141,7 +138,6 @@ def create_rider(
 def update_rider(
     rider: Rider,
     form: dict,
-    allowed_categories=DEFAULT_RIDER_CATEGORIES,
 ) -> Rider:
     """
     Validate and stage changes to an existing rider profile.
@@ -149,7 +145,6 @@ def update_rider(
     Input Args:
       rider: existing Rider row being edited.
       form: normalized rider values from src.utils.riders.normalize_rider_form.
-      allowed_categories: iterable of supported rider category names.
 
     Output:
       Updated Rider row. The caller must commit the transaction.
@@ -157,12 +152,11 @@ def update_rider(
     Raises:
       RiderValidationError when rider form rules fail.
     """
-    errors = validate_rider_form(form, allowed_categories)
+    errors = validate_rider_form(form)
     if errors:
         raise RiderValidationError(errors)
 
     rider.name = form["name"]
-    rider.category = form["category"]
     rider.team = form.get("team")
     rider.bike = form.get("bike")
     rider.bio = form.get("bio")

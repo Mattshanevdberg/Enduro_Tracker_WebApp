@@ -4,33 +4,30 @@ Dashboard race loading and display preparation services.
 Functions
 ---------
 load_race_display_data
-    Load dashboard races, attach display datetimes, and select a default category.
+    Load dashboard races and attach display datetimes.
 
 This service coordinates Race queries and dashboard display values without
 depending on Flask requests, routes, or template rendering. It reuses the shared
-epoch conversion and rider-category defaults already used elsewhere.
+epoch conversion already used elsewhere.
 """
 
 from src.db.models import Race
-from src.utils.riders import DEFAULT_RIDER_CATEGORIES
 from src.utils.time import epoch_to_datetime
 
 
 def load_race_display_data(
     session,
     active_only: bool = False,
-    categories=DEFAULT_RIDER_CATEGORIES,
-) -> tuple[list[Race], str]:
+) -> list[Race]:
     """
     Load races and prepare the values required by dashboard templates.
 
     Input Args:
       session: active SQLAlchemy session.
       active_only: when True, return only active races.
-      categories: ordered iterable of configured race category names.
 
     Output:
-      Tuple containing ordered Race rows and the default category name.
+      Ordered Race rows with display datetimes attached.
 
     Notes:
       starts_at_epoch remains the durable time value. The starts_at attribute is
@@ -50,6 +47,4 @@ def load_race_display_data(
             else None
         )
 
-    configured_categories = tuple(categories or DEFAULT_RIDER_CATEGORIES)
-    default_category = configured_categories[0] if configured_categories else ""
-    return races, default_category
+    return races

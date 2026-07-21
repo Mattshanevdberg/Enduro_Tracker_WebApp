@@ -15,7 +15,7 @@ confirm_race_rider_finish
     Confirm the current finish time and clear its warning flag.
 """
 
-from src.db.models import Category, RaceRider, Rider, Route, TrackHist
+from src.db.models import RaceRider, Rider, TrackHist
 from src.services.race_riders import get_scoped_race_rider
 from src.utils.gpx import build_track_snapshot_from_raw_text
 from src.utils.time import datetime_to_epoch, epoch_to_datetime, utc_now
@@ -104,7 +104,7 @@ def build_post_race_riders(session, category_id: int) -> list[dict]:
 def list_race_rider_timings(
     session,
     race_id: int,
-    category_name: str = "",
+    category_id: int | None = None,
 ) -> list[dict]:
     """
     Return timing payloads scoped to a race and optional category.
@@ -112,20 +112,18 @@ def list_race_rider_timings(
     Input Args:
       session: active SQLAlchemy session.
       race_id: Race primary key.
-      category_name: optional selected category label.
+      category_id: optional selected Category primary key.
 
     Output:
       RaceRider timing dictionaries ordered by entry id.
     """
     query = (
         session.query(RaceRider)
-        .join(Category, RaceRider.category_id == Category.id)
-        .join(Route, Category.route_id == Route.id)
-        .filter(Route.race_id == race_id)
+        .filter(RaceRider.race_id == race_id)
         .order_by(RaceRider.id.asc())
     )
-    if category_name:
-        query = query.filter(Category.name == category_name)
+    if category_id is not None:
+        query = query.filter(RaceRider.category_id == category_id)
     return [race_rider_timing_payload(row) for row in query.all()]
 
 

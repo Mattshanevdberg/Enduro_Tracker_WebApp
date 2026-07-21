@@ -23,7 +23,6 @@ from flask import Blueprint, Response, render_template
 from src.auth.decorators import admin_required
 from src.db.models import SessionLocal
 from src.services.home import load_race_display_data
-from src.utils.riders import DEFAULT_RIDER_CATEGORIES
 
 bp_home = Blueprint("home", __name__)
 
@@ -45,15 +44,13 @@ def _render_dashboard(template_name: str, active_only: bool):
     """
     session = SessionLocal()
     try:
-        races, default_category = load_race_display_data(
+        races = load_race_display_data(
             session,
             active_only=active_only,
-            categories=DEFAULT_RIDER_CATEGORIES,
         )
         return render_template(
             template_name,
             races=races,
-            default_category=default_category,
         )
     finally:
         session.close()
@@ -98,7 +95,10 @@ def robots_txt():
         "Disallow: /races/save\n"
         "Disallow: /races/*/edit\n"
         "Disallow: /races/*/enter\n"
+        "Disallow: /races/*/entries/\n"
         "Disallow: /races/*/post-admin\n"
+        "Disallow: /races/*/routes/\n"
+        "Disallow: /races/*/categories/\n"
         "Disallow: /races/*/route/upload\n"
         "Disallow: /races/*/route/remove\n"
         "Disallow: /races/*/riders/\n"

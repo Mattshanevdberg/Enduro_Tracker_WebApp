@@ -34,15 +34,11 @@ from src.services.riders import (
     update_rider,
 )
 from src.utils.riders import (
-    DEFAULT_RIDER_CATEGORIES,
     normalize_rider_form,
     rider_form_values,
 )
 
 bp_riders = Blueprint("riders", __name__, url_prefix="/riders")
-
-ALLOWED_CATEGORIES = list(DEFAULT_RIDER_CATEGORIES)
-
 
 @bp_riders.route("/new", methods=["GET", "POST"])
 @bp_riders.route("/<int:rider_id>/edit", methods=["GET", "POST"])
@@ -89,7 +85,6 @@ def rider_form(rider_id: Optional[int] = None):
 
             return render_template(
                 "riders_form.html",
-                categories=ALLOWED_CATEGORIES,
                 message=None,
                 success=None,
                 form=rider_form_values(editing_rider),
@@ -113,7 +108,6 @@ def rider_form(rider_id: Optional[int] = None):
 
         form = normalize_rider_form(
             request.form.get("name"),
-            request.form.get("category"),
             request.form.get("team"),
             request.form.get("bike"),
             request.form.get("bio"),
@@ -121,16 +115,15 @@ def rider_form(rider_id: Optional[int] = None):
 
         try:
             if editing_rider is not None:
-                update_rider(editing_rider, form, ALLOWED_CATEGORIES)
+                update_rider(editing_rider, form)
                 message = f"Updated rider: {form['name']}"
             else:
-                create_rider(session, form, current_user, ALLOWED_CATEGORIES)
-                message = f"Saved rider: {form['name']} ({form['category']})."
+                create_rider(session, form, current_user)
+                message = f"Saved rider: {form['name']}."
             session.commit()
         except RiderValidationError as error:
             return render_template(
                 "riders_form.html",
-                categories=ALLOWED_CATEGORIES,
                 message=str(error),
                 success=False,
                 form=rider_form_values(form),
@@ -143,7 +136,6 @@ def rider_form(rider_id: Optional[int] = None):
 
         return render_template(
             "riders_form.html",
-            categories=ALLOWED_CATEGORIES,
             message=message,
             success=True,
             form=rider_form_values(),
@@ -154,7 +146,6 @@ def rider_form(rider_id: Optional[int] = None):
         session.rollback()
         return render_template(
             "riders_form.html",
-            categories=ALLOWED_CATEGORIES,
             message=f"DB error: {error}",
             success=False,
             form=rider_form_values(form),

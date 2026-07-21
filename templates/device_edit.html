@@ -35,6 +35,9 @@
             <label for="epc_id">RFID EPC</label>
             <input id="epc_id" name="epc_id" maxlength="128" value="{{ device.epc_id or '' }}" placeholder="Optional RFID tag EPC"/>
 
+            <label><input type="checkbox" name="returned" {{ 'checked' if device.returned else '' }}/> Returned</label>
+            <label><input type="checkbox" name="active" {{ 'checked' if device.active else '' }}/> Active</label>
+
             <div class="actions">
               <button class="btn" type="submit">Save</button>
               <a class="btn" href="{{ url_for('home.dashboard_admin') }}">Admin Dashboard</a>

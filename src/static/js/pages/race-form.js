@@ -6,6 +6,7 @@ keeps template data in HTML data attributes and JSON data nodes so this static
 file contains no Jinja syntax.
 
 Current responsibilities:
+- Show and require the inline route-name field only when that category option is selected.
 - Use shared Leaflet helpers to render the selected category route preview.
 - Keep the hidden rider and device form values in sync with their datalist inputs.
 
@@ -19,6 +20,23 @@ Future extraction guidance:
 (function initialiseRaceFormPage() {
   // Attach the shared category-select behaviour after the page DOM is available.
   window.EnduroForms?.attachAutoSubmitSelects();
+
+  // Category route selection -------------------------------------------------
+  // The category form supports either a durable existing route id or a new
+  // descriptive route name. Keep the conditional field unambiguous and ensure
+  // native browser validation matches the selected workflow.
+  const routeChoice = document.getElementById('route_choice');
+  const newRouteNameInput = document.getElementById('new_route_name');
+  const syncNewRouteNameState = () => {
+    if (!routeChoice || !newRouteNameInput) {
+      return;
+    }
+    const createsNewRoute = routeChoice.value === 'new';
+    newRouteNameInput.required = createsNewRoute;
+    newRouteNameInput.disabled = !createsNewRoute;
+  };
+  routeChoice?.addEventListener('change', syncNewRouteNameState);
+  syncNewRouteNameState();
 
   // GPX upload validation ----------------------------------------------------
   // The required attribute blocks an empty upload before it reaches the server,
@@ -41,18 +59,16 @@ Future extraction guidance:
   // embedding Jinja expressions in this external JavaScript file.
   const mapElement = document.getElementById('map');
   const raceId = mapElement?.dataset?.raceId || '';
-  const category = mapElement?.dataset?.category || '';
+  const categoryId = mapElement?.dataset?.categoryId || '';
 
-  if (!mapElement || !raceId) {
-    console.warn('Missing map metadata; skipping map preview setup.');
-  } else if (!window.EnduroMaps) {
+  if (mapElement && raceId && !window.EnduroMaps) {
     console.error('Shared map helpers are unavailable; skipping map preview setup.');
-  } else {
+  } else if (mapElement && raceId) {
     const map = window.EnduroMaps.createMap(mapElement);
     if (!map) {
       console.error('Leaflet is unavailable; skipping map preview setup.');
     } else {
-      window.EnduroMaps.fetchRouteGeojson(raceId, category)
+      window.EnduroMaps.fetchRouteGeojson(raceId, categoryId)
       .then(geojson => {
         const layer = window.EnduroMaps.addGeojsonLayer(map, geojson);
         window.EnduroMaps.fitMapToLayer(map, layer);

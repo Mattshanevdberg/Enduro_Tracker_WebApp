@@ -19,13 +19,12 @@ Flask controller can remain focused on HTTP parsing and responses.
 from src.db.models import Race
 from src.services.race_riders import load_race_rider_management_data
 from src.services.race_routes import (
-    find_or_create_route_for_category,
     get_category_for_race,
     get_route_geojson,
-    list_race_categories,
+    list_race_category_records,
+    list_race_routes,
 )
 from src.services.race_timing import build_post_race_riders
-from src.utils.races import DEFAULT_RACE_CATEGORIES, select_category
 from src.utils.time import epoch_to_datetime
 
 
@@ -112,7 +111,7 @@ def save_race(session, form: dict) -> Race:
 def load_post_race_data(
     session,
     race_id: int,
-    requested_category: str | None,
+    requested_category_id: int | None,
 ) -> dict:
     """
     Build all durable/display data required by the post-race page.
@@ -120,7 +119,7 @@ def load_post_race_data(
     Input Args:
       session: active SQLAlchemy session.
       race_id: Race primary key.
-      requested_category: optional category query parameter.
+      requested_category_id: optional Category primary key query parameter.
 
     Output:
       Dictionary containing race, categories, selection, route GeoJSON, rider
@@ -134,19 +133,26 @@ def load_post_race_data(
         raise RaceNotFoundError("Race not found.")
     _prepare_race_display_time(race)
 
-    categories = list_race_categories(session, race_id)
-    selected_category = select_category(requested_category, categories)
-    category = (
-        get_category_for_race(session, race_id, selected_category)
-        if selected_category
+    categories = list_race_category_records(session, race_id)
+    selected_category = (
+        get_category_for_race(session, race_id, requested_category_id)
+        if requested_category_id is not None
         else None
     )
+    if requested_category_id is not None and selected_category is None:
+        raise RaceValidationError("Category not found for this race.")
+    if selected_category is None and categories:
+        selected_category = categories[0]
     geojson = (
-        get_route_geojson(session, race_id, selected_category)
-        if selected_category
+        get_route_geojson(session, race_id, selected_category.id)
+        if selected_category is not None
         else None
     )
-    riders = build_post_race_riders(session, category.id) if category else []
+    riders = (
+        build_post_race_riders(session, selected_category.id)
+        if selected_category is not None
+        else []
+    )
     return {
         "race": race,
         "categories": categories,
@@ -162,8 +168,7 @@ def load_post_race_data(
 def load_race_edit_data(
     session,
     race_id: int,
-    requested_category: str | None,
-    allowed_categories=DEFAULT_RACE_CATEGORIES,
+    requested_category_id: int | None,
 ) -> dict:
     """
     Build all durable/display data required by the race edit page.
@@ -171,12 +176,11 @@ def load_race_edit_data(
     Input Args:
       session: active SQLAlchemy session.
       race_id: Race primary key.
-      requested_category: optional selected category query parameter.
-      allowed_categories: ordered supported category names.
+      requested_category_id: optional selected Category primary key.
 
     Output:
-      Dictionary containing race, selected Route/Category, GeoJSON, and reusable
-      rider/device assignment management data.
+      Dictionary containing race routes/categories, the selected Route/Category,
+      GeoJSON, and reusable rider/device assignment management data.
 
     Raises:
       RaceNotFoundError when the race does not exist.
@@ -184,18 +188,41 @@ def load_race_edit_data(
     race = get_race(session, race_id)
     if race is None:
         raise RaceNotFoundError("Race not found.")
-    selected_category = select_category(requested_category, allowed_categories)
-    route, category = find_or_create_route_for_category(
-        session,
-        race_id,
-        selected_category,
+    categories = list_race_category_records(session, race_id)
+    selected_category = (
+        get_category_for_race(session, race_id, requested_category_id)
+        if requested_category_id is not None
+        else None
     )
-    management = load_race_rider_management_data(session, category.id)
+    if requested_category_id is not None and selected_category is None:
+        raise RaceValidationError("Category not found for this race.")
+    if selected_category is None and categories:
+        selected_category = categories[0]
+    route = selected_category.route if selected_category is not None else None
+    # A newly created race has neither a route nor category. Keep the controller
+    # and template read-only on GET by returning an explicit empty management
+    # payload until the organiser creates a category.
+    management = (
+        load_race_rider_management_data(session, selected_category.id)
+        if selected_category is not None
+        else {
+            "riders": [],
+            "devices": [],
+            "race_riders": [],
+            "last_device_by_rider": {},
+        }
+    )
     return {
         "race": race,
-        "categories": list(allowed_categories),
+        "routes": list_race_routes(session, race_id),
+        "category_records": list_race_category_records(
+            session,
+            race_id,
+            include_archived=True,
+        ),
+        "categories": categories,
         "selected_category": selected_category,
         "route": route,
-        "geojson": route.geojson,
+        "geojson": route.geojson if route is not None else None,
         **management,
     }

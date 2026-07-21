@@ -26,11 +26,14 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
+    Index,
     Integer,
     LargeBinary,
     String,
     Text,
     create_engine,
+    func,
     UniqueConstraint,
 )
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker, foreign
@@ -156,6 +159,8 @@ class Device(Base):
       id          : device identifier used by trackers and race_riders
       device_info : optional descriptive text for the hardware
       epc_id      : optional unique RFID EPC/tag assigned to this device
+      returned    : whether the physical tracker has been returned
+      active      : whether the tracker is eligible for future assignment
 
     Relationship:
       - One Device can have many IngestRfid rows when ingest_rfid.epc matches epc_id.
@@ -166,6 +171,8 @@ class Device(Base):
     id = Column(String(64), primary_key=True)
     device_info = Column(Text, nullable=True)
     epc_id = Column(String(128), nullable=True)
+    returned = Column(Boolean, nullable=False, default=True, server_default="true")
+    active = Column(Boolean, nullable=False, default=True, server_default="true")
 
     # EPC values must map to at most one Device. PostgreSQL still permits multiple
     # NULL values, which is useful while older devices have not been assigned tags yet.
@@ -254,7 +261,6 @@ class Rider(Base):
     bike = Column(String(128), nullable=True)
     bio = Column(Text, nullable=True)
     team = Column(String(128), nullable=True)
-    category = Column(String(64), nullable=True)
 
     race_entries = relationship("RaceRider", back_populates="rider")
     user_account = relationship("User", back_populates="rider", uselist=False)
@@ -300,7 +306,10 @@ class User(UserMixin, Base):
     email_normalized = Column(String(256), nullable=False)
     password_hash = Column(String(255), nullable=False)
     role = Column(String(32), nullable=False, default="rider")
-    rider_id = Column(Integer, ForeignKey("riders.id"), nullable=True, index=True)
+    # ux_users_rider_id already supplies the PostgreSQL index needed for this
+    # one-to-one lookup. Avoid declaring a second, redundant ix_users_rider_id
+    # index that would create permanent Alembic schema drift.
+    rider_id = Column(Integer, ForeignKey("riders.id"), nullable=True)
     is_active = Column(Boolean, nullable=False, default=True)
     auth_version = Column(Integer, nullable=False, default=1)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
@@ -580,7 +589,11 @@ class Race(Base):
 
 class Route(Base):
     """
-    Course geometry per race.
+    Named, reusable course geometry owned by one race.
+
+    Multiple categories can share a Route. Route names are trimmed/non-empty
+    and unique without regard to case within their owning Race so organisers
+    can distinguish courses such as "Main Course" and "Junior Course".
     """
 
     # A foreign key is a column (or set of columns) in one table that references the primary key of another table. It tells the database, “every value in this column must match an existing id in that other table.” The database enforces that rule for you:
@@ -591,8 +604,28 @@ class Route(Base):
 
     id = Column(Integer, primary_key=True)
     race_id = Column(Integer, ForeignKey("races.id"), nullable=False, index=True)
+    name = Column(String(128), nullable=False)
     geojson = Column(Text, nullable=True)
     gpx = Column(Text, nullable=True)
+
+    # The composite key is intentionally redundant with the globally unique id.
+    # PostgreSQL requires the exact referenced column set to be unique before a
+    # Category can use (route_id, race_id) as a composite foreign key. That
+    # composite foreign key is what prevents a category from claiming one race
+    # while pointing at a route owned by another race.
+    __table_args__ = (
+        UniqueConstraint("id", "race_id", name="ux_route_id_race_id"),
+        CheckConstraint(
+            "name = trim(name) AND length(name) > 0",
+            name="ck_route_name_trimmed_nonempty",
+        ),
+        Index(
+            "ux_route_race_name_ci",
+            "race_id",
+            func.lower(name),
+            unique=True,
+        ),
+    )
 
     race = relationship("Race", back_populates="routes")
     categories = relationship("Category", back_populates="route")
@@ -600,18 +633,62 @@ class Route(Base):
 
 class Category(Base):
     """
-    Category grouping tied to a route.
+    Race-scoped category grouping tied to a route.
+
+    A Route can be shared by multiple categories, but the composite
+    (route_id, race_id) foreign key requires every Category to use a Route from
+    the same Race. Category names are trimmed/non-empty and are unique without
+    regard to case within one Race, even when categories use different routes.
+    Normalized names support deterministic uniqueness, display_order controls
+    organiser-defined ordering, and archived hides retired categories without
+    deleting historical race entries.
     """
 
     __tablename__ = "categories"
 
-    id = Column(Integer, primary_key=True) 
-    route_id = Column(Integer, ForeignKey("route.id"), nullable=False, index=True)
+    id = Column(Integer, primary_key=True)
+    route_id = Column(Integer, nullable=False, index=True)
+    race_id = Column(Integer, ForeignKey("races.id", ondelete="RESTRICT"), nullable=False, index=True)
     name = Column(String(64), nullable=False) # store the label (e.g., "Professional", "Open", "Junior")
+    name_normalized = Column(String(64), nullable=False)
+    display_order = Column(Integer, nullable=False, default=1, server_default="1")
+    archived = Column(Boolean, nullable=False, default=False, server_default="false")
 
-    # make sure that each category name is unique within a given route
+    # The (id, race_id) key is the exact composite target used by RaceRider.
+    # The route/race foreign key protects against cross-race route assignment.
+    # The normalized name permits different races to reuse a label while
+    # treating labels such as "Open" and "open" as duplicates in one race.
     __table_args__ = (
-        UniqueConstraint("route_id", "name", name="ux_route_category_name"),
+        ForeignKeyConstraint(
+            ["route_id", "race_id"],
+            ["route.id", "route.race_id"],
+            name="fk_categories_route_race",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("id", "race_id", name="ux_categories_id_race_id"),
+        UniqueConstraint(
+            "race_id",
+            "name_normalized",
+            name="ux_categories_race_name_normalized",
+        ),
+        CheckConstraint(
+            "name = trim(name) AND length(name) > 0",
+            name="ck_categories_name_trimmed_nonempty",
+        ),
+        CheckConstraint(
+            "name_normalized = lower(name)",
+            name="ck_categories_name_normalized",
+        ),
+        CheckConstraint(
+            "display_order >= 1",
+            name="ck_categories_display_order_positive",
+        ),
+        Index(
+            "ix_categories_race_archive_order",
+            "race_id",
+            "archived",
+            "display_order",
+        ),
     )
 
     route = relationship("Route", back_populates="categories")
@@ -623,20 +700,23 @@ class Category(Base):
 
 class RaceRider(Base):
     """
-    Entry linking a rider, device, and category for a race.
+    Race-scoped entry linking a rider, device, and category.
 
     Columns include timing fields from both RFID and Pi sources. multiple_rfid_flag
     marks entries where RFID processing saw extra reads that could not be confidently
     grouped into the start or finish timing window. finish_time_rfid_confirmed
-    freezes the accepted RFID finish timing after organiser review.
+    freezes the accepted RFID finish timing after organiser review. The composite
+    (category_id, race_id) foreign key prevents cross-race category assignment;
+    race-level unique constraints permit only one entry per rider and device.
     """
 
     __tablename__ = "race_riders"
 
     id = Column(Integer, primary_key=True)
+    race_id = Column(Integer, ForeignKey("races.id", ondelete="RESTRICT"), nullable=False, index=True)
     rider_id = Column(Integer, ForeignKey("riders.id"), nullable=False, index=True)
     device_id = Column(String(64), ForeignKey("devices.id"), nullable=False, index=True)
-    category_id = Column(Integer, ForeignKey("categories.id"), nullable=False, index=True)
+    category_id = Column(Integer, nullable=False, index=True)
     comm_setting = Column(String(32), nullable=True)
     active = Column(Boolean, nullable=False, default=True)
     recording = Column(Boolean, nullable=False, default=True)
@@ -655,6 +735,29 @@ class RaceRider(Base):
     multiple_rfid_flag = Column(Boolean, nullable=False, default=False)
     finish_time_rfid_confirmed = Column(Boolean, nullable=False, default=False)
     #pi_offset_time = Column(Integer, nullable=True) # offset in seconds to apply to the pi's clock to sync with official - removed as can just calculate it
+
+    # Race scope is repeated deliberately so PostgreSQL can enforce rules that
+    # cannot be expressed through the Category -> Route -> Race join alone.
+    # The category/race composite key keeps the repeated value consistent, and
+    # the unique keys make rider and device assignment unambiguous per race.
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["category_id", "race_id"],
+            ["categories.id", "categories.race_id"],
+            name="fk_race_riders_category_race",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "race_id",
+            "rider_id",
+            name="ux_race_riders_race_rider",
+        ),
+        UniqueConstraint(
+            "race_id",
+            "device_id",
+            name="ux_race_riders_race_device",
+        ),
+    )
 
     rider = relationship("Rider", back_populates="race_entries")
     device = relationship("Device", back_populates="race_riders")

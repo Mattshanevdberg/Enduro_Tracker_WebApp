@@ -22,7 +22,8 @@ because they currently belong only to the post-race page.
   const ridersTable = document.querySelector('.riders-table');
   const keyListNode = document.getElementById('track-key-list');
   const raceId = mapNode?.dataset?.raceId || '';
-  const categoryLabel = mapNode?.dataset?.category || '';
+  const categoryId = mapNode?.dataset?.categoryId || '';
+  const categoryLabel = mapNode?.dataset?.categoryName || '';
   const categoryText = categoryLabel ? `category "${categoryLabel}"` : 'selected category';
   const mapConfigNode = document.getElementById('post-race-map-config');
   const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
@@ -205,7 +206,7 @@ because they currently belong only to the post-race page.
   }
 
   function getTimingRequestUrl() {
-    return `/races/${encodeURIComponent(raceId)}/race-rider-timings?category=${encodeURIComponent(categoryLabel)}&_ts=${Date.now()}`;
+    return `/races/${encodeURIComponent(raceId)}/race-rider-timings?category_id=${encodeURIComponent(categoryId)}&_ts=${Date.now()}`;
   }
 
   // Keep the multiple-RFID explanation visible only while a row needs review.
@@ -552,7 +553,7 @@ because they currently belong only to the post-race page.
   if (!mapNode || !raceId || !maps) {
     updateStatus('Map cannot load (missing map metadata or shared map helpers).');
   } else {
-    maps.fetchRouteGeojson(raceId, categoryLabel)
+    maps.fetchRouteGeojson(raceId, categoryId)
       .then(geojson => {
         drawRoute(geojson);
         updateStatus(`Showing route for ${categoryText}.`);

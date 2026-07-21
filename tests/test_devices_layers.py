@@ -8,6 +8,7 @@ They never connect to or modify the configured development/production database.
 
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from flask import Blueprint, Flask
@@ -61,14 +62,26 @@ class DeviceLayerTestCase(unittest.TestCase):
         form = normalize_device_form("  pi001  ", "  Test tracker  ", "  EPC-1  ")
         self.assertEqual(
             form,
-            {"id": "pi001", "device_info": "Test tracker", "epc_id": "EPC-1"},
+            {
+                "id": "pi001",
+                "device_info": "Test tracker",
+                "epc_id": "EPC-1",
+                "returned": True,
+                "active": True,
+            },
         )
         self.assertEqual(device_form_template_values(form), form)
 
         blank_form = normalize_device_form(" ", " ", " ")
         self.assertEqual(
             device_form_template_values(blank_form),
-            {"id": "", "device_info": "", "epc_id": ""},
+            {
+                "id": "",
+                "device_info": "",
+                "epc_id": "",
+                "returned": True,
+                "active": True,
+            },
         )
         self.assertEqual(validate_device_form(blank_form), ["Device ID is required."])
 
@@ -106,6 +119,8 @@ class DeviceLayerTestCase(unittest.TestCase):
             session.commit()
             self.assertEqual(first_device.id, "pi001")
             self.assertEqual(first_device.device_info, "Updated")
+            self.assertTrue(first_device.returned)
+            self.assertTrue(first_device.active)
 
             with self.assertRaisesRegex(DeviceValidationError, "already linked"):
                 update_device(
@@ -176,7 +191,13 @@ class DeviceRouteTestCase(unittest.TestCase):
 
         create_response = self.client.post(
             "/devices/",
-            data={"id": "pi010", "device_info": "Route test", "epc_id": "EPC-10"},
+            data={
+                "id": "pi010",
+                "device_info": "Route test",
+                "epc_id": "EPC-10",
+                "returned": "on",
+                "active": "on",
+            },
         )
         self.assertEqual(create_response.status_code, 200)
         self.assertIn(b"Device &#39;pi010&#39; created", create_response.data)
@@ -191,7 +212,11 @@ class DeviceRouteTestCase(unittest.TestCase):
         self.assertEqual(self.client.get("/devices/pi010/edit").status_code, 200)
         edit_response = self.client.post(
             "/devices/pi010/edit",
-            data={"device_info": "Updated route test", "epc_id": "EPC-11"},
+            data={
+                "device_info": "Updated route test",
+                "epc_id": "EPC-11",
+                "returned": "on",
+            },
         )
         self.assertEqual(edit_response.status_code, 200)
 
@@ -200,10 +225,141 @@ class DeviceRouteTestCase(unittest.TestCase):
             device = verification_session.get(Device, "pi010")
             self.assertEqual(device.device_info, "Updated route test")
             self.assertEqual(device.epc_id, "EPC-11")
+            self.assertTrue(device.returned)
+            self.assertFalse(device.active)
         finally:
             verification_session.close()
 
         self.assertEqual(self.client.get("/devices/missing/edit").status_code, 404)
+
+
+class DeviceAuthorizationTestCase(unittest.TestCase):
+    """Verify only an authenticated active admin can change inventory flags."""
+
+    def setUp(self):
+        """Register decorated device routes with isolated durable state."""
+        self.engine = create_engine(
+            "sqlite+pysqlite:///:memory:",
+            future=True,
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        Device.__table__.create(bind=self.engine)
+        self.session_factory = sessionmaker(
+            bind=self.engine,
+            autoflush=False,
+            autocommit=False,
+            future=True,
+        )
+        session = self.session_factory()
+        try:
+            session.add(Device(id="pi-auth", returned=True, active=True))
+            session.commit()
+        finally:
+            session.close()
+
+        repository_root = Path(__file__).resolve().parents[1]
+        self.app = Flask(__name__, template_folder=str(repository_root / "templates"))
+        self.app.config.update(
+            TESTING=True,
+            SECRET_KEY="device-auth-test",
+            LOGIN_DISABLED=True,
+        )
+        self.app.jinja_env.globals["csrf_token"] = lambda: "test-csrf-token"
+        home_blueprint = Blueprint("home", __name__)
+        home_blueprint.add_url_rule(
+            "/dashboard-admin",
+            endpoint="dashboard_admin",
+            view_func=lambda: "Admin dashboard",
+        )
+        self.app.register_blueprint(home_blueprint)
+        self.app.register_blueprint(bp_devices)
+        self.client = self.app.test_client()
+        self.session_patch = patch(
+            "src.web.devices.SessionLocal",
+            new=self.session_factory,
+        )
+        self.current_user = SimpleNamespace(
+            role="rider",
+            is_authenticated=True,
+            is_active=True,
+        )
+        self.user_patch = patch(
+            "src.auth.decorators.current_user",
+            new=self.current_user,
+        )
+        self.session_patch.start()
+        self.user_patch.start()
+
+    def tearDown(self):
+        """Stop authorization/session patches and dispose isolated storage."""
+        self.user_patch.stop()
+        self.session_patch.stop()
+        self.engine.dispose()
+
+    def test_inventory_toggle_requires_admin_and_persists_only_admin_choice(self):
+        """Reject a rider toggle, then allow an administrator toggle."""
+        rider_response = self.client.post(
+            "/devices/pi-auth/edit",
+            data={
+                "device_info": "forged rider update",
+                "returned": "",
+                "active": "",
+            },
+        )
+        self.assertEqual(rider_response.status_code, 403)
+        session = self.session_factory()
+        try:
+            device = session.get(Device, "pi-auth")
+            self.assertTrue(device.returned)
+            self.assertTrue(device.active)
+        finally:
+            session.close()
+
+        self.current_user.role = "admin"
+        self.current_user.is_active = False
+        inactive_admin_response = self.client.post(
+            "/devices/pi-auth/edit",
+            data={"returned": "", "active": ""},
+        )
+        self.assertEqual(inactive_admin_response.status_code, 403)
+
+        self.current_user.role = "admin"
+        self.current_user.is_active = True
+        admin_response = self.client.post(
+            "/devices/pi-auth/edit",
+            data={
+                "device_info": "admin confirmed handout",
+                "returned": "",
+                "active": "on",
+            },
+        )
+        self.assertEqual(admin_response.status_code, 200)
+        session = self.session_factory()
+        try:
+            device = session.get(Device, "pi-auth")
+            self.assertFalse(device.returned)
+            self.assertTrue(device.active)
+            self.assertEqual(device.device_info, "admin confirmed handout")
+        finally:
+            session.close()
+
+        return_response = self.client.post(
+            "/devices/pi-auth/edit",
+            data={
+                "device_info": "admin confirmed return and retirement",
+                "returned": "on",
+                "active": "",
+            },
+        )
+        self.assertEqual(return_response.status_code, 200)
+        session = self.session_factory()
+        try:
+            device = session.get(Device, "pi-auth")
+            self.assertTrue(device.returned)
+            self.assertFalse(device.active)
+        finally:
+            session.close()
 
 
 if __name__ == "__main__":

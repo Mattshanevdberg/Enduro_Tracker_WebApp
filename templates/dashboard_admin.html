@@ -57,10 +57,10 @@
                   </td>
                   <td>{{ 'Yes' if race.active else 'No' }}</td>
                   <td class="actions">
-                    <a class="btn" href="{{ url_for('races.edit_race', race_id=race.id, category=default_category) }}">Edit</a>
+                    <a class="btn" href="{{ url_for('races.edit_race', race_id=race.id) }}">Edit</a>
                     <a class="btn" href="{{ url_for('races.post_race', race_id=race.id) }}">Post Race</a>
                     <a class="btn" href="{{ url_for('races.post_race_admin', race_id=race.id) }}">Post Admin</a>
-                    <a class="btn" href="{{ url_for('races.enter_race', race_id=race.id) }}">Enter Race</a>
+                    <a class="btn" href="{{ url_for('races.enter_race_admin', race_id=race.id) }}">Enter Rider</a>
                     <a class="btn" href="{{ url_for('races.race_results', race_id=race.id) }}">Results</a>
                   </td>
                 </tr>
