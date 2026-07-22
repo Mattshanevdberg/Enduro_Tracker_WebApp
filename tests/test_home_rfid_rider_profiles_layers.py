@@ -2,24 +2,26 @@
 Focused regression tests for home, crawler guidance, RFID, and rider-profile
 route layering.
 
-The tests cover dashboard race preparation, the public robots.txt response,
-RFID filter/query behavior, the existing HTTP response contracts, and the
-intentionally web-only rider profile placeholder. Isolated SQLite tables
-prevent changes to configured databases.
+The tests cover categorized dashboard composition, crawler responses, RFID
+filter/query behavior, existing HTTP contracts, and public rider profile
+navigation. Isolated SQLite tables prevent changes to configured databases.
 """
 
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import patch
 from xml.etree import ElementTree
 
 from flask import Blueprint, Flask
+from flask_login import LoginManager
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from src.db.models import IngestRfid, Race
-from src.services.home import load_race_display_data
+from src.db.models import IngestRfid, Race, Rider
+from src.services.home import load_dashboard_display_data, load_race_display_data
 from src.services.rfid import list_filtered_rfid_records
 from src.utils.rfid import (
     DEFAULT_RFID_LIMIT,
@@ -65,15 +67,20 @@ class HomeLayerTestCase(unittest.TestCase):
     """Verify dashboard service rules and controller delegation."""
 
     def setUp(self):
-        """Create an isolated Race table with active and inactive rows."""
-        self.engine, self.session_factory = isolated_session_factory(Race.__table__)
+        """Create isolated Race/Rider tables covering each lifecycle state."""
+        self.engine, self.session_factory = isolated_session_factory(
+            Race.__table__,
+            Rider.__table__,
+        )
         session = self.session_factory()
         try:
             session.add_all(
                 [
-                    Race(name="Later Active", starts_at_epoch=200, active=True),
-                    Race(name="Early Inactive", starts_at_epoch=100, active=False),
-                    Race(name="Early Active", starts_at_epoch=150, active=True),
+                    Race(name="Upcoming", starts_at_epoch=200, status="upcoming"),
+                    Race(name="Draft", starts_at_epoch=100, status="draft"),
+                    Race(name="Live", starts_at_epoch=150, status="live"),
+                    Race(name="Completed", starts_at_epoch=50, status="completed"),
+                    Rider(name="Dashboard Rider", team="Test Team"),
                 ]
             )
             session.commit()
@@ -85,24 +92,26 @@ class HomeLayerTestCase(unittest.TestCase):
         self.engine.dispose()
 
     def test_dashboard_service_filters_orders_and_prepares_display_values(self):
-        """Load active/all races with ordered display datetimes."""
+        """Filter lifecycle values and compose public race/rider collections."""
         session = self.session_factory()
         try:
-            active_races = load_race_display_data(
+            public_races = load_race_display_data(
                 session,
-                active_only=True,
+                statuses=("upcoming", "live", "completed"),
             )
             self.assertEqual(
-                [race.name for race in active_races],
-                ["Early Active", "Later Active"],
+                [race.name for race in public_races],
+                ["Completed", "Live", "Upcoming"],
             )
-            self.assertTrue(all(race.starts_at is not None for race in active_races))
+            self.assertTrue(all(race.starts_at is not None for race in public_races))
 
-            all_races = load_race_display_data(
-                session,
-                active_only=False,
-            )
-            self.assertEqual(len(all_races), 3)
+            all_races = load_race_display_data(session)
+            self.assertEqual(len(all_races), 4)
+            dashboard_data = load_dashboard_display_data(session)
+            self.assertEqual(dashboard_data["race_sections"]["upcoming"][0].name, "Upcoming")
+            self.assertEqual(dashboard_data["race_sections"]["live"][0].name, "Live")
+            self.assertEqual(dashboard_data["race_sections"]["past"][0].name, "Completed")
+            self.assertEqual(dashboard_data["riders"][0].name, "Dashboard Rider")
         finally:
             session.close()
 
@@ -117,11 +126,76 @@ class HomeLayerTestCase(unittest.TestCase):
             self.assertEqual(home_page()[0], "landing.html")
             public_template, public_context = dashboard()
             self.assertEqual(public_template, "dashboard.html")
-            self.assertEqual(len(public_context["races"]), 2)
+            self.assertEqual(len(public_context["race_sections"]["upcoming"]), 1)
+            self.assertEqual(public_context["selected_tab"], "upcoming")
 
             admin_template, admin_context = dashboard_admin.__wrapped__()
             self.assertEqual(admin_template, "dashboard_admin.html")
-            self.assertEqual(len(admin_context["races"]), 3)
+            self.assertEqual(len(admin_context["races"]), 4)
+
+    def test_public_dashboard_template_renders_rider_tab_and_real_links(self):
+        """Render the full dashboard template with its required URL endpoints."""
+        repository_root = Path(__file__).resolve().parents[1]
+        app = Flask(
+            __name__,
+            template_folder=str(repository_root / "templates"),
+            static_folder=str(repository_root / "src" / "static"),
+        )
+        app.config.update(TESTING=True, SECRET_KEY="dashboard-template-test")
+        app.jinja_env.globals["csrf_token"] = lambda: "test-csrf-token"
+        login_manager = LoginManager()
+
+        @login_manager.user_loader
+        def load_test_user(_user_id):
+            """Keep this isolated dashboard request anonymous."""
+            return None
+
+        login_manager.init_app(app)
+
+        auth_blueprint = Blueprint("auth", __name__)
+        auth_blueprint.add_url_rule("/login", endpoint="login", view_func=lambda: "Login")
+        auth_blueprint.add_url_rule("/signup", endpoint="signup", view_func=lambda: "Signup")
+        auth_blueprint.add_url_rule(
+            "/logout",
+            endpoint="logout",
+            view_func=lambda: "Logout",
+            methods=["POST"],
+        )
+        races_blueprint = Blueprint("races", __name__)
+        for endpoint, route in (
+            ("post_race", "/races/<int:race_id>/post"),
+            ("enter_race", "/races/<int:race_id>/enter"),
+            ("race_results", "/races/<int:race_id>/results"),
+        ):
+            races_blueprint.add_url_rule(
+                route,
+                endpoint=endpoint,
+                view_func=lambda race_id: str(race_id),
+            )
+        profiles_blueprint = Blueprint("rider_profiles", __name__)
+        profiles_blueprint.add_url_rule(
+            "/rider/<int:rider_id>",
+            endpoint="rider_profile",
+            view_func=lambda rider_id: str(rider_id),
+        )
+        profiles_blueprint.add_url_rule(
+            "/rider/<int:rider_id>/profile-image",
+            endpoint="rider_profile_image",
+            view_func=lambda rider_id: str(rider_id),
+        )
+        app.register_blueprint(auth_blueprint)
+        app.register_blueprint(races_blueprint)
+        app.register_blueprint(profiles_blueprint)
+        app.register_blueprint(bp_home)
+
+        with patch("src.web.home.SessionLocal", new=self.session_factory):
+            response = app.test_client().get("/dashboard?tab=riders")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'data-selected-tab="riders"', response.data)
+        self.assertIn(b"Dashboard Rider", response.data)
+        self.assertIn(b"/rider/1", response.data)
+        self.assertIn(b"dashboard-panel-upcoming", response.data)
 
     def test_robots_txt_returns_same_protected_path_guidance_for_prod_and_dev(self):
         """Expose identical crawler exclusions through production and dev hosts."""
@@ -163,15 +237,16 @@ class HomeLayerTestCase(unittest.TestCase):
                 self.assertEqual(response.mimetype, "text/plain")
                 self.assertEqual(response.get_data(as_text=True), expected_content)
 
-    def test_sitemap_lists_only_current_canonical_indexable_pages(self):
-        """List the landing page and dashboard while rider remains a placeholder."""
+    def test_sitemap_lists_current_canonical_indexable_pages(self):
+        """List the landing page, dashboard, and durable rider profiles."""
         app = Flask(__name__)
         app.register_blueprint(bp_home)
 
-        response = app.test_client().get(
-            "/sitemap.xml",
-            headers={"Host": "kooksnylive.co.za"},
-        )
+        with patch("src.web.home.SessionLocal", new=self.session_factory):
+            response = app.test_client().get(
+                "/sitemap.xml",
+                headers={"Host": "kooksnylive.co.za"},
+            )
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.mimetype, "application/xml")
@@ -186,9 +261,9 @@ class HomeLayerTestCase(unittest.TestCase):
             [
                 "https://kooksnylive.co.za/",
                 "https://kooksnylive.co.za/dashboard",
+                "https://kooksnylive.co.za/rider/1",
             ],
         )
-        self.assertNotIn("https://kooksnylive.co.za/rider", locations)
 
 
 class RfidLayerTestCase(unittest.TestCase):
@@ -275,26 +350,105 @@ class RfidLayerTestCase(unittest.TestCase):
 
 
 class RiderProfilesRouteTestCase(unittest.TestCase):
-    """Verify the intentionally web-only public rider-profile placeholder."""
+    """Verify public rider-index redirection and profile-detail rendering."""
 
-    def test_public_rider_profiles_placeholder(self):
-        """Keep GET /rider public and rendering the expected placeholder content."""
+    def test_public_rider_profile_routes(self):
+        """Redirect the index to its tab and render a canonical rider detail."""
         repository_root = Path(__file__).resolve().parents[1]
-        app = Flask(__name__, template_folder=str(repository_root / "templates"))
-        app.config.update(TESTING=True, SECRET_KEY="rider-profile-test")
+        engine, session_factory = isolated_session_factory(Rider.__table__)
+        session = session_factory()
+        try:
+            rider = Rider(
+                name="Profile Rider",
+                team="Profile Team",
+                bike="Profile Bike",
+                bio="Profile biography.",
+            )
+            session.add(rider)
+            session.commit()
+            rider_id = rider.id
+        finally:
+            session.close()
+
+        app = Flask(
+            __name__,
+            template_folder=str(repository_root / "templates"),
+            static_folder=str(repository_root / "src" / "static"),
+        )
+        upload_directory = TemporaryDirectory()
+        app.config.update(
+            TESTING=True,
+            SECRET_KEY="rider-profile-test",
+            PROFILE_IMAGE_UPLOAD_DIR=upload_directory.name,
+        )
         home_blueprint = Blueprint("home", __name__)
         home_blueprint.add_url_rule(
             "/dashboard",
             endpoint="dashboard",
             view_func=lambda: "Dashboard",
         )
+        riders_blueprint = Blueprint("riders", __name__)
+        riders_blueprint.add_url_rule(
+            "/riders/<int:rider_id>/edit",
+            endpoint="rider_form",
+            view_func=lambda rider_id: f"Edit {rider_id}",
+        )
         app.register_blueprint(home_blueprint)
+        app.register_blueprint(riders_blueprint)
         app.register_blueprint(bp_rider_profiles)
 
-        response = app.test_client().get("/rider")
-        self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Rider Profiles", response.data)
-        self.assertIn(b"Placeholder only", response.data)
+        try:
+            with (
+                patch("src.web.rider_profiles.SessionLocal", new=session_factory),
+                patch(
+                    "src.web.rider_profiles.current_user",
+                    new=SimpleNamespace(
+                        is_authenticated=False,
+                        is_active=False,
+                        role=None,
+                        rider_id=None,
+                    ),
+                ),
+            ):
+                index_response = app.test_client().get("/rider")
+                self.assertEqual(index_response.status_code, 302)
+                self.assertIn(b"/dashboard?tab=riders", index_response.data)
+
+                profile_response = app.test_client().get(f"/rider/{rider_id}")
+                self.assertEqual(profile_response.status_code, 200)
+                self.assertIn(b"Profile Rider", profile_response.data)
+                self.assertIn(b"Profile biography.", profile_response.data)
+                self.assertIn(
+                    f"https://kooksnylive.co.za/rider/{rider_id}".encode(),
+                    profile_response.data,
+                )
+                missing_response = app.test_client().get("/rider/9999")
+                self.assertEqual(missing_response.status_code, 404)
+
+                stored_key = f"rider-{rider_id}-{'a' * 32}.webp"
+                image_path = Path(upload_directory.name) / stored_key
+                image_path.write_bytes(b"normalized-webp-test")
+                image_session = session_factory()
+                try:
+                    image_rider = image_session.get(Rider, rider_id)
+                    image_rider.profile_image_filename = stored_key
+                    image_session.commit()
+                finally:
+                    image_session.close()
+
+                image_response = app.test_client().get(
+                    f"/rider/{rider_id}/profile-image"
+                )
+                self.assertEqual(image_response.status_code, 200)
+                self.assertEqual(image_response.mimetype, "image/webp")
+                self.assertEqual(
+                    image_response.headers["X-Content-Type-Options"],
+                    "nosniff",
+                )
+                image_response.close()
+        finally:
+            upload_directory.cleanup()
+            engine.dispose()
 
 
 if __name__ == "__main__":

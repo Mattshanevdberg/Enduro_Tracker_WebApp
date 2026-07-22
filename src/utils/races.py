@@ -4,7 +4,7 @@ Pure race form, route/category-name, and manual-time parsing helpers.
 Functions
 ---------
 normalize_race_form
-    Normalize race form fields and convert the local start time to epoch seconds.
+    Normalize race metadata, lifecycle, static image filename, and start/end times.
 normalize_route_name
     Trim a submitted descriptive route name.
 normalize_category_name
@@ -24,10 +24,12 @@ application time conversion rules.
 
 from datetime import datetime
 
+from src.utils.media import normalize_static_image_filename
 from src.utils.time import datetime_to_epoch, iso_to_epoch
 
 MAX_ROUTE_NAME_LENGTH = 128
 MAX_CATEGORY_NAME_LENGTH = 64
+RACE_STATUSES = ("draft", "upcoming", "live", "completed")
 
 
 def normalize_route_name(value) -> str:
@@ -98,32 +100,39 @@ def normalize_race_form(values) -> dict:
       values: mapping-like object containing the race form fields.
 
     Output:
-      Dictionary containing normalized model values and starts_at_epoch.
+      Dictionary containing normalized model values plus start/end epochs.
 
     Notes:
       Invalid or incomplete date/time input retains the existing behavior of
-      storing no start epoch rather than rejecting the full race form.
+      storing no epoch rather than rejecting the full race form.
     """
-    start_date = (values.get("start_date") or "").strip()
-    start_time = (values.get("start_time") or "").strip()
-    starts_at_epoch = None
-    if start_date and start_time:
+    def form_datetime_epoch(date_field: str, time_field: str) -> int | None:
+        """Convert one complete local form date/time pair to epoch seconds."""
+        date_value = (values.get(date_field) or "").strip()
+        time_value = (values.get(time_field) or "").strip()
+        if not date_value or not time_value:
+            return None
         try:
             local_start = datetime.strptime(
-                f"{start_date} {start_time}",
+                f"{date_value} {time_value}",
                 "%Y-%m-%d %H:%M",
             )
-            starts_at_epoch = datetime_to_epoch(local_start)
+            return datetime_to_epoch(local_start)
         except (TypeError, ValueError):
-            starts_at_epoch = None
+            return None
 
     return {
         "race_id": (values.get("race_id") or "").strip() or None,
         "name": (values.get("name") or "").strip(),
         "website": (values.get("website") or "").strip() or None,
         "description": (values.get("description") or "").strip() or None,
-        "starts_at_epoch": starts_at_epoch,
-        "active": values.get("active") == "on",
+        "location": (values.get("location") or "").strip() or None,
+        "logo_image_filename": normalize_static_image_filename(
+            values.get("logo_image_filename")
+        ),
+        "starts_at_epoch": form_datetime_epoch("start_date", "start_time"),
+        "ends_at_epoch": form_datetime_epoch("end_date", "end_time"),
+        "status": (values.get("status") or "draft").strip().lower(),
     }
 
 

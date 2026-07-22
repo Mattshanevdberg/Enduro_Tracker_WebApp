@@ -33,6 +33,12 @@ RUN adduser \
     --uid "${UID}" \
     appuser
 
+# Seed the runtime profile-image directory with appuser ownership. Docker copies
+# these permissions into a newly created named volume, allowing the non-root web
+# process to write uploads without granting broad filesystem permissions.
+RUN mkdir -p /var/lib/enduro-tracker/profile-images \
+    && chown -R appuser:appuser /var/lib/enduro-tracker
+
 # Download dependencies as a separate step to take advantage of Docker's caching.
 # Leverage a cache mount to /root/.cache/pip to speed up subsequent builds.
 # Leverage a bind mount to requirements.txt to avoid having to copy them into

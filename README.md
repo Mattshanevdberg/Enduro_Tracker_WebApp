@@ -17,10 +17,17 @@ ingest to display.
 
 ### server
 - Purpose: Existing application service built from the repository Dockerfile.
-- Reads/Writes: receives `DATABASE_URL` and `FLASK_SECRET_KEY` from Compose so the runtime DB connection and Flask secret handling become environment-driven.
+- Reads/Writes: receives `DATABASE_URL`, `FLASK_SECRET_KEY`, and profile-image settings from Compose; writes normalized Rider images to the `profile-images` volume mounted at `/var/lib/enduro-tracker/profile-images`.
 - Depends on: `db` with health condition so PostgreSQL is started before the app container, and `redis` with health condition so authentication rate-limit storage is available before the web app starts.
 - Exposes: host port `${APP_HOST_PORT}` to the Gunicorn web process listening on container port `8000`.
-- Notes: the SQLAlchemy engine already prefers `DATABASE_URL`, so Compose now controls whether the app runs against PostgreSQL and the SQLite runtime path is no longer used. The Dockerfile starts Gunicorn with `src.main:app`, which matches the Flask WSGI entry point used on the remote server. `FLASK_SECRET_KEY` must be passed explicitly into the container because Compose variable substitution alone does not make an env value available to `os.environ` inside the running Flask process.
+- Notes: the SQLAlchemy engine already prefers `DATABASE_URL`, so Compose now controls whether the app runs against PostgreSQL and the SQLite runtime path is no longer used. The Dockerfile starts Gunicorn with `src.main:app`, which matches the Flask WSGI entry point used on the remote server. `FLASK_SECRET_KEY` must be passed explicitly into the container because Compose variable substitution alone does not make an env value available to `os.environ` inside the running Flask process. The image seeds the media mount point with `appuser` ownership so a newly created volume remains writable by the non-root process.
+
+### profile-images volume
+- Purpose: durable storage for Rider-uploaded profile pictures outside the immutable application image and Git checkout.
+- Mount: named Compose volume `profile-images` at `/var/lib/enduro-tracker/profile-images` in the `server` container only.
+- Environment isolation: the real volume name comes from `PROFILE_IMAGES_VOLUME_NAME`; `.env.dev` uses `enduro_tracker_dev_profile_images` and `.env.prod` uses `enduro_tracker_prod_profile_images`.
+- Lifecycle: ordinary `docker compose down`, `pull`, `up`, and container recreation preserve the volume. `docker compose down -v` deletes named data volumes and must not be used unless both PostgreSQL and profile media are deliberately being destroyed or restored.
+- Backup: production database backups do not include this volume. Back up the production profile-image volume separately and keep its backup paired with the corresponding PostgreSQL backup.
 
 ### upload-text sanitizing
 - Purpose: `POST /api/v1/upload-text` now strips embedded NUL (`0x00`) bytes from the uploaded raw text before parsing it and before storing it in `track_hist.raw_txt`.
@@ -117,8 +124,17 @@ docker compose -p enduro-prod --env-file .env.prod up -d
 - Why project names matter: without `-p`, Compose treats repeated `up` commands from the same repository as the same stack, so the second run replaces the first stack's containers, tunnel token, port mapping, and database volume wiring.
 
 ### Same-machine dev/prod note
-- If dev and prod run on the same Docker host, use different values for `APP_HOST_PORT`, `APP_HOSTNAME`, `TUNNEL_TOKEN`, database credentials, and `POSTGRES_VOLUME_NAME`.
+- If dev and prod run on the same Docker host, use different values for `APP_HOST_PORT`, `APP_HOSTNAME`, `TUNNEL_TOKEN`, database credentials, `POSTGRES_VOLUME_NAME`, and `PROFILE_IMAGES_VOLUME_NAME`.
 - The host ports may differ, for example `8000` for dev and `8001` for prod, but the Cloudflare public hostname configuration should still point to `http://server:8000`.
+
+### Profile-image production workflow addition
+- This update adds `Pillow` to `requirements.txt`. Because `compose.debug.yaml` bind-mounts source code but still uses dependencies from `APP_IMAGE_TAG`, build the new development image and update `APP_IMAGE_TAG` before starting this update's debug stack. Subsequent source-only edits can use the normal live bind-mount workflow.
+- Before the first deployment of an image containing profile uploads, add `PROFILE_IMAGES_VOLUME_NAME=enduro_tracker_prod_profile_images` and `PROFILE_IMAGE_MAX_BYTES=5242880` to the production host's ignored `.env.prod`; keep the corresponding development name `enduro_tracker_dev_profile_images` in `.env.dev`.
+- No manual `docker volume create` is required. The normal `docker compose ... up -d` creates the environment-specific named volume and mounts it into the new server container.
+- The existing build, push, pull, Alembic, and `up -d` order remains valid. The media volume is independent of Alembic; the database migration creates only the nullable string key.
+- Continue using `docker compose down` without `-v`. Never add `-v` to routine dev or production shutdowns because it removes named PostgreSQL and profile-image data.
+- After first production startup, verify the attachment with `docker volume inspect enduro_tracker_prod_profile_images` and perform one rider upload/reload test before considering the deployment complete.
+- Add `enduro_tracker_prod_profile_images` to production backups. A PostgreSQL dump alone cannot restore Rider images, even though it restores their stored keys.
 
 ### Public hostname troubleshooting note
 - Cloudflare error `1033` usually indicates a public-hostname-to-tunnel routing problem rather than an app crash.
@@ -127,12 +143,13 @@ docker compose -p enduro-prod --env-file .env.prod up -d
 ### Google Search discovery setup
 - Step 4 - landing-page information: `templates/landing.html` uses the descriptive title `Kooksnylive | Live Enduro and Motocross Race Tracking`, a concise search-result description, and the canonical URL `https://kooksnylive.co.za/` so crawlers can identify the preferred root-domain version of the landing page.
 - Step 5 - crawler guidance: public `GET /robots.txt` allows the intended anonymous viewer pages while asking cooperative crawlers not to visit `/admin/`, `/api/v1/`, `/dashboard-admin`, `/devices`, `/rfid`, `/riders/`, or authenticated race-management paths, including rider/admin entry, named-route/category mutation, and GPX upload/removal. It advertises `https://kooksnylive.co.za/sitemap.xml` as the canonical production sitemap location.
-- Step 6 - XML sitemap: public `GET /sitemap.xml` returns `application/xml` and currently lists only `https://kooksnylive.co.za/` and `https://kooksnylive.co.za/dashboard` as canonical pages intended for search results.
-- Sitemap scope: `/rider` is intentionally omitted while it renders placeholder content. Add it, stable public race pages, and public results only when they provide distinct content that should appear in search results; a route does not need to be listed merely because anonymous users can access it.
+- Step 6 - XML sitemap: public `GET /sitemap.xml` returns `application/xml` and lists `https://kooksnylive.co.za/`, `https://kooksnylive.co.za/dashboard`, and each current canonical `https://kooksnylive.co.za/rider/<id>` profile.
+- Sitemap scope: redirect-only `/rider` is omitted, while distinct rider details are discovered dynamically from stable Rider ids. Add public race pages/results only when their canonical/indexing policy is finalized; a route does not need to be listed merely because anonymous users can access it.
+- Draft race indexing: direct draft race pages remain addressable for preview and are not linked from the public dashboard; `templates/post_race.html` emits `noindex,nofollow` for draft rows. This crawler directive does not make the direct route private or restrict anonymous access when an ID is known.
 - Host coverage: the host-independent Flask route returns the same protected-path exclusions for `kooksnylive.co.za`, `app.kooksnylive.co.za`, and `dev.kooksnylive.co.za`; automated tests explicitly verify the production root and development host responses. The sitemap remains rooted at the preferred canonical production domain.
 - Public viewer scope: `/`, `/dashboard`, `/rider`, public race pages, public results, and the map/timing resources those pages require remain crawlable, matching the anonymous Viewer responsibilities in `Web Application System Design V4 - 20260224.pdf`.
 - Security note: `robots.txt` is crawler guidance, not access control. Authentication and role decorators remain responsible for protecting private routes, consistent with the lightweight-auth and HTTPS requirements in `Web Application System Design V4 - 20260224.pdf`.
-- Deployment check: after deploying the production image, inspect `https://kooksnylive.co.za/` for the title, description, and canonical link; confirm `https://kooksnylive.co.za/robots.txt` returns the plain-text directives; then confirm `https://kooksnylive.co.za/sitemap.xml` returns valid XML containing only the landing page and dashboard canonical URLs.
+- Deployment check: after deploying the production image, inspect the landing page/dashboard/profile canonical links; confirm `robots.txt` returns the protected-path guidance; then confirm `sitemap.xml` contains the landing page, dashboard, and current public rider URLs.
 - Search Console: submit `https://kooksnylive.co.za/sitemap.xml` under Sitemaps after the production deployment and monitor its processing status for fetch or URL errors.
 
 ### References used for this setup
@@ -152,6 +169,7 @@ docker compose -p enduro-prod --env-file .env.prod up -d
 - Flask secret values: `FLASK_SECRET_KEY` must be passed into the `server` container explicitly through the Compose `environment` section so Flask can read it through `os.environ`.
 - Map values: `MAP_PROVIDER`, `MAP_STYLE`, `ARCGIS_API_KEY`, and the map-limit variables must also be passed explicitly into the `server` container. Flask uses the provider/style/key in the map quota API only; the post-race HTML receives a safe bootstrap config and must not render the Esri key directly. The referrer-restricted Esri browser API key is returned only by `/api/map/config-status` when quota checks allow satellite imagery.
 - Auth email and security values: `RESEND_API_KEY`, `MAIL_FROM`, `APP_PUBLIC_BASE_URL`, `AUTH_TOKEN_PEPPER`, `AUTH_PASSWORD_MIN_LENGTH`, `AUTH_RATE_LIMIT_STORAGE_URL`, `SESSION_COOKIE_SECURE`, and `SESSION_COOKIE_SAMESITE` are passed into the `server` container for the authentication workstream. Resend is used only for forgot-password reset links in the current plan; signup email verification is intentionally not enabled.
+- Profile-image values: `PROFILE_IMAGES_VOLUME_NAME` selects an environment-specific durable Docker volume and `PROFILE_IMAGE_MAX_BYTES` sets the per-file upload limit passed to the web container. The committed/default limit is 5 MiB (`5242880` bytes).
 - Notes: changing PostgreSQL bootstrap variables on an already-initialised volume does not reconfigure an existing database cluster. Clean separation requires a fresh volume name per environment or an explicit manual database/user migration.
 
 ## Python Requirements
@@ -161,12 +179,17 @@ docker compose -p enduro-prod --env-file .env.prod up -d
 - Packages: `Flask-Login` for browser login sessions, `Flask-WTF` for form handling and CSRF protection, `Flask-Limiter` for rate limiting sensitive auth routes, `redis` for shared rate-limit storage, `email-validator` for signup/reset email validation, and `resend` for forgot-password email delivery.
 - Notes: Resend is only used for password-reset emails in the current plan. Signup email verification is intentionally not enabled.
 
+### Profile-image processing package
+- Purpose: `Pillow` decodes submitted JPEG/PNG/WebP content, applies EXIF orientation, constrains dimensions, strips metadata through re-encoding, and writes one predictable WebP output format.
+- Package: `Pillow==12.3.0`.
+- Notes: file extensions and decoded image formats are both allowlisted; the submitted filename is never used as the stored key.
+
 ## src/main.py
 
 ### create_app
 - Purpose: Flask application factory that creates the app instance, loads the Flask secret key, configures browser security helpers, and attaches all API and web blueprints.
-- Reads: `FLASK_SECRET_KEY`, the `MAP_*` map configuration values, `ARCGIS_API_KEY`, and the auth email/security configuration values from the container runtime environment; `config.yaml` for host and port globals; `src.auth.login.login_manager` for browser session setup; `src.auth.rate_limits` for Redis-backed rate limiting; `src.auth.csrf` helpers for CSRF setup; `src.auth.routes.bp_auth` for signup and future auth pages; `src.web.rider_profiles.bp_rider_profiles` for the future rider profile page; `src.web.map_tile_quota.bp_map_tile_quota` for map tile quota admin/config routes.
-- Writes: `app.config["SECRET_KEY"]` plus secure session-cookie settings, the map provider, style, browser API key, map-limit configuration values, and `AUTH_RATE_LIMIT_STORAGE_URL`; initialises Flask-Login, Flask-Limiter, and Flask-WTF CSRF protection on the app.
+- Reads: `FLASK_SECRET_KEY`, `PROFILE_IMAGE_UPLOAD_DIR`, `PROFILE_IMAGE_MAX_BYTES`, the `MAP_*` map configuration values, `ARCGIS_API_KEY`, and the auth email/security configuration values from the container runtime environment; `config.yaml` for host and port globals; `src.auth.login.login_manager` for browser session setup; `src.auth.rate_limits` for Redis-backed rate limiting; `src.auth.csrf` helpers for CSRF setup; `src.auth.routes.bp_auth` for auth pages; `src.web.rider_profiles.bp_rider_profiles` for the dashboard rider-tab redirect and public rider details/media; `src.web.map_tile_quota.bp_map_tile_quota` for map quota routes.
+- Writes: `app.config["SECRET_KEY"]` plus secure session-cookie settings, profile-image path/limit settings, the map provider, style, browser API key, map-limit configuration values, and `AUTH_RATE_LIMIT_STORAGE_URL`; initialises Flask-Login, Flask-Limiter, and Flask-WTF CSRF protection on the app.
 - Registers: ingest API routes, auth browser routes, home/dashboard routes, public rider profile routes, rider management, devices, races, RFID record viewer, and map tile quota blueprints.
 - Called from: module import path `src.main:app` for Gunicorn, and the direct-run block at the bottom of the file.
 - Notes: the app now expects `FLASK_SECRET_KEY` to exist in the container environment. If Compose does not pass that value into the `server` service, Gunicorn fails during import with `KeyError: 'FLASK_SECRET_KEY'`. Browser form blueprints are CSRF-protected. The tracker ingest blueprint remains CSRF-exempt because it is used by device/API clients rather than browser-session forms. Runtime table creation is intentionally disabled; run Alembic migrations before starting the server or workers.
@@ -542,13 +565,24 @@ Module notes:
 
 - Parent directory: `src/web`
 - File: `rider_profiles.py`
-- Layer decision: no utility or service module is needed while this route remains a static placeholder with no parsing, model access, or business rules.
+- Layer decision: public profile lookup reuses `get_rider` from `src.services.riders`; redirects, canonical page rendering, edit-link visibility, and 404 responses remain in the web layer.
 
 ### rider_profiles
-- Description: renders the public `placeholder.html` page for the future rider-profile index at GET `/rider`.
-- Called from: Rider Profiles links in `templates/dashboard.html` and `templates/dashboard_admin.html`.
-- Why this layer: `render_template` and `url_for` are Flask response concerns, and there is no reusable or durable-state logic to extract yet.
-- Future boundary: profile querying and edit rules should move to a service when the real page is implemented.
+- Description: redirects public GET `/rider` to `/dashboard?tab=riders`, making the dashboard Riders tab the single rider index.
+- Called from: legacy bookmarks and links that still target the former standalone rider index.
+- Why this layer: redirect and URL construction are Flask response concerns.
+
+### rider_profile
+- Description: renders the canonical public read-only profile at GET `/rider/<rider_id>`; the marked profile card is also loaded into the dashboard dialog.
+- Reads: one Rider through `src.services.riders.get_rider` and current-user ownership/admin access through `user_can_access_rider_resource`.
+- Returns: `templates/rider_profile.html`, 404 for a missing rider, and an Edit Profile action only for the linked rider or an administrator.
+- Progressive enhancement: dashboard links open this route in a modal when JavaScript is available and remain complete standalone navigation when it is unavailable.
+
+### rider_profile_image
+- Description: serves GET `/rider/<rider_id>/profile-image` from persistent profile-media storage as `image/webp` with conditional requests, long-lived caching, and `X-Content-Type-Options: nosniff`.
+- Reads: the Rider's generated key through `get_rider` and the configured `PROFILE_IMAGE_UPLOAD_DIR`.
+- Returns: the normalized image, or 404 for a missing Rider, invalid/mismatched key, or missing file.
+- Indexing: this is a public image resource used by crawlable profile/dashboard pages; it is not added as a standalone sitemap URL and the existing robots rules do not block it.
 
 ## src/auth/decorators.py
 
@@ -655,6 +689,14 @@ Module notes:
 - Called from:
   - `src.main:create_app` for `SESSION_COOKIE_SECURE`.
 
+### env_positive_int
+- Purpose: Parse a strictly positive integer environment value while using an explicit safe fallback for missing, malformed, zero, or negative input.
+- Reads: named environment variable.
+- Writes: None.
+- Returns: parsed positive integer or the supplied fallback.
+- Called from:
+  - `src.main:create_app` for `PROFILE_IMAGE_MAX_BYTES`.
+
 ### required_env
 - Purpose: Read required environment variables and fail clearly when they are missing or blank.
 - Reads: named environment variable.
@@ -697,6 +739,30 @@ Module notes:
 - Basic use: validate required device id, 64-character device-id limit, and 128-character EPC limit.
 - Called from: `create_device` and `update_device` in `src.services.devices`.
 - Notes: uniqueness is deliberately excluded because that requires database state and belongs in the service layer.
+
+## Static media utility layer
+
+- Parent directory: `src/utils`
+- File: `media.py`
+
+### normalize_static_image_filename / validate_static_image_filename
+- Description: trim optional developer-managed image basenames and reject directory paths, overlong names, or unsupported extensions.
+- Called from: race form normalization/validation.
+- Why this layer: Race artwork remains a developer-managed static asset, while Rider uploads use the separate profile-image pipeline below.
+
+## Profile-image utility layer
+
+- Parent directory: `src/utils`
+- File: `profile_images.py`
+
+### ProfileImageValidationError
+- Description: carries a user-correctable profile-image extension, exact file-size, signature, format, pixel-count, or decode failure. The rider controller also rejects clearly oversized multipart requests before Werkzeug parses the uploaded file.
+- Called from: raised by `prepare_profile_image`; handled by `rider_form` as HTTP 400.
+
+### prepare_profile_image
+- Description: bounds the untrusted stream read, allowlists JPEG/PNG/WebP names and decoded formats, rejects images above 20 megapixels, applies EXIF orientation, caps dimensions at 1,200 pixels, and emits metadata-free WebP bytes.
+- Called from: `store_profile_image` in `src.services.profile_images`.
+- Why this layer: image decoding and normalization are reusable low-level rules with no Flask, database, or filesystem-path concerns.
 
 ## Rider utility layer
 
@@ -968,8 +1034,13 @@ Module notes:
 
 ### get_rider
 - Description: loads one Rider by primary key or returns `None`.
-- Called from: `rider_form` when resolving GET and POST edit requests.
+- Called from: `rider_form` when resolving GET edit requests and from public profile/media controllers.
 - Why this layer: model lookup is durable-state access reusable outside Flask.
+
+### get_rider_for_update
+- Description: loads a Rider with `FOR UPDATE` so PostgreSQL serializes concurrent text/image changes to the same profile.
+- Called from: POST `rider_form` before a generated image key can be replaced or removed.
+- Why this layer: row locking is durable-state coordination that prevents simultaneous replacements from orphaning one request's generated file.
 
 ### rider_account_has_profile
 - Description: checks whether an active rider account already has a linked `rider_id`.
@@ -982,9 +1053,28 @@ Module notes:
 - Why this layer: it coordinates validation, Rider/User models, account linking, and the reused `utc_now` helper.
 
 ### update_rider
-- Description: validates and stages changes to a rider's name, team, bike, and bio. Category is selected only when entering a race.
+- Description: validates and stages changes to a rider's name, team, bike, and bio while the controller/storage service separately coordinates generated profile-media keys. Category is selected only when entering a race.
 - Called from: `rider_form` for POST `/riders/<rider_id>/edit`.
 - Why this layer: it applies rider mutation rules independently of Flask requests and responses.
+
+## Profile-image storage service layer
+
+- Parent directory: `src/services`
+- File: `profile_images.py`
+- Storage rule: generated media lives in the configured persistent volume; PostgreSQL stores only the flat key on `Rider.profile_image_filename`.
+
+### is_profile_image_key
+- Description: accepts only `rider-<id>-<32 lowercase hexadecimal characters>.webp` keys and can require the embedded owner id to match a Rider.
+- Called from: public media serving and obsolete-file cleanup.
+
+### store_profile_image
+- Description: calls `prepare_profile_image`, generates a UUID-based Rider key, writes with restrictive permissions to a same-directory temporary file, and atomically moves it into the persistent media directory.
+- Called from: authenticated POST `/riders/new` and POST `/riders/<id>/edit` when a file is supplied.
+- Why this layer: it coordinates durable filesystem state without taking ownership of Flask responses or database commits.
+
+### delete_profile_image
+- Description: removes only keys that match the generated flat-key format; missing and legacy values are left untouched safely.
+- Called from: `rider_form` after a successful replacement/removal and when an uncommitted new file must be cleaned up.
 
 ## Home service layer
 
@@ -992,10 +1082,19 @@ Module notes:
 - File: `home.py`
 
 ### load_race_display_data
-- Description: queries active or all races, orders them by start epoch, and prepares display datetimes.
-- Called from: `_render_dashboard` in `web/home.py`.
+- Description: queries all races or selected lifecycle statuses, orders by start epoch, and prepares start/end display datetimes.
+- Called from: `load_dashboard_display_data` and `_render_admin_dashboard` in `web/home.py`.
 - Why this layer: it coordinates Race model data and reusable dashboard preparation without depending on Flask rendering.
 - Reuse: uses `epoch_to_datetime` from `utils/time.py`.
+
+### load_dashboard_display_data
+- Description: groups public races into upcoming, live, and newest-first completed collections and includes every Rider for the dashboard Riders tab; draft races remain private.
+- Called from: `_render_public_dashboard` in `web/home.py`.
+- Why this layer: it composes Race/Rider database state independently of Flask rendering.
+
+### list_public_rider_ids
+- Description: returns stable Rider ids for dynamic public sitemap entries.
+- Called from: `sitemap` in `web/home.py`.
 
 ## RFID service layer
 
@@ -1023,13 +1122,13 @@ Module notes:
 - Called from: race save and page-data services.
 - Why this layer: it is reusable durable-state access.
 
-### _prepare_race_display_time
-- Description: populates the existing `race.starts_at` display attribute from `starts_at_epoch`.
-- Called from: `load_post_race_data`.
+### _prepare_race_display_times
+- Description: populates `race.starts_at` and `race.ends_at` display attributes from their durable epoch columns.
+- Called from: `load_post_race_data` and `load_race_edit_data`.
 - Why this layer: it prepares model-backed application display data while reusing `epoch_to_datetime`.
 
 ### save_race
-- Description: validates and stages Race creation or editing.
+- Description: validates name, lifecycle, end-after-start ordering, and the static image basename, then stages race name/website/description/location/logo/start/end/status changes.
 - Called from: `save_race` in `web/races.py`.
 - Why this layer: it coordinates validation and model mutation without Flask responses.
 
@@ -1169,7 +1268,7 @@ Module notes:
 - File: `race_entry.py`
 
 ### get_rider_previous_device_id / load_race_entry_page_data
-- Description: resolve a rider's most recent device assignment and compose the active-race/category entry page without changing inventory or assignment state.
+- Description: resolve a rider's most recent device assignment and compose the upcoming/live race-category entry page without changing inventory or assignment state; draft/completed races reject entry.
 - Called from: `enter_race` and the automatic assignment service.
 - Why this layer: these functions coordinate Race, Rider, Category, RaceRider, and Device history independently of HTTP rendering.
 
@@ -1563,7 +1662,7 @@ Module header documents:
 ### Current baseline
 - Purpose: the active Alembic baseline is [438e4bd69220_baseline_schema.py](/home/matthew/Desktop/Master_Dev/Enduro_Tracker_WebApp/migrations/versions/438e4bd69220_baseline_schema.py), which can build the current PostgreSQL schema from an empty database.
 - Notes: legacy pre-baseline revisions are kept in [migrations/versions_legacy](/home/matthew/Desktop/Master_Dev/Enduro_Tracker_WebApp/migrations/versions_legacy) for reference only and are no longer part of the active migration chain.
-- Current head: [c9e6a4b13d8f_add_device_and_category_admin_fields.py](/home/matthew/Desktop/Master_Dev/Enduro_Tracker_WebApp/migrations/versions/c9e6a4b13d8f_add_device_and_category_admin_fields.py) marks existing devices active/returned, adds normalized/order/archive category state, and removes `riders.category`. It follows the named shared-route and race-scope migrations.
+- Current head: [e4f7a2c9d6b1_add_dashboard_profile_fields.py](/home/matthew/Desktop/Master_Dev/Enduro_Tracker_WebApp/migrations/versions/e4f7a2c9d6b1_add_dashboard_profile_fields.py) replaces `races.active` with the constrained `status` lifecycle, adds race location/static-logo fields, and adds the nullable Rider profile-media key. Existing active races migrate to `upcoming`; inactive races migrate to `draft` because their historical intent cannot be inferred safely. Rider image bytes are stored in the separate persistent volume, not PostgreSQL.
 
 ### Standard change process
 - Step 1: edit [models.py](/home/matthew/Desktop/Master_Dev/Enduro_Tracker_WebApp/src/db/models.py) first because the SQLAlchemy models remain the schema source of truth.
@@ -1606,10 +1705,14 @@ docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
 - Parent directory: `src/web`
 - File: `home.py`
 
-### _render_dashboard
-- Description: opens the request-scoped session, calls `load_race_display_data`, and renders the selected dashboard template.
-- Called from: `dashboard` and `dashboard_admin`.
-- Why this layer: it contains shared Flask rendering and session-boundary glue for the two dashboards.
+### _selected_dashboard_tab
+- Description: validates the optional `?tab=` selection against upcoming, live, past, and riders, defaulting invalid/missing values to upcoming.
+- Called from: `_render_public_dashboard`.
+- Why this layer: query-string parsing is an HTTP concern.
+
+### _render_public_dashboard / _render_admin_dashboard
+- Description: own the separate request-scoped session and rendering boundaries for the public composed dashboard and dense all-races administration dashboard.
+- Called from: `dashboard` and `dashboard_admin` respectively.
 
 ### home_page (GET `/`)
 - Description: renders the public `templates/landing.html` page.
@@ -1624,26 +1727,26 @@ docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
 - Host behavior: the same response is served through the root production, application, and development hostnames because crawler path coverage is host-independent; the advertised sitemap stays on `https://kooksnylive.co.za`.
 
 ### sitemap (GET `/sitemap.xml`)
-- Description: returns a UTF-8 XML sitemap containing the canonical production landing page and public dashboard URLs.
+- Description: returns a UTF-8 XML sitemap containing the canonical production landing page, public dashboard, and current `/rider/<id>` URLs.
 - Called from: the sitemap directive in `robots.txt`, Google Search Console submissions, and search-engine crawlers.
-- Why this layer: the current sitemap is a static Flask HTTP response with no database coordination or domain rules, so no utility or service module is needed.
-- Scope: `/rider` remains excluded while it is a placeholder. Add stable public rider profiles, race details, and results when those pages provide distinct indexable content.
+- Why this layer: XML/URL construction is an HTTP concern; the stable Rider id query is delegated to `list_public_rider_ids`.
+- Scope: `/rider` redirects to the dashboard and is not listed; each distinct read-only `/rider/<id>` profile is listed. Public race details/results can be added later when their canonical/indexing policy is finalized.
 - Host behavior: every application hostname can serve the route, but every `<loc>` uses the preferred `https://kooksnylive.co.za` canonical domain.
 
 ### dashboard (GET `/dashboard`)
-- Description: calls `_render_dashboard` for active races and renders `templates/dashboard.html`.
+- Description: validates `?tab=`, composes upcoming/live/completed races plus all riders, and renders the server-first tabbed `templates/dashboard.html`.
 - Called from: landing/dashboard navigation and direct public requests.
 - Why this layer: it selects the public HTTP view while the service owns race retrieval/preparation.
 
 ### dashboard_admin (GET `/dashboard-admin`)
-- Description: calls `_render_dashboard` for all races and renders `templates/dashboard_admin.html`.
+- Description: calls `_render_admin_dashboard` for every race status and renders the dense, branded `templates/dashboard_admin.html`.
 - Called from: admin login/navigation and direct admin requests.
 - Why this layer: it selects the protected admin HTTP view and applies `admin_required`.
 
 ### Checks
 - Anonymous users can load `/` and `/dashboard`.
 - Anonymous users can load `/robots.txt` as `text/plain` and receive the expected allow, protected-path disallow, and sitemap directives through both production and development hostnames.
-- Anonymous users can load `/sitemap.xml` as `application/xml`; it contains only the canonical landing page and dashboard URLs while `/rider` remains a placeholder.
+- Anonymous users can load `/sitemap.xml` as `application/xml`; it contains the canonical landing page/dashboard plus current public rider-detail URLs, while redirect-only `/rider` remains omitted.
 - Anonymous users see no management controls on `/dashboard`.
 - Anonymous users are redirected to login for `/dashboard-admin`.
 - Riders are blocked from `/dashboard-admin` with 403.
@@ -1657,10 +1760,12 @@ docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
 ```text
 src/static/css/
   base.css
+  dashboard.css
+  dashboard-admin.css
   forms.css
   tables.css
   maps.css
-  home.css
+  rider-profile.css
   race-form.css
   post-race.css
   rfid.css
@@ -1671,7 +1776,9 @@ src/static/css/
 - Rule: put reusable form controls, form grids, labels, messages, and input states in `forms.css`.
 - Rule: put reusable table wrappers, wide-table behavior, cells, headings, and table action styling in `tables.css`.
 - Rule: put reusable Leaflet/map containers and map sizing helpers in `maps.css`.
-- Rule: put only home-page refinements in `home.css`.
+- Rule: keep the self-contained public split-screen dashboard in `dashboard.css`; it deliberately does not modify shared `base.css`.
+- Rule: put only the dense admin-dashboard layout/brand refinements in `dashboard-admin.css`.
+- Rule: put the reusable standalone/dialog rider profile card in `rider-profile.css`.
 - Rule: put only race form layout and behavior-sensitive styling in `race-form.css`.
 - Rule: put only post-race layout, modal, live timing, and live map refinements in `post-race.css`.
 - Rule: put only RFID page refinements in `rfid.css` when they are not reusable enough for `forms.css` or `tables.css`.
@@ -1689,13 +1796,12 @@ src/static/css/
 - Notes: stylesheet order matters. Shared files should define the default look, while page files should only add or override what that page genuinely needs.
 
 ### Current base.css usage
-- Purpose: Provide the lean shared static stylesheet for the Flask-rendered UI, currently applied to `templates/landing.html`, `templates/dashboard.html`, `templates/dashboard_admin.html`, `templates/placeholder.html`, `templates/login.html`, `templates/signup.html`, `templates/forgot_password.html`, `templates/reset_password.html`, `templates/riders_form.html`, `templates/devices.html`, `templates/device_edit.html`, `templates/rfid_view.html`, `templates/race_form.html`, `templates/race_entry.html`, and `templates/post_race.html`.
+- Purpose: Provide the lean shared static stylesheet for Flask-rendered operational/simple pages. The public dashboard is intentionally self-contained in `dashboard.css`; the admin dashboard loads base/table styles and its scoped page stylesheet.
 - Reads: CSS custom properties defined in `:root` for navy, white, forest green, neutral surfaces, borders, text, and shadows.
 - Writes: Browser presentation only; no application data is changed.
 - Styles: theme variables, page shell, page header, primary buttons, section titles, muted text, empty state, and mobile layout adjustments.
 - Called from:
   - `templates/landing.html`: linked through `url_for('static', filename='css/base.css')`.
-  - `templates/dashboard.html`: linked through `url_for('static', filename='css/base.css')`.
   - `templates/dashboard_admin.html`: linked through `url_for('static', filename='css/base.css')`.
   - `templates/placeholder.html`: linked through `url_for('static', filename='css/base.css')`.
   - `templates/login.html`: linked through `url_for('static', filename='css/base.css')`.
@@ -1710,9 +1816,12 @@ src/static/css/
   - `templates/post_race.html`: linked through `url_for('static', filename='css/base.css')`.
 - Notes: this CSS split follows the simple Flask web UI direction in `Web Application System Design V4 - 20260224.pdf`. Future work should move broad reusable rules out of `base.css` into component stylesheets and keep complex page-specific rules in their own page files.
 
-### Shared component files
+### Dashboard and shared component files
 - Purpose: Provide reusable component stylesheets that are loaded after `base.css` by pages that need them.
-- Current state: `forms.css`, `tables.css`, and `maps.css` exist under `src/static/css`; `templates/landing.html`, `templates/dashboard.html`, `templates/dashboard_admin.html`, `templates/placeholder.html`, `templates/login.html`, `templates/signup.html`, `templates/forgot_password.html`, `templates/reset_password.html`, `templates/riders_form.html`, `templates/devices.html`, `templates/device_edit.html`, `templates/rfid_view.html`, `templates/race_form.html`, and `templates/post_race.html` now load the relevant component files.
+- Current state: shared `forms.css`, `tables.css`, and `maps.css` remain unchanged; dashboard-only work is isolated in `dashboard.css`, `dashboard-admin.css`, and `rider-profile.css`.
+- `dashboard.css`: owns the two-pane viewport, shrinking hero, accessible tab/card presentation, two-by-two mobile tabs, responsive rows, and rider dialog shell.
+- `dashboard-admin.css`: gives the protected operations dashboard matching brand/card typography while retaining its compact tool grid and wide race table.
+- `rider-profile.css`: styles the same read-only rider card on its canonical page and inside the dashboard dialog.
 - `forms.css`: contains reusable content panels, form grids, filter grids, field rows, inputs, checkboxes, file inputs, focus states, status messages, and form action layout.
 - `tables.css`: contains reusable table cards, table cells, wide-table behavior, table heading styling, table action buttons, `pre-wrap`, and `code` wrapping helpers.
 - `maps.css`: contains reusable compact map preview container styling plus shared Leaflet map wrapper/canvas styling for route and track maps.
@@ -1730,6 +1839,7 @@ src/static/js/
     forms.js
     polling.js
   pages/
+    dashboard.js
     race-form.js
     race-entry.js
     post-race.js
@@ -1761,7 +1871,8 @@ src/static/js/
 
 ### Current JS usage
 - Purpose: Record the current incremental JavaScript migration state.
-- Current state: `src/static/js/components/forms.js`, `src/static/js/components/maps.js`, `src/static/js/pages/race-form.js`, `src/static/js/pages/race-entry.js`, and `src/static/js/pages/post-race.js` exist. Templates load their required component files before their page file.
+- Current state: `src/static/js/components/forms.js`, `src/static/js/components/maps.js`, `src/static/js/pages/dashboard.js`, `src/static/js/pages/race-form.js`, `src/static/js/pages/race-entry.js`, and `src/static/js/pages/post-race.js` exist. Templates load their required component files before their page file.
+- `pages/dashboard.js`: progressively enhances real server-rendered tab/profile links, synchronizes hero/tab/URL state, compacts the hero from the list pane's scroll position, implements keyboard tab navigation, and loads canonical rider pages into the native dialog. Navigation remains functional without JavaScript.
 - `components/forms.js`: contains shared `data-auto-submit` select handling used by the category controls in `templates/race_form.html` and `templates/post_race.html`.
 - `components/maps.js`: contains shared Leaflet map creation, selected-category route fetching, GeoJSON layer creation, map-bounds fitting, basemap switching, and Esri tile-usage reporting helpers used by the race form and post-race pages.
 - `components/maps.js`: retains the OpenStreetMap base-layer helper and adds Esri satellite attach/remove helpers. The race form uses the existing OSM default. The post-race page creates an empty map, fits its selected route or rider track first, then attaches the backend-approved basemap so it requests only tiles near the visible course. After fitting the selected route it limits panning and minimum zoom to bounds padded by 25% on every side. It will use the retained OSM layer whenever `/api/map/config-status` does not allow satellite imagery. When Esri is attached, `createEsriTileUsageReporter` counts newly observed Esri tile resources and posts batched `tiles_delta` values to `/api/map/tile-usage`.
@@ -1771,6 +1882,32 @@ src/static/js/
 - Category-id asset cache control: templates append `v=20260720-category-id-v1` to the changed map and race page JavaScript URLs. This forces browsers and intermediate caches to fetch the `category_id` implementation instead of retaining the earlier category-name request code after deployment.
 - Notes: `components/polling.js` does not exist yet because polling is currently used only by the post-race page. Move polling code there only when another page needs the same stable behaviour.
 - External map dependencies: `templates/post_race.html` loads Leaflet 1.9.4, Esri Leaflet 3.0.19, and Esri Leaflet Vector 4.3.2 in that order. The Esri libraries make `L.esri.Vector.vectorBasemapLayer(...)` available for the later satellite-basemap implementation; loading them alone does not make an Esri request or replace the current OpenStreetMap layer.
+
+## Dashboard and profile image structure
+
+- Purpose: keep developer-managed brand/hero/race artwork in predictable Flask static directories while separating mutable Rider uploads from the application image.
+- Structure:
+```text
+src/static/images/
+  brand/logo.svg
+  dashboard/heroes/upcoming.svg
+  dashboard/heroes/live.svg
+  dashboard/heroes/past.svg
+  dashboard/heroes/riders.svg
+  icons/login-rider.svg
+  icons/signup-rider.svg
+  icons/profile.svg
+  icons/admin.svg
+  icons/logout.svg
+  races/default-race-logo.svg
+  riders/default-profile.svg
+```
+- Hero/brand replacement: replace the fixed files above while retaining their filenames, or update `DASHBOARD_TAB_PRESENTATION` in `src/web/home.py` when a new filename is deliberate.
+- Race images: add a file beneath `src/static/images/races/` and enter only its basename in Race Logo/Image Filename on the race edit page.
+- Rider default: `src/static/images/riders/default-profile.svg` remains the committed fallback when a Rider has no uploaded image.
+- Rider uploads: authenticated Rider owners and administrators submit JPEG, PNG, or WebP through the rider form. The application creates a generated WebP key and writes the processed image beneath the `profile-images` volume mounted at `/var/lib/enduro-tracker/profile-images`.
+- Validation: developer-managed Race basenames use `src.utils.media`; Rider uploads use bounded reads, decoded-format checks, pixel limits, metadata-stripping conversion, and generated filenames from `src.utils.profile_images` and `src.services.profile_images`.
+- Storage boundary: mutable uploads must never be written into `src/static`, the Git checkout, or PostgreSQL binary columns. Dev and prod use different named volumes and require separate media backups.
 
 ## src/web/devices.py
 
@@ -1819,15 +1956,20 @@ src/static/js/
 - Parent directory: `src/web`
 - File: `riders.py`
 
+### _profile_image_settings / _render_rider_form / _delete_obsolete_profile_image
+- Description: read the configured media path/limit, supply consistent upload context to every form response, and best-effort remove a superseded generated file only after its Rider database update commits.
+- Called from: `rider_form` for GET, validation/error responses, successful upload/replacement/removal, and database-failure cleanup.
+- Why this layer: configuration access, Flask rendering, post-commit logging, and transaction-aware orchestration are controller concerns; image transformation/storage remain delegated.
+
 ### rider_form (GET/POST `/riders/new` and `/riders/<rider_id>/edit`)
-- Description: renders the form/list on GET and delegates create or update submissions to the rider service on POST.
+- Description: renders the form/list on GET; on multipart POST it delegates Rider text changes, securely stores an optional generated WebP, updates only the server-owned media key, and removes the previous file after commit.
 - Called from:
   - `templates/dashboard_admin.html`: "Input Rider Details" button (GET `/riders/new`).
   - `templates/riders_form.html`: "Edit" link in riders table (GET `/riders/<id>/edit`).
   - `templates/riders_form.html`: "Save" button in the rider form (POST create/update).
-- Why this layer: it handles Flask form/path data, `rider_required`, the reused `user_can_access_rider_resource` ownership check, redirects, transactions, templates, and HTTP status codes.
+- Why this layer: it handles Flask form/path/file data, early multipart-size rejection, `rider_required`, the reused `user_can_access_rider_resource` ownership check, redirects, database/file transaction coordination, templates, and HTTP status codes.
 - Access behavior: admins may create/edit any profile; riders may create one linked profile and edit only their own. GET `/riders/new` redirects an already-linked rider to their edit page.
-- Responses: 200 for successful display/save, 302 for the profile redirect, 400 for validation, 403 for forbidden access/linking, 404 for a missing rider, and 500 for unexpected database errors.
+- Responses: 200 for successful display/save, 302 for the profile redirect, 400 for text/image validation, 403 for forbidden access/linking, 404 for a missing rider, 413 for a clearly oversized multipart body, and 500 for unexpected database/storage errors.
 
 ## Race web layer
 
@@ -1861,18 +2003,18 @@ src/static/js/
 - UI: map includes multi-select rider track overlays controlled from the compact legend beside race info (toggle state synced to active overlays, reselects replace prior overlays), persisted map height/width sliders, auto-stacking of the riders table under the map when widths clash, 5-second live refresh polling for selected rider tracks (cache-first), 5-second live refresh polling for rider timing cells, and a manual timing modal that can optionally upload a TXT log to `/api/v1/upload-text` before reapplying the chosen start/end window.
 - Map config: renders only safe bootstrap values in `#post-race-map-config`; Esri provider/style/key must come from `/api/map/config-status` after quota checks.
 - Called from:
-  - `templates/dashboard.html`: "View Race" button in active races table.
-  - `templates/dashboard_admin.html`: "Post Race" button in races table.
+  - `templates/dashboard.html`: full race-card title link in upcoming/live/past tabs.
+  - `templates/dashboard_admin.html`: "Race Page" button in races table.
   - `templates/post_race.html`: category `<select>` auto-submit (GET with `?category_id=`).
 
 ### enter_race (GET/POST `/races/<race_id>/enter`)
 - Purpose: Let an authenticated rider enter themselves through a staged category/device workflow and automatic locked device assignment.
-- Reads: active `Race`, active/non-archived race-scoped `Category` rows and their shared `Route`, selected `Rider`, prior/current `RaceRider` assignments, and `Device` availability state.
+- Reads: an `upcoming` or `live` Race, active/non-archived race-scoped `Category` rows and their shared `Route`, selected `Rider`, prior/current `RaceRider` assignments, and `Device` availability state.
 - Writes: one `RaceRider` on a successful assignment; never changes `Device.returned` or `Device.active`.
 - Renders: `templates/race_entry.html`.
 - Access: active rider account through `rider_required`; administrators are redirected to the separate admin endpoint.
 - Called from:
-  - `templates/dashboard.html`: "Enter Race" button.
+  - `templates/dashboard.html`: "Get Device" button on upcoming races.
 - Notes: rider identity always comes from `current_user.rider_id`; submitted `rider_id` values are ignored. The confirmation shows both assigned category and device. Candidate rows are locked with PostgreSQL `FOR UPDATE SKIP LOCKED`.
 
 ### enter_race_admin (GET/POST `/races/<race_id>/entries/new`)
@@ -2351,11 +2493,11 @@ src/static/js/
 ## tests/test_riders_layers.py
 
 ### RiderLayerTestCase
-- Purpose: test category-free rider normalization/validation, create/list/update operations, Rider/User linking, admin-created profiles, and one-profile enforcement.
+- Purpose: test category-free rider normalization/validation, create/list/update operations, Rider/User linking, admin-created profiles, one-profile enforcement, secure raster normalization, generated key ownership, atomic storage, and deletion.
 - Database safety: uses only isolated in-memory SQLite Rider and User tables.
 
 ### RiderRouteTestCase
-- Purpose: smoke-test both rider URL patterns, templates, persistence, validation, redirects, ownership restrictions, and missing-rider responses.
+- Purpose: smoke-test both rider URL patterns, multipart upload/replacement/removal, invalid-image responses, obsolete-file cleanup, text persistence, templates, redirects, ownership restrictions, and missing-rider responses.
 - Isolation: unwraps only the shared route decorator and replaces `SessionLocal` with the in-memory test session factory.
 
 ### Run
@@ -2366,13 +2508,13 @@ src/static/js/
 ## tests/test_home_rfid_rider_profiles_layers.py
 
 ### HomeLayerTestCase
-- Purpose: test active/all race loading, ordering, display conversion, and controller template delegation without hard-coded category defaults.
+- Purpose: test lifecycle filtering/grouping, start/end display conversion, all-rider composition, full dashboard template rendering, canonical sitemap entries, and controller delegation.
 
 ### RfidLayerTestCase
 - Purpose: test filter normalization/parsing, query filtering/limits, display values, template rendering, and invalid-filter responses.
 
 ### RiderProfilesRouteTestCase
-- Purpose: verify that public GET `/rider` still renders the intended placeholder without unnecessary service/utility layers.
+- Purpose: verify that public GET `/rider` redirects to the dashboard Riders tab, `/rider/<id>` renders a canonical public profile, and `/rider/<id>/profile-image` safely serves a generated-key WebP with nosniff behavior.
 
 ### Database safety
 - Home and RFID tests use isolated in-memory SQLite model tables and do not access configured application databases.
@@ -2385,7 +2527,7 @@ src/static/js/
 ## tests/test_races_layers.py
 
 ### RaceLifecycleAndRouteServiceTestCase
-- Purpose: test race parsing/save behavior, `category_id` page composition, route/category create/rename/reorder/archive/reassignment, guarded unused deletion, shared routes, GPX storage/clearing, same-race references, and normalized case-insensitive uniqueness.
+- Purpose: test race start/end/location/logo/status parsing and save behavior, `category_id` page composition, route/category create/rename/reorder/archive/reassignment, guarded unused deletion, shared routes, GPX storage/clearing, same-race references, and normalized case-insensitive uniqueness.
 
 ### RaceEntryTimingTrackServiceTestCase
 - Purpose: test assignment management, per-race rider/device uniqueness, cross-race Category rejection, shared rider/device listing reuse, timing payloads, confirmation rules, manual trimmed snapshots, and history/cache fallback.
@@ -2478,7 +2620,7 @@ docker compose -p enduro-dev --env-file .env.dev run --rm -e TEST_EMAIL_TO=you@e
 - `ingest_rfid`: raw RFID reader tag events. Columns: `id`, `epc`, `rssi`, `ant`, `time_stamp_epoch`, `reader_id`, `avg_rssi`, `received_at_epoch`, `processed_at_epoch`, `process_error`. Relationships: view-only link to `devices` through `ingest_rfid.epc == devices.epc_id` so unknown/false RFID reads can still be stored. Conditions: `epc` is required (`NOT NULL`); `time_stamp_epoch`, `reader_id`, and `processed_at_epoch` are indexed for worker lookups.
 - `devices`: registered hardware devices; referenced by race_riders. Columns: `id`, `device_info`, `epc_id`, `returned`, `active`. Relationships: one device can map to many `race_riders` entries via `race_riders.device_id -> devices.id`, and can view many `ingest_rfid` rows through matching EPC values. Conditions: returned/active are required booleans defaulting true; primary-key uniqueness on `id`; `ux_devices_epc_id` enforces at most one device per non-null EPC tag.
 - `points`: parsed GNSS fixes per device (t_epoch, lat/lon, optional metrics). Columns: `id`, `device_id`, `t_epoch`, `lat`, `lon`, `ele`, `sog`, `cog`, `fx`, `hdop`, `nsat`, `received_at`, `received_at_epoch`. Relationships: no enforced foreign key to `devices`; points are linked to `race_riders` through a view-only `device_id` join. Conditions: unique constraint `ux_points_device_time` enforces one row per (`device_id`, `t_epoch`).
-- `riders`: race-independent athlete details. Columns: `id`, `name`, `bike`, `bio`, `team`. Relationships: one rider can have many category-specific `race_riders` entries via `race_riders.rider_id -> riders.id`, and can optionally have one linked login account via `users.rider_id -> riders.id`. Conditions: `name` is required; no category is stored on the profile.
+- `riders`: race-independent athlete/public-profile details. Columns: `id`, `name`, `bike`, `bio`, `team`, `profile_image_filename`. Relationships: one rider can have many category-specific `race_riders` entries via `race_riders.rider_id -> riders.id`, and can optionally have one linked login account via `users.rider_id -> riders.id`. Conditions: `name` is required; no category is stored on the profile; the optional filename is an application-generated key for a normalized WebP in persistent profile-media storage. PostgreSQL does not contain the image bytes.
 - `users`: browser login accounts for riders and admins. Columns: `id`, `first_name`, `last_name`, `username`, `username_normalized`, `email`, `email_normalized`, `password_hash`, `role`, `rider_id`, `is_active`, `auth_version`, `created_at`, `updated_at`, `last_login_at`. Relationships: optionally links one account to one `rider`, has many `auth_tokens`, and can be actor/target for `auth_audit_events`. Conditions: role is constrained to `rider` or `admin`; `username_normalized`, `email_normalized`, and non-null `rider_id` are unique; passwords are stored only as hashes. Notes: the model uses Flask-Login's `UserMixin` for standard login-session helpers such as `get_id()`.
 - `auth_tokens`: one-time hashed authentication tokens, currently for password reset. Columns: `id`, `user_id`, `purpose`, `token_hash`, `expires_at`, `used_at`, `created_at`. Relationships: belongs to one `user`. Conditions: `user_id`, `purpose`, `token_hash`, `expires_at`, and `created_at` are required; raw tokens are never stored.
 - `auth_audit_events`: security-relevant account event history. Columns: `id`, `actor_user_id`, `target_user_id`, `action`, `metadata_json`, `created_at`. Relationships: optional actor and target links to `users`. Conditions: `action` and `created_at` are required; metadata must not contain passwords, raw reset tokens, or other secrets.
@@ -2486,7 +2628,7 @@ docker compose -p enduro-dev --env-file .env.dev run --rm -e TEST_EMAIL_TO=you@e
 - `map_tile_usage_sessions`: summarized browser/page map tile usage sessions for analytics and quota evidence. Columns: `id`, `session_key`, `browser_cookie_id`, `user_id`, `role`, `race_id`, `billing_month`, `page_path`, `provider`, `session_started_at`, `session_last_seen_at`, `estimated_tiles_loaded`, `fallback_used`, `blocked_reason`, `user_agent_hash`, `ip_hash`, `created_at`, `updated_at`. Relationships: optionally links to `users` and `races`. Conditions: `session_key` is unique; `browser_cookie_id`, `role`, `billing_month`, `page_path`, provider, session timestamps, tile count, fallback flag, and timestamps are required. Notes: there is no `map_style` column and no `estimated_tiles_delta_unrolled` column because accepted usage-report deltas update both this table and `map_tile_monthly_quota.estimated_tiles_used` immediately.
 - `map_tile_browser_blocks`: browser-level tile block history for admin visibility and early release. Columns: `id`, `browser_cookie_id`, `user_id`, `reason`, `tiles_at_block`, `blocked_at`, `blocked_until`, `released_at`, `released_by_user_id`, `release_reason`, `created_at`, `updated_at`. Relationships: optionally links to the affected `users` row and to the admin `users` row that released the block. Conditions: `browser_cookie_id`, `reason`, `blocked_at`, `blocked_until`, `created_at`, and `updated_at` are required. Notes: Redis remains the enforcement store for short-lived browser blocks; this table records block history and admin reset state. Quota admin actions should be recorded in `auth_audit_events` rather than a separate map-specific audit table.
 - Migration: the map tile quota tables are created by `migrations/versions/4578a2e08ba3_add_esri_tile_quota_tables.py`. The migration is manually written because the dev database may already contain these tables from `Base.metadata.create_all()`; clean databases still receive normal `CREATE TABLE` operations.
-- `races`: event metadata (name, description, website, starts/ends, active flag). Columns: `id`, `name`, `description`, `website`, `starts_at`, `starts_at_epoch`, `ends_at`, `ends_at_epoch`, `active`. Relationships: one race can have many `route` rows via `route.race_id -> races.id`. Conditions: `name` and `active` are required (`NOT NULL`) and `active` defaults to `true`.
+- `races`: event/dashboard metadata. Columns: `id`, `name`, `description`, `website`, `location`, `logo_image_filename`, `starts_at`, `starts_at_epoch`, `ends_at`, `ends_at_epoch`, `status`. Relationships: one race can have many `route` rows via `route.race_id -> races.id`. Conditions: `name` and `status` are required; `ck_races_status` allows only `draft`, `upcoming`, `live`, and `completed`; optional image filenames refer to developer-managed files beneath `src/static/images/races/`. Entry is open only for upcoming/live races; draft races remain off the public dashboard and completed races appear under Past Races.
 - `route`: named per-race route geometry storage. Columns: `id`, `race_id`, `name`, `geojson`, `gpx`. Relationships: belongs to one `race` and can have many shared `categories`. Conditions: `race_id` and `name` are required; `ck_route_name_trimmed_nonempty` rejects blank/padded names; `ux_route_race_name_ci` makes names case-insensitively unique per race; `ux_route_id_race_id` exposes the exact composite key required by category race-scope enforcement.
 - `categories`: race-scoped category labels tied to a route. Columns: `id`, `route_id`, `race_id`, `name`, `name_normalized`, `display_order`, `archived`. Relationships: belongs to one same-race `route`, can share that route with other categories, and is referenced by race entries and leaderboard history. Conditions: the composite route key prevents cross-race assignment; normalized names are unique per race; names must be trimmed/non-empty; normalized identity must equal `lower(name)`; order must be positive. Archived rows retain history but are excluded from active selection.
 - `race_riders`: joins a rider, device, race, and category while storing timing and status flags. Columns: `id`, `race_id`, `rider_id`, `device_id`, `category_id`, `comm_setting`, `active`, `recording`, `start_time_rfid`, `start_time_rfid_epoch`, `finish_time_rfid`, `finish_time_rfid_epoch`, `start_time_pi`, `start_time_pi_epoch`, `finish_time_pi`, `finish_time_pi_epoch`, `multiple_rfid_flag`, `finish_time_rfid_confirmed`. Relationships: each row belongs to one rider, device, and same-race category, with one-to-one links to track cache/history. Conditions: `(category_id, race_id) -> categories(id, race_id)` prevents cross-race category assignment; `ux_race_riders_race_rider` permits one entry per rider per race; `ux_race_riders_race_device` permits one assignment per device per race; required status/timing flags retain their existing defaults.
@@ -2513,47 +2655,62 @@ docker compose -p enduro-dev --env-file .env.dev run --rm -e TEST_EMAIL_TO=you@e
 - Embedded scripts: none.
 
 ### dashboard.html
-- General: Public race dashboard.
-- Displays: Active races table (name, start, website).
-- Styles: Uses `src/static/css/base.css` for the lean shared base theme and `src/static/css/tables.css` for the race-list table.
-- UI actions: "Landing", "Login", "Sign Up", "Rider Profiles", "View Race", "Enter Race", "Results".
+- General: Public, server-rendered race/rider dashboard based on the supplied hero-and-list mockup.
+- Displays: separate upcoming, live, past/completed, and all-riders tab panels; race location/logo/date/status; rider portrait/team/bike/bio; responsive account controls; and a compacting hero above the independently scrolling list.
+- Search metadata: declares the base `/dashboard` canonical URL so `?tab=` variants do not compete in the index.
+- Styles: Uses page-scoped `src/static/css/dashboard.css` plus the reusable profile card in `src/static/css/rider-profile.css`; shared `base.css` and table styles are deliberately not applied.
+- UI actions: tab navigation, race-card links, "Get Device", "Results", rider popup links, login/signup, role-aware profile/admin navigation, and CSRF-protected logout.
 - Linked pages (buttons):
-  - "Landing" → `/`.
+  - Brand → `/`.
   - "Login" → `/login`.
   - "Sign Up" → `/signup`.
-  - "Rider Profiles" → `/rider`.
-  - "View Race" → `/races/<id>/post` (public post-race page).
-  - "Enter Race" → `/races/<id>/enter`.
+  - "My Profile"/rider rows → `/rider/<id>` (loaded into the native dialog when JavaScript is available).
+  - Race card → `/races/<id>/post` (public race page).
+  - "Get Device" → `/races/<id>/enter`.
   - "Results" → `/races/<id>/results`.
-- Pulls: `races`, `default_category`.
-- Pushes: none.
-- Routes called: `/dashboard`, `/`, `/login`, `/signup`, `/rider`, `/races/<id>/post`, `/races/<id>/enter`, `/races/<id>/results`.
-- Embedded scripts: none.
-- Notes: no admin management controls are shown here.
+- Pulls: `race_sections`, `riders`, `tab_presentation`, and `selected_tab`.
+- Pushes: only the authenticated logout POST; tabs use GET `?tab=` URLs and JavaScript history enhancement.
+- Routes called: `/dashboard?tab=...`, `/`, `/login`, `/signup`, `/logout`, `/rider/<id>`, `/races/<id>/post`, `/races/<id>/enter`, `/races/<id>/results`.
+- Script: `src/static/js/pages/dashboard.js` enhances tabs, hero compaction, keyboard navigation, URL state, and rider dialogs while retaining functional real links.
+- Notes: draft races are never rendered publicly; no admin mutation controls are shown here.
 
 ### dashboard_admin.html
-- General: Admin operational dashboard.
-- Displays: All races table (name, start, website, active).
-- Styles: Uses `src/static/css/base.css` for the lean shared base theme and `src/static/css/tables.css` for the race-list table.
-- UI actions: "Public Dashboard", "Input Rider Details", "Manage Devices", "Add New Race", "View RFID Records", "Rider Profiles", "User Management", "Edit", "Post Race", "Post Admin", "Enter Rider", "Results".
+- General: Dense protected admin operational dashboard in the public dashboard's brand language.
+- Displays: compact administration tool cards and every race with start, location, external website, lifecycle status, and operational actions.
+- Search metadata: declares `noindex,nofollow`; `robots.txt` also continues to exclude `/dashboard-admin` and `admin_required` remains the actual access control.
+- Styles: Uses shared `base.css`/`tables.css` plus scoped `dashboard-admin.css`.
+- UI actions: "Public Dashboard", "Riders", "Devices", "Add New Race", "RFID Records", "Users", "Map Usage", "Edit", "Race Page", "Post Admin", status-appropriate "Enter Rider", "Results", and CSRF-protected logout.
 - Linked pages (buttons):
   - "Public Dashboard" → `/dashboard`.
   - "Input Rider Details" → `/riders/new` (riders form page).
   - "Manage Devices" → `/devices/` (devices list page).
   - "Add New Race" → `/races/new` (new race form).
   - "View RFID Records" → `/rfid/` (RFID records page).
-  - "Rider Profiles" → `/rider`.
   - "User Management" → `/admin/users`.
+  - "Map Usage" → `/admin/map_tile_quota`.
   - "Edit" → `/races/<id>/edit` (race edit page).
   - "Post Race" → `/races/<id>/post` (current post-race page).
   - "Post Admin" → `/races/<id>/post-admin`.
   - "Enter Rider" → `/races/<id>/entries/new`.
   - "Results" → `/races/<id>/results`.
-- Pulls: `races`, `default_category`.
-- Pushes: none (links only).
-- Routes called: `/dashboard-admin`, `/dashboard`, `/riders/new`, `/devices/`, `/races/new`, `/rfid/`, `/rider`, `/admin/users`, `/races/<id>/edit`, `/races/<id>/post`, `/races/<id>/post-admin`, `/races/<id>/entries/new`, `/races/<id>/results`.
+- Pulls: `races` with prepared start/end display values.
+- Pushes: authenticated logout POST only; management remains in the existing linked pages.
+- Routes called: `/dashboard-admin`, `/dashboard`, `/logout`, `/riders/new`, `/devices/`, `/races/new`, `/rfid/`, `/admin/users`, `/admin/map_tile_quota`, `/races/<id>/edit`, `/races/<id>/post`, `/races/<id>/post-admin`, `/races/<id>/entries/new`, `/races/<id>/results`.
 - Embedded scripts: none.
 - Notes: protected by admin access.
+
+### Dashboard manual verification
+
+1. Apply `alembic upgrade head`, sign in as an administrator, and confirm `/dashboard-admin` shows every race with a Draft, Upcoming, Live, or Completed badge.
+2. Edit one race and save its location, start/end date-time, lifecycle status, and a basename that exists beneath `src/static/images/races/`; confirm the values return on the edit form.
+3. Set representative races to each lifecycle value. Confirm `/dashboard` places Upcoming, Live, and Completed under the correct tabs and never displays Draft.
+4. Confirm upcoming cards open the existing authenticated Get Device/entry flow, live cards show a green LIVE marker, completed cards expose Results, and every card title opens its public race page.
+5. Scroll the lower list on desktop and confirm only that pane scrolls while the hero compacts to retain the logo/account controls, selected heading, and tabs; return to the top and confirm the full copy expands again.
+6. At approximately 390px width, confirm the hero is shorter than the original mockup, all four tabs are visible in a two-by-two grid, and race/rider rows stack without horizontal scrolling.
+7. Open the Riders tab and confirm every Rider appears. Select both the rider name and View Rider button; each should open the read-only dialog, while opening the link without JavaScript should render `/rider/<id>` as a standalone page.
+8. Sign in as a linked rider and confirm My Profile opens their dialog and exposes Edit Profile. Confirm another rider's public profile has no rider-owned edit access. An unlinked admin should see Admin Dashboard rather than a broken profile link.
+9. As a linked rider, upload a JPEG/PNG/WebP profile picture from the edit form and confirm it appears in the form preview, dashboard list, modal, and standalone profile. Replace it and confirm the new image appears; remove it and confirm the committed default artwork returns. Repeat as an administrator for another Rider, and confirm a rider cannot edit another profile.
+10. Verify `/rider` redirects to `/dashboard?tab=riders`, the dashboard/profile canonical links use `kooksnylive.co.za`, draft race pages emit `noindex,nofollow`, `/dashboard-admin` emits `noindex,nofollow`, and `/sitemap.xml` lists current public rider details.
 
 ### placeholder.html
 - General: Shared placeholder page for planned UX routes.
@@ -2564,8 +2721,15 @@ docker compose -p enduro-dev --env-file .env.dev run --rm -e TEST_EMAIL_TO=you@e
   - Back button target is supplied by each route.
 - Pulls: `title`, `description`, `route`, `access`, `back_url`, `back_label`.
 - Pushes: none.
-- Routes called: `/rider`, `/races/<id>/post-admin`, `/races/<id>/results`, `/admin/users`.
+- Routes called: `/races/<id>/post-admin`, `/races/<id>/results`, `/admin/users`.
 - Embedded scripts: none.
+
+### rider_profile.html
+- General: canonical public read-only rider detail and dashboard-dialog source.
+- Displays: profile image, name, team, bike, biography, and conditional Edit Profile action.
+- Styles: Uses `base.css` for the standalone shell and `rider-profile.css` for the reusable profile card.
+- Access: public view; the edit action appears only for the linked rider or an administrator and still points at the existing protected edit route.
+- Routes called: `/rider/<id>`, `/dashboard?tab=riders`, and authorized `/riders/<id>/edit`.
 
 ### devices.html
 - General: Device list and create form.
@@ -2608,20 +2772,20 @@ docker compose -p enduro-dev --env-file .env.dev run --rm -e TEST_EMAIL_TO=you@e
 
 ### riders_form.html
 - General: Create/edit rider form with riders list.
-- Displays: race-independent rider name, team, bike, and bio fields plus the riders table.
+- Displays: race-independent rider name, team, bike, bio, current/default profile preview, bounded image upload, optional image removal, and the riders table.
 - Styles: Uses `src/static/css/base.css` for the lean shared base theme, `src/static/css/forms.css` for the rider form panel and messages, and `src/static/css/tables.css` for the riders table.
-- UI actions: "Save", "Edit", "Back to Admin Dashboard".
+- UI actions: "Save", profile-picture file selection/removal, "Edit", and role-aware back navigation.
 - Linked pages (buttons/links):
   - "Back to Admin Dashboard" → `/dashboard-admin`.
   - "Edit" → `/riders/<id>/edit` (loads rider into form).
-- Pulls: `riders`, `form`, `editing_rider`, `message`, `success`.
-- Pushes: POST create/update rider.
-- Routes called: `/riders/new`, `/riders/<id>/edit`, `/dashboard-admin`.
+- Pulls: `riders`, `form`, `editing_rider`, `message`, `success`, and `profile_image_max_mb`.
+- Pushes: multipart POST create/update Rider text plus an optional JPEG/PNG/WebP profile image or removal flag.
+- Routes called: `/riders/new`, `/riders/<id>/edit`, `/rider/<id>`, `/rider/<id>/profile-image`, `/dashboard`, and `/dashboard-admin`.
 - Embedded scripts: none.
 
 ### race_form.html
 - General: Create/edit a race, independently create/rename/delete-unused named routes, create/rename/reorder/archive/reassign/delete-unused categories, upload shared-route GPX, and manage category riders using stable `category_id` values.
-- Displays: Race fields, route/category administration forms, active category selector, selected route name/map preview, and rider/device tables.
+- Displays: Race name, website, location, static logo/image filename, start/end time, description, explicit lifecycle status, route/category administration, active category selector, selected route map preview, and rider/device tables.
 - Styles: Uses `src/static/css/base.css` for the lean shared base theme, `src/static/css/forms.css` for form controls and row actions, `src/static/css/tables.css` for the rider assignment table, `src/static/css/maps.css` for the Leaflet route preview container, and `src/static/css/race-form.css` for race-form-only layout.
 - UI actions: "Save Changes", "Add Route", "Rename Route", guarded "Delete if unused", "Add Category", "Save Category", category dropdown, GPX upload/removal, and rider entry management.
 - Linked pages (buttons/links):

@@ -18,7 +18,7 @@ from src.auth.csrf import exempt_blueprints, init_csrf
 from src.auth.login import login_manager
 from src.auth.rate_limits import init_limiter
 from src.auth.routes import bp_auth
-from src.utils.env import env_bool
+from src.utils.env import env_bool, env_positive_int
 
 # blueprint imports
 from src.api.ingest import bp as ingest_bp
@@ -72,6 +72,18 @@ def create_app():
     app.config["MAP_USER_LIMIT_TIMEOUT_MIN"] = os.environ.get("MAP_USER_LIMIT_TIMEOUT_MIN", "").strip()
     app.config["AUTH_RATE_LIMIT_STORAGE_URL"] = os.environ.get("AUTH_RATE_LIMIT_STORAGE_URL", "").strip()
 
+    # Keep rider-generated media outside the immutable application image. The
+    # Compose service mounts a separately named dev/prod volume at this path.
+    # A bounded upload size protects both disk capacity and image decoding work.
+    app.config["PROFILE_IMAGE_UPLOAD_DIR"] = os.environ.get(
+        "PROFILE_IMAGE_UPLOAD_DIR",
+        "/var/lib/enduro-tracker/profile-images",
+    ).strip() or "/var/lib/enduro-tracker/profile-images"
+    app.config["PROFILE_IMAGE_MAX_BYTES"] = env_positive_int(
+        "PROFILE_IMAGE_MAX_BYTES",
+        default=5 * 1024 * 1024,
+    )
+
     # Configure browser login-session support before registering blueprints.
     # The User model and /login route are added in later auth steps; initialising
     # Flask-Login here creates the shared session plumbing without changing any
@@ -108,7 +120,7 @@ def create_app():
     app.register_blueprint(ingest_bp) # "/api/v1/upload" endpoint for data ingestion from trackers
     app.register_blueprint(bp_auth) # "/signup" and future auth browser routes
     app.register_blueprint(bp_home) # "/" home page
-    app.register_blueprint(bp_rider_profiles) # "/rider" public rider profile placeholder
+    app.register_blueprint(bp_rider_profiles) # /rider tab redirect and /rider/<id> public profile
     app.register_blueprint(bp_riders) # "/riders/new" rider management pages
     app.register_blueprint(bp_devices)  # /devices device management pages
     app.register_blueprint(bp_races)  # /races/* race management pages

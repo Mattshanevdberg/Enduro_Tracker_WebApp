@@ -25,6 +25,8 @@ from src.services.race_routes import (
     list_race_routes,
 )
 from src.services.race_timing import build_post_race_riders
+from src.utils.media import validate_static_image_filename
+from src.utils.races import RACE_STATUSES
 from src.utils.time import epoch_to_datetime
 
 
@@ -50,19 +52,24 @@ def get_race(session, race_id: int) -> Race | None:
     return session.get(Race, race_id)
 
 
-def _prepare_race_display_time(race: Race) -> Race:
+def _prepare_race_display_times(race: Race) -> Race:
     """
-    Attach the dashboard/form-compatible race start datetime.
+    Attach dashboard/form-compatible race start and end datetimes.
 
     Input Args:
-      race: Race row using starts_at_epoch as durable time storage.
+      race: Race row using start/end epochs as durable time storage.
 
     Output:
-      Same Race row with its starts_at display attribute populated.
+      Same Race row with starts_at and ends_at display attributes populated.
     """
     race.starts_at = (
         epoch_to_datetime(race.starts_at_epoch)
         if race.starts_at_epoch is not None
+        else None
+    )
+    race.ends_at = (
+        epoch_to_datetime(race.ends_at_epoch)
+        if race.ends_at_epoch is not None
         else None
     )
     return race
@@ -85,6 +92,17 @@ def save_race(session, form: dict) -> Race:
     """
     if not form.get("name"):
         raise RaceValidationError("Race name is required.")
+    if form.get("status") not in RACE_STATUSES:
+        raise RaceValidationError("Select a valid race status.")
+    if (
+        form.get("starts_at_epoch") is not None
+        and form.get("ends_at_epoch") is not None
+        and form["ends_at_epoch"] < form["starts_at_epoch"]
+    ):
+        raise RaceValidationError("Race end time cannot be before its start time.")
+    image_error = validate_static_image_filename(form.get("logo_image_filename"))
+    if image_error:
+        raise RaceValidationError(image_error)
 
     race_id = form.get("race_id")
     if race_id is not None:
@@ -102,8 +120,11 @@ def save_race(session, form: dict) -> Race:
     race.name = form["name"]
     race.website = form.get("website")
     race.description = form.get("description")
+    race.location = form.get("location")
+    race.logo_image_filename = form.get("logo_image_filename")
     race.starts_at_epoch = form.get("starts_at_epoch")
-    race.active = bool(form.get("active"))
+    race.ends_at_epoch = form.get("ends_at_epoch")
+    race.status = form["status"]
     session.flush()
     return race
 
@@ -131,7 +152,7 @@ def load_post_race_data(
     race = get_race(session, race_id)
     if race is None:
         raise RaceNotFoundError("Race not found.")
-    _prepare_race_display_time(race)
+    _prepare_race_display_times(race)
 
     categories = list_race_category_records(session, race_id)
     selected_category = (
@@ -188,6 +209,7 @@ def load_race_edit_data(
     race = get_race(session, race_id)
     if race is None:
         raise RaceNotFoundError("Race not found.")
+    _prepare_race_display_times(race)
     categories = list_race_category_records(session, race_id)
     selected_category = (
         get_category_for_race(session, race_id, requested_category_id)

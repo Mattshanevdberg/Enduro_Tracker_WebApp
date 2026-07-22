@@ -1,17 +1,34 @@
 """
-Public rider profile routes.
+Public rider-profile index redirect and read-only profile controllers.
 
-This module remains web-only because the current placeholder has no model access,
-business rules, or reusable parsing to extract into utility/service modules. The
-full page will later show rider profiles and expose edit actions only to the
-linked rider or admins.
+Routes
+------
+GET /rider
+    Redirect the retired standalone rider index to the dashboard Riders tab.
+GET /rider/<rider_id>
+    Render one public rider profile for direct navigation and dashboard popups.
+GET /rider/<rider_id>/profile-image
+    Serve the Rider's normalized public image from persistent media storage.
 
-Paths
------
-GET /rider -> Public rider profile index placeholder
+Rider lookup remains in src.services.riders. This web module owns redirects,
+404 behavior, edit-link visibility, canonical-page rendering, and responses.
 """
 
-from flask import Blueprint, render_template, url_for
+from flask import (
+    Blueprint,
+    abort,
+    current_app,
+    redirect,
+    render_template,
+    send_from_directory,
+    url_for,
+)
+from flask_login import current_user
+
+from src.auth.decorators import user_can_access_rider_resource
+from src.db.models import SessionLocal
+from src.services.profile_images import is_profile_image_key
+from src.services.riders import get_rider
 
 
 bp_rider_profiles = Blueprint("rider_profiles", __name__)
@@ -20,24 +37,81 @@ bp_rider_profiles = Blueprint("rider_profiles", __name__)
 @bp_rider_profiles.route("/rider", methods=["GET"])
 def rider_profiles():
     """
-    Render the public rider profiles placeholder.
-
-    Input Args:
-      None.
+    Redirect the former rider index to the dashboard Riders tab.
 
     Output:
-      Rendered placeholder.html response for the future rider profiles experience.
+      Redirect response selecting the public dashboard rider collection.
+    """
+    return redirect(url_for("home.dashboard", tab="riders"))
+
+
+@bp_rider_profiles.route("/rider/<int:rider_id>", methods=["GET"])
+def rider_profile(rider_id: int):
+    """
+    Render a public, read-only rider profile.
+
+    Input Args:
+      rider_id: Rider primary key from the public route.
+
+    Output:
+      Rendered rider_profile.html response, or HTTP 404 for a missing rider.
 
     Notes:
-      url_for and render_template are Flask-specific response concerns, so the
-      current placeholder correctly remains entirely in the web layer.
+      Dashboard JavaScript reads the marked profile region into an accessible
+      dialog. Without JavaScript, the same link remains a complete standalone
+      page. Owners and admins receive the existing authorized edit-page link.
     """
-    return render_template(
-        "placeholder.html",
-        title="Rider Profiles",
-        description="Public rider profile page with future rider/admin edit controls.",
-        route="/rider",
-        access="all viewers; edit controls later restricted to linked rider/admin",
-        back_url=url_for("home.dashboard"),
-        back_label="Back to Dashboard",
-    )
+    session = SessionLocal()
+    try:
+        rider = get_rider(session, rider_id)
+        if rider is None:
+            abort(404)
+        return render_template(
+            "rider_profile.html",
+            rider=rider,
+            can_edit=user_can_access_rider_resource(current_user, rider.id),
+        )
+    finally:
+        session.close()
+
+
+@bp_rider_profiles.route(
+    "/rider/<int:rider_id>/profile-image",
+    methods=["GET"],
+)
+def rider_profile_image(rider_id: int):
+    """
+    Serve one public normalized Rider profile image.
+
+    Input Args:
+      rider_id: Rider primary key from the public media URL.
+
+    Output:
+      Conditional image/webp response, or HTTP 404 when the Rider, generated
+      key, or underlying persistent file is missing.
+
+    Security:
+      The database value must match the application-generated flat key pattern
+      and embed the requested Rider id. send_from_directory supplies an
+      additional safe path boundary. Uploaded SVG/script-capable formats are
+      never stored by the processing pipeline.
+    """
+    session = SessionLocal()
+    try:
+        rider = get_rider(session, rider_id)
+        if rider is None or not is_profile_image_key(
+            rider.profile_image_filename,
+            rider_id=rider.id,
+        ):
+            abort(404)
+        response = send_from_directory(
+            current_app.config["PROFILE_IMAGE_UPLOAD_DIR"],
+            rider.profile_image_filename,
+            mimetype="image/webp",
+            conditional=True,
+            max_age=31536000,
+        )
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
+    finally:
+        session.close()

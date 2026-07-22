@@ -1,5 +1,5 @@
 """
-Landing, search-crawler, sitemap, and dashboard HTTP controllers.
+Landing, crawler, sitemap, and public/admin dashboard HTTP controllers.
 
 Routes
 ------
@@ -8,49 +8,116 @@ GET /
 GET /robots.txt
     Return production crawler guidance and the canonical sitemap location.
 GET /sitemap.xml
-    Return the canonical public pages intended for search indexing.
+    Return canonical public pages and durable public rider profiles.
 GET /dashboard
-    Render the public dashboard with active races.
+    Render categorized races and all riders in the public dashboard.
 GET /dashboard-admin
-    Render the admin operational dashboard with all races.
+    Render the admin operational dashboard with every race lifecycle state.
 
-Dashboard race queries and display preparation live in src.services.home. This
-module retains only Flask access control, session boundaries, and rendering.
+Dashboard queries and durable display preparation live in src.services.home.
+This module owns Flask request parsing, access control, session boundaries,
+presentation copy, URL-independent tab selection, and template responses.
 """
 
-from flask import Blueprint, Response, render_template
+from flask import Blueprint, Response, render_template, request
 
 from src.auth.decorators import admin_required
 from src.db.models import SessionLocal
-from src.services.home import load_race_display_data
+from src.services.home import (
+    load_dashboard_display_data,
+    load_race_display_data,
+    list_public_rider_ids,
+)
+
 
 bp_home = Blueprint("home", __name__)
 
+PUBLIC_DASHBOARD_TABS = ("upcoming", "live", "past", "riders")
+DASHBOARD_TAB_PRESENTATION = {
+    "upcoming": {
+        "label": "Upcoming Races",
+        "eyebrow": "Prepare for the next challenge",
+        "title": "Upcoming Races",
+        "message": "Find your next race, prepare your equipment and secure your tracker before race day.",
+        "heading": "Upcoming races",
+        "subheading": "Browse the next scheduled enduro and motocross events.",
+        "hero_image": "images/dashboard/heroes/upcoming.svg",
+    },
+    "live": {
+        "label": "Live Races",
+        "eyebrow": "Tracking now",
+        "title": "Live Races",
+        "message": "Follow rider movement, timing and race progress as the event unfolds.",
+        "heading": "Live now",
+        "subheading": "Select a race to open its live tracking page.",
+        "hero_image": "images/dashboard/heroes/live.svg",
+    },
+    "past": {
+        "label": "Past Races",
+        "eyebrow": "Relive the race",
+        "title": "Past Races",
+        "message": "Review completed events, compare results and explore the routes riders completed.",
+        "heading": "Past races",
+        "subheading": "Open an event to view its race page or select Results directly.",
+        "hero_image": "images/dashboard/heroes/past.svg",
+    },
+    "riders": {
+        "label": "Riders",
+        "eyebrow": "Meet the field",
+        "title": "Riders",
+        "message": "Explore every rider profile, bike, team and biography.",
+        "heading": "Rider profiles",
+        "subheading": "Select a rider to view their complete public profile.",
+        "hero_image": "images/dashboard/heroes/riders.svg",
+    },
+}
 
-def _render_dashboard(template_name: str, active_only: bool):
+
+def _selected_dashboard_tab(raw_tab: str | None) -> str:
     """
-    Render a dashboard using service-prepared race display data.
+    Resolve a safe dashboard tab from the public query parameter.
 
     Input Args:
-      template_name: dashboard template selected by the route.
-      active_only: whether the service should return only active races.
+      raw_tab: optional request query value.
 
     Output:
-      Rendered Flask dashboard response.
+      One supported tab key, defaulting to upcoming.
+    """
+    return raw_tab if raw_tab in PUBLIC_DASHBOARD_TABS else "upcoming"
 
-    Notes:
-      This remains in the web layer because it owns Flask template rendering and
-      the request-scoped SQLAlchemy session boundary shared by both dashboards.
+
+def _render_public_dashboard():
+    """
+    Render the public dashboard from service-composed race and rider data.
+
+    Output:
+      Rendered dashboard.html response.
     """
     session = SessionLocal()
     try:
-        races = load_race_display_data(
-            session,
-            active_only=active_only,
-        )
+        page_data = load_dashboard_display_data(session)
         return render_template(
-            template_name,
-            races=races,
+            "dashboard.html",
+            **page_data,
+            tab_presentation=DASHBOARD_TAB_PRESENTATION,
+            selected_tab=_selected_dashboard_tab(request.args.get("tab")),
+        )
+    finally:
+        session.close()
+
+
+def _render_admin_dashboard():
+    """
+    Render the admin dashboard from service-prepared race data.
+
+    Output:
+      Rendered dashboard_admin.html response.
+    """
+    session = SessionLocal()
+    try:
+        return render_template(
+            "dashboard_admin.html",
+            races=load_race_display_data(session),
         )
     finally:
         session.close()
@@ -58,29 +125,18 @@ def _render_dashboard(template_name: str, active_only: bool):
 
 @bp_home.route("/")
 def home_page():
-    """
-    Render the public landing page.
-
-    Output:
-      Rendered landing.html response.
-    """
+    """Render the public landing page."""
     return render_template("landing.html")
 
 
 @bp_home.route("/robots.txt")
 def robots_txt():
     """
-    Tell search engines which public pages they may visit.
+    Tell cooperative crawlers which public pages they may visit.
 
     Output:
-      Plain-text crawler guidance that allows public viewer pages, excludes
-      authenticated administration and management paths, and advertises the
-      production sitemap location on every application hostname.
-
-    Notes:
-      This response guides cooperative search-engine crawlers only. It is not
-      an access-control mechanism, so private routes must remain protected by
-      their existing login and role decorators.
+      Plain-text guidance excluding authenticated/operational paths and
+      advertising the canonical production sitemap. This is not access control.
     """
     content = (
         "User-agent: *\n"
@@ -106,56 +162,51 @@ def robots_txt():
         "Disallow: /races/*/race-rider/*/confirm-finish\n"
         "Sitemap: https://kooksnylive.co.za/sitemap.xml\n"
     )
-
     return Response(content, mimetype="text/plain")
 
 
 @bp_home.route("/sitemap.xml")
 def sitemap():
     """
-    Return the canonical public pages currently intended for search indexing.
+    Return canonical public pages currently intended for search indexing.
 
     Output:
-      XML sitemap containing the production landing page and public race
-      dashboard as fully qualified canonical URLs.
-
-    Notes:
-      The public rider-profile route remains excluded while it is a placeholder.
-      Add it, public race detail pages, and public result pages when each exposes
-      stable, distinct content that should appear in search results.
+      XML sitemap containing the landing page, public dashboard, and durable
+      rider-detail pages as fully qualified canonical production URLs.
     """
-    sitemap_xml = """<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url>
-    <loc>https://kooksnylive.co.za/</loc>
-  </url>
-  <url>
-    <loc>https://kooksnylive.co.za/dashboard</loc>
-  </url>
-</urlset>
-"""
-
+    session = SessionLocal()
+    try:
+        rider_urls = "".join(
+            "  <url>\n"
+            f"    <loc>https://kooksnylive.co.za/rider/{rider_id}</loc>\n"
+            "  </url>\n"
+            for rider_id in list_public_rider_ids(session)
+        )
+    finally:
+        session.close()
+    sitemap_xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+        "  <url>\n"
+        "    <loc>https://kooksnylive.co.za/</loc>\n"
+        "  </url>\n"
+        "  <url>\n"
+        "    <loc>https://kooksnylive.co.za/dashboard</loc>\n"
+        "  </url>\n"
+        f"{rider_urls}"
+        "</urlset>\n"
+    )
     return Response(sitemap_xml, mimetype="application/xml")
 
 
 @bp_home.route("/dashboard")
 def dashboard():
-    """
-    Render the public dashboard with active races only.
-
-    Output:
-      Rendered dashboard.html response.
-    """
-    return _render_dashboard("dashboard.html", active_only=True)
+    """Render the public tabbed race and rider dashboard."""
+    return _render_public_dashboard()
 
 
 @bp_home.route("/dashboard-admin")
 @admin_required
 def dashboard_admin():
-    """
-    Render the admin operational dashboard with all races.
-
-    Output:
-      Rendered dashboard_admin.html response.
-    """
-    return _render_dashboard("dashboard_admin.html", active_only=False)
+    """Render the admin operational dashboard with all race statuses."""
+    return _render_admin_dashboard()

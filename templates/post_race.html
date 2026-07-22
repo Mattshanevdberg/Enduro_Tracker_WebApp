@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <title>Post Race - {{ race.name }}</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  {% if race.status == 'draft' %}<meta name="robots" content="noindex,nofollow" />{% endif %}
   <meta name="csrf-token" content="{{ csrf_token() }}" />
   <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}" />
   <link rel="stylesheet" href="{{ url_for('static', filename='css/forms.css') }}" />
@@ -36,8 +37,8 @@
           <dt>Start</dt>
           <dd>{% if race.starts_at %}{{ race.starts_at.strftime('%Y-%m-%d %H:%M') }}{% else %}Not set{% endif %}</dd>
 
-          <dt>Active</dt>
-          <dd>{{ 'Yes' if race.active else 'No' }}</dd>
+          <dt>Status</dt>
+          <dd>{{ race.status | title }}</dd>
 
           <dt>Description</dt>
           <dd>{{ race.description or 'No description provided.' }}</dd>

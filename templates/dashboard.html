@@ -2,68 +2,232 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>Kooksnylive — Dashboard</title>
+    <title>Kooksnylive | Race Dashboard</title>
+    <meta
+      name="description"
+      content="Browse upcoming, live and completed enduro and motocross races, then explore Kooksnylive rider profiles."
+    />
+    <link rel="canonical" href="https://kooksnylive.co.za/dashboard" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}" />
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/tables.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/rider-profile.css') }}" />
+    <script defer src="{{ url_for('static', filename='js/pages/dashboard.js') }}"></script>
   </head>
-  <body>
-    <main class="page-shell">
-      <header class="page-header">
-        <h1>Race Dashboard</h1>
-        <p>View active races and follow live race pages.</p>
-      </header>
+  <body class="dashboard-page">
+    {% set selected_copy = tab_presentation[selected_tab] %}
+    <main class="dashboard-app" data-dashboard-app data-selected-tab="{{ selected_tab }}">
+      <section class="dashboard-hero" data-dashboard-hero>
+        <img
+          class="dashboard-hero-image"
+          data-dashboard-hero-image
+          src="{{ url_for('static', filename=selected_copy.hero_image) }}"
+          alt=""
+        />
+        <div class="dashboard-hero-overlay"></div>
 
-      <div class="stack">
-        <a class="btn" href="{{ url_for('home.home_page') }}">Landing</a>
-        <a class="btn" href="{{ url_for('auth.login') }}">Login</a>
-        <a class="btn" href="{{ url_for('auth.signup') }}">Sign Up</a>
-        <a class="btn" href="{{ url_for('rider_profiles.rider_profiles') }}">Rider Profiles</a>
-      </div>
+        <div class="dashboard-hero-inner">
+          <header class="dashboard-topbar">
+            <a class="dashboard-brand" href="{{ url_for('home.home_page') }}" aria-label="Kooksnylive home">
+              <img src="{{ url_for('static', filename='images/brand/logo.svg') }}" alt="" />
+              <span>Kooksnylive</span>
+            </a>
 
-      <h2 class="section-title">Active Races</h2>
-      {% if races %}
-        <div class="table-card">
-          <table>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Start</th>
-                <th>Website</th>
-                <th class="actions">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for race in races %}
-                <tr>
-                  <td>{{ race.name }}</td>
-                  <td>
-                    {% if race.starts_at %}
-                      {{ race.starts_at.strftime('%Y-%m-%d %H:%M') }}
-                    {% else %}
-                      <span class="muted">Not set</span>
-                    {% endif %}
-                  </td>
-                  <td>
-                    {% if race.website %}
-                      <a href="{{ race.website }}" target="_blank" rel="noopener">{{ race.website }}</a>
-                    {% else %}
-                      <span class="muted">—</span>
-                    {% endif %}
-                  </td>
-                  <td class="actions">
-                    <a class="btn" href="{{ url_for('races.post_race', race_id=race.id) }}">View Race</a>
-                    <a class="btn" href="{{ url_for('races.enter_race', race_id=race.id) }}">Enter Race</a>
-                    <a class="btn" href="{{ url_for('races.race_results', race_id=race.id) }}">Results</a>
-                  </td>
-                </tr>
-              {% endfor %}
-            </tbody>
-          </table>
+            <nav class="dashboard-account" aria-label="Account">
+              {% if current_user.is_authenticated %}
+                {% if current_user.rider_id %}
+                  <a class="dashboard-account-link" href="{{ url_for('rider_profiles.rider_profile', rider_id=current_user.rider_id) }}" data-rider-profile-link>
+                    <img class="dashboard-account-art" src="{{ url_for('static', filename='images/icons/profile.svg') }}" alt="" />
+                    <span>My Profile</span>
+                  </a>
+                {% else %}
+                  <a class="dashboard-account-link" href="{{ url_for('home.dashboard_admin') }}">
+                    <img class="dashboard-account-art" src="{{ url_for('static', filename='images/icons/admin.svg') }}" alt="" />
+                    <span>Admin Dashboard</span>
+                  </a>
+                {% endif %}
+                <form method="post" action="{{ url_for('auth.logout') }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+                  <button class="dashboard-account-link" type="submit">
+                    <img class="dashboard-account-art" src="{{ url_for('static', filename='images/icons/logout.svg') }}" alt="" />
+                    <span>Log Out</span>
+                  </button>
+                </form>
+              {% else %}
+                <a class="dashboard-account-link" href="{{ url_for('auth.login') }}">
+                  <img class="dashboard-account-art" src="{{ url_for('static', filename='images/icons/login-rider.svg') }}" alt="" />
+                  <span>Login</span>
+                </a>
+                <a class="dashboard-account-link" href="{{ url_for('auth.signup') }}">
+                  <img class="dashboard-account-art" src="{{ url_for('static', filename='images/icons/signup-rider.svg') }}" alt="" />
+                  <span>Sign Up</span>
+                </a>
+              {% endif %}
+            </nav>
+          </header>
+
+          <div class="dashboard-hero-copy" aria-live="polite">
+            <div class="dashboard-eyebrow">
+              <span class="dashboard-eyebrow-dot"></span>
+              <span data-dashboard-eyebrow>{{ selected_copy.eyebrow }}</span>
+            </div>
+            <h1 data-dashboard-title>{{ selected_copy.title }}</h1>
+            <p data-dashboard-message>{{ selected_copy.message }}</p>
+          </div>
+
+          <nav class="dashboard-tabs" role="tablist" aria-label="Dashboard sections">
+            {% for tab_key, tab_copy in tab_presentation.items() %}
+              <a
+                id="dashboard-tab-{{ tab_key }}"
+                class="dashboard-tab"
+                href="{{ url_for('home.dashboard', tab=tab_key) }}"
+                role="tab"
+                aria-selected="{{ 'true' if tab_key == selected_tab else 'false' }}"
+                aria-controls="dashboard-panel-{{ tab_key }}"
+                tabindex="{{ '0' if tab_key == selected_tab else '-1' }}"
+                data-dashboard-tab="{{ tab_key }}"
+                data-eyebrow="{{ tab_copy.eyebrow }}"
+                data-title="{{ tab_copy.title }}"
+                data-message="{{ tab_copy.message }}"
+                data-hero-image="{{ url_for('static', filename=tab_copy.hero_image) }}"
+              >{{ tab_copy.label }}</a>
+            {% endfor %}
+          </nav>
         </div>
-      {% else %}
-        <p class="empty-state">No active races are available yet.</p>
-      {% endif %}
+      </section>
+
+      <section class="dashboard-content" data-dashboard-content aria-label="Dashboard content">
+        <div class="dashboard-content-inner">
+          {% for tab_key in ('upcoming', 'live', 'past') %}
+            {% set tab_copy = tab_presentation[tab_key] %}
+            {% set races = race_sections[tab_key] %}
+            <section
+              id="dashboard-panel-{{ tab_key }}"
+              class="dashboard-panel"
+              role="tabpanel"
+              aria-labelledby="dashboard-tab-{{ tab_key }}"
+              tabindex="0"
+              {{ 'hidden' if tab_key != selected_tab else '' }}
+              data-dashboard-panel="{{ tab_key }}"
+            >
+              <header class="dashboard-section-head">
+                <div>
+                  <h2>{{ tab_copy.heading }}</h2>
+                  <p>{{ tab_copy.subheading }}</p>
+                </div>
+                <span class="dashboard-count">{{ races | length }} {{ 'event' if races | length == 1 else 'events' }}</span>
+              </header>
+
+              {% if races %}
+                <div class="dashboard-list">
+                  {% for race in races %}
+                    <article class="dashboard-row dashboard-race-row">
+                      <div class="dashboard-media dashboard-race-media">
+                        <img
+                          src="{{ url_for('static', filename='images/races/' + (race.logo_image_filename or 'default-race-logo.svg')) }}"
+                          alt="{{ race.name }} logo"
+                        />
+                      </div>
+                      <div class="dashboard-details">
+                        <span class="dashboard-badge {{ 'live' if tab_key == 'live' else '' }}">
+                          {{ 'Live race' if tab_key == 'live' else ('Completed' if tab_key == 'past' else 'Entries open') }}
+                        </span>
+                        <h3>
+                          <a class="dashboard-row-link" href="{{ url_for('races.post_race', race_id=race.id) }}">{{ race.name }}</a>
+                        </h3>
+                        <p>{{ race.description or 'Race details will be added soon.' }}</p>
+                        {% if race.location %}<div class="dashboard-location">{{ race.location }}</div>{% endif %}
+                      </div>
+                      <div class="dashboard-side">
+                        <div class="dashboard-date">
+                          {% if race.starts_at %}
+                            <span class="dashboard-day">{{ race.starts_at.strftime('%d') }}</span>
+                            <span class="dashboard-month">{{ race.starts_at.strftime('%b') }}</span>
+                          {% else %}
+                            <span class="dashboard-day small">TBA</span>
+                          {% endif %}
+                          {% if tab_key == 'live' %}<span class="dashboard-live-indicator">Live</span>{% endif %}
+                        </div>
+                        {% if tab_key == 'upcoming' %}
+                          <a class="dashboard-action" href="{{ url_for('races.enter_race', race_id=race.id) }}">Get Device</a>
+                        {% elif tab_key == 'past' %}
+                          <a class="dashboard-action secondary" href="{{ url_for('races.race_results', race_id=race.id) }}">Results</a>
+                        {% endif %}
+                      </div>
+                    </article>
+                  {% endfor %}
+                </div>
+              {% else %}
+                <p class="dashboard-empty">No {{ tab_copy.heading | lower }} are available yet.</p>
+              {% endif %}
+            </section>
+          {% endfor %}
+
+          {% set rider_copy = tab_presentation['riders'] %}
+          <section
+            id="dashboard-panel-riders"
+            class="dashboard-panel"
+            role="tabpanel"
+            aria-labelledby="dashboard-tab-riders"
+            tabindex="0"
+            {{ 'hidden' if selected_tab != 'riders' else '' }}
+            data-dashboard-panel="riders"
+          >
+            <header class="dashboard-section-head">
+              <div>
+                <h2>{{ rider_copy.heading }}</h2>
+                <p>{{ rider_copy.subheading }}</p>
+              </div>
+              <span class="dashboard-count">{{ riders | length }} {{ 'rider' if riders | length == 1 else 'riders' }}</span>
+            </header>
+
+            {% if riders %}
+              <div class="dashboard-list">
+                {% for rider in riders %}
+                  {% set rider_image_url = url_for('rider_profiles.rider_profile_image', rider_id=rider.id, v=rider.profile_image_filename) if rider.profile_image_filename else url_for('static', filename='images/riders/default-profile.svg') %}
+                  <article class="dashboard-row dashboard-rider-row">
+                    <div class="dashboard-media dashboard-rider-media">
+                      <img
+                        src="{{ rider_image_url }}"
+                        alt="Portrait of {{ rider.name }}"
+                      />
+                    </div>
+                    <div class="dashboard-details">
+                      <h3>
+                        <a
+                          class="dashboard-row-link"
+                          href="{{ url_for('rider_profiles.rider_profile', rider_id=rider.id) }}"
+                          data-rider-profile-link
+                        >{{ rider.name }}</a>
+                      </h3>
+                      <div class="dashboard-rider-meta">
+                        <span><strong>Team:</strong> {{ rider.team or 'Independent rider' }}</span>
+                        <span><strong>Bike:</strong> {{ rider.bike or 'Not specified' }}</span>
+                      </div>
+                      <p>{{ rider.bio or 'No biography has been added yet.' }}</p>
+                    </div>
+                    <div class="dashboard-rider-action">
+                      <a
+                        class="dashboard-action"
+                        href="{{ url_for('rider_profiles.rider_profile', rider_id=rider.id) }}"
+                        data-rider-profile-link
+                      >View Rider</a>
+                    </div>
+                  </article>
+                {% endfor %}
+              </div>
+            {% else %}
+              <p class="dashboard-empty">No rider profiles are available yet.</p>
+            {% endif %}
+          </section>
+        </div>
+      </section>
     </main>
+
+    <dialog class="rider-profile-dialog" data-rider-profile-dialog aria-label="Rider profile">
+      <button class="rider-profile-dialog-close" type="button" data-rider-profile-close aria-label="Close rider profile">×</button>
+      <div class="rider-profile-dialog-content" data-rider-profile-dialog-content>
+        <p>Loading rider profile…</p>
+      </div>
+    </dialog>
   </body>
 </html>

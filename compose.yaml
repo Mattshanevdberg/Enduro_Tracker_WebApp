@@ -41,6 +41,12 @@ services:
       AUTH_RATE_LIMIT_STORAGE_URL: ${AUTH_RATE_LIMIT_STORAGE_URL}
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE}
       SESSION_COOKIE_SAMESITE: ${SESSION_COOKIE_SAMESITE}
+      # Rider uploads are written outside the application image. The maximum is
+      # enforced before Pillow decodes and normalizes the submitted image.
+      PROFILE_IMAGE_UPLOAD_DIR: /var/lib/enduro-tracker/profile-images
+      PROFILE_IMAGE_MAX_BYTES: ${PROFILE_IMAGE_MAX_BYTES:-5242880}
+    volumes:
+      - profile-images:/var/lib/enduro-tracker/profile-images
     # Make Compose wait for PostgreSQL to report healthy before the app
     # container starts. This does not fix the current Gunicorn CMD issue, but it
     # does ensure the runtime dependency order is correct for the database move.
@@ -149,3 +155,7 @@ services:
 volumes:
   postgres-data:
     name: ${POSTGRES_VOLUME_NAME}
+  # Development and production select different durable volume names through
+  # their environment files so profile media cannot leak between stacks.
+  profile-images:
+    name: ${PROFILE_IMAGES_VOLUME_NAME}

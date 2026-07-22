@@ -110,7 +110,7 @@ def load_race_entry_page_data(
     race = session.get(Race, race_id)
     if race is None:
         raise RaceEntryValidationError("Race not found.")
-    if not race.active:
+    if race.status not in {"upcoming", "live"}:
         raise RaceEntryValidationError("This race is not open for entry.")
 
     selected_rider = None
@@ -291,7 +291,7 @@ def assign_device_and_create_entry(
     )
     if race is None:
         raise RaceEntryValidationError("Race not found.")
-    if not race.active:
+    if race.status not in {"upcoming", "live"}:
         raise RaceEntryValidationError("This race is not open for entry.")
     if rider is None:
         raise RaceEntryValidationError("Rider not found.")

@@ -4,18 +4,17 @@ Pure rider form normalization, formatting, and validation helpers.
 Functions
 ---------
 normalize_rider_form
-    Trim submitted rider values and normalize blank optional fields.
+    Trim rider text values and normalize blank optional fields.
 rider_form_values
     Build template-safe values from a Rider-like object or an empty form.
 validate_rider_form
-    Validate required rider profile fields.
+    Validate the required rider text fields.
 
 These helpers deliberately avoid Flask, SQLAlchemy, and template rendering so
 the same rider input rules can be reused by browser routes and future APIs.
 """
 
 from collections.abc import Mapping
-
 
 def normalize_rider_form(
     name: str | None,
@@ -31,7 +30,6 @@ def normalize_rider_form(
       team: raw optional team name.
       bike: raw optional bike description.
       bio: raw optional rider biography.
-
     Output:
       Dictionary with trimmed values and None for blank optional fields.
     """
@@ -64,6 +62,7 @@ def rider_form_values(rider=None) -> dict:
         "team": value_for("team"),
         "bike": value_for("bike"),
         "bio": value_for("bio"),
+        "profile_image_filename": value_for("profile_image_filename"),
     }
 
 

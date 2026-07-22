@@ -54,8 +54,8 @@ class PostgreSQLRaceEntryIntegrationTestCase(unittest.TestCase):
         suffix = uuid4().hex[:12]
         session = self.session_factory()
         try:
-            self.race = Race(name=f"PG Entry Race {suffix}", active=True)
-            self.other_race = Race(name=f"PG Other Race {suffix}", active=True)
+            self.race = Race(name=f"PG Entry Race {suffix}", status="upcoming")
+            self.other_race = Race(name=f"PG Other Race {suffix}", status="upcoming")
             self.rider_one = Rider(name=f"PG Rider One {suffix}")
             self.rider_two = Rider(name=f"PG Rider Two {suffix}")
             self.device_one = Device(

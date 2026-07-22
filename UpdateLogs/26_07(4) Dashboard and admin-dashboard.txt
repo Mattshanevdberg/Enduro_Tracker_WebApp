@@ -1,0 +1,300 @@
+## Validated dashboard structure
+
+### 1. Hero section
+
+The upper part of the page will use a full-width race image as the background.
+
+The displayed image changes when the selected tab changes:
+
+| Tab            | Suggested image                        |
+| -------------- | -------------------------------------- |
+| Upcoming Races | Riders waiting at the start line       |
+| Live Races     | Fast-moving riders with motion blur    |
+| Past Races     | Riders during sunset or after an event |
+| Riders         | Group portrait of riders               |
+
+A dark gradient overlay will sit over the image so that the navigation and text remain readable.
+
+### Header layout
+
+**Top left**
+
+* Logo placeholder
+* `Kooksnylive` wordmark
+
+**Top right**
+
+Two icon-and-text controls:
+
+* Motorbike rider illustration above `Login`
+* Rider standing beside a bike above `Sign Up`
+
+For the mock-up, these will use simple illustration placeholders.
+
+### Hero text
+
+The hero text changes with the selected tab.
+
+Example:
+
+```text
+Upcoming Races
+
+Find your next race, prepare your equipment and secure your tracker.
+```
+
+Each tab will have its own heading and short welcome message.
+
+### Tab navigation
+
+A rounded navigation bar will sit near the lower centre of the hero section:
+
+```text
+Upcoming Races | Live Races | Past Races | Riders
+```
+
+* `Upcoming Races` is selected by default.
+* The selected tab uses the green accent colour.
+* Clicking a tab changes:
+
+  * the hero image;
+  * the hero heading;
+  * the hero description;
+  * the list content below.
+
+This will be handled with simple JavaScript in the mock-up.
+
+---
+
+## 2. Scrolling behaviour
+
+On desktop:
+
+* the hero and tab navigation remain visible;
+* the race or rider list scrolls below them.
+
+On smaller screens:
+
+* the hero will be reduced in height;
+* the page will use normal vertical scrolling so the fixed section does not occupy most of the phone screen.
+
+---
+
+## 3. Race-list layout
+
+The race section will use a flat list style similar to the Red Bull event example.
+
+Each race row will contain:
+
+### Left
+
+* Race logo placeholder
+
+### Centre
+
+* Optional status badge
+* Race name
+* Variable-length description
+* Location with a small location icon
+
+### Right
+
+* Large bold date
+* Relevant action button
+
+Example desktop structure:
+
+```text
+[Race logo]   Race name and details                  12 AUG
+              Description                            [Get Device]
+              Location
+```
+
+### Row behaviour
+
+The complete row will be clickable and will open the race page.
+
+The action button will operate separately and will not trigger the row link.
+
+### Buttons by tab
+
+| Tab            | Button     |
+| -------------- | ---------- |
+| Upcoming Races | Get Device |
+| Live Races     | No button  |
+| Past Races     | Results    |
+
+For live races, the date area can include a noticeable green `LIVE` status indicator.
+
+---
+
+## 4. Rider-list layout
+
+Each rider row will contain:
+
+### Left and centre
+
+* Rider name
+* Team
+* Bike
+* Short biography
+
+### Right
+
+* Rider profile-image placeholder
+* `View Rider` button below the image
+
+Example:
+
+```text
+Rider name                                     [Profile image]
+Team                                           [View Rider]
+Bike
+Short biography
+```
+
+The row and the button can both open the rider profile.
+
+---
+
+## 5. Visual style
+
+### Colour palette
+
+* Near-black background and headings
+* White content area
+* Light grey page background
+* Medium grey supporting text
+* Green accent for:
+
+  * selected tabs;
+  * primary buttons;
+  * live indicators;
+  * hover states.
+
+Suggested accent:
+
+```css
+#19a463
+```
+
+### Components
+
+* Rounded navigation bar
+* Rounded buttons
+* Rounded race-logo and rider-image placeholders
+* Soft shadows
+* Thin separators between rows
+* Slight row elevation or background change on hover
+* Bold, modern headings
+* Generous spacing without making the list feel oversized
+
+---
+
+## 6. Responsive layout
+
+### Desktop
+
+* Wide horizontal list rows
+* Logo on the left
+* Details in the centre
+* Date and action on the right
+
+### Mobile
+
+Each race becomes a compact stacked card:
+
+```text
+[Race logo]
+
+Race name
+Description
+Location
+
+Date                  [Action]
+```
+
+For riders:
+
+```text
+[Profile image]
+
+Rider name
+Team
+Bike
+Biography
+
+[View Rider]
+```
+
+---
+
+## 7. Mock-up implementation
+
+The test page will include:
+
+* One standalone HTML file
+* Embedded CSS for easier testing
+* Embedded JavaScript for switching tabs
+* Placeholder hero images
+* Placeholder race logos
+* Placeholder rider photos
+* Sample upcoming, live and past races
+* Sample rider profiles
+* Responsive desktop and mobile behaviour
+* No backend integration
+* No changes to your existing Flask routes or database
+
+The only layout detail I will resolve during implementation is the Riders row: the portrait will sit on the far right, with the **View Rider** button directly below it.
+
+
+My response:
+Looks good except for the following changes:
+
+Please include this: For live races, the date area can include a noticeable green LIVE status indicator.
+
+For rider list this is the layout I am looking for:
+[Profile image]   Rider name                        
+                                 Team                                   [View Rider]
+                                  Bike
+                                  Short biography
+
+Then please can you create the mockup with these slight adjustments
+
+GPT:
+The dashboard mock-up includes:
+
+Green LIVE indicator in the date area for live races
+Updated rider layout:
+Profile image on the left
+Name, team, bike and biography in the centre
+View Rider button on the right
+Switching hero content and lists for all four tabs
+Clickable race and rider rows
+Upcoming Get Device buttons
+Past-race Results buttons
+Responsive desktop and mobile layouts
+Placeholder areas for logos, race images and rider photos
+
+Open the downloaded file directly in a browser. The mock-up is standalone and does not require Flask, Docker or a running database.
+
+
+
+
+Responces:
+
+1. Race/classification: lets change the active field from true false, and make it draft, upcoming, live, completed. Then that can be set in the race edit page.
+2. Data-model expansion: add the required feilds: [race]:[location,logo/image, update active as above, we can use the current start and end time feilds to obtain dates]; [rider]:[profile image] 
+3. Lets manually add static images by the developer for this this version.
+4. Lets incorparate the rider tab into this page. So rather than have a seperate rider profiles page, we can have it as a tab on this page (the riders_profiles route). The tab should show all riders. When clicking on the rider profile in the tab, it should show a pop up. That will show the extended rider details (this can be a new rider profile route and will have the same layout as the edit_rider route but will not allow editting). If It is the riders own profile, then it should allow the rider to edit the details (using the existing rider profile route). 
+5. All of those are correct. View rider is as stated in number 4. 
+6. For logged in riders or admins, these can become my profile and log out. 
+7. You may reduce the mobile hero height and change the forward tabs into visible 2X2 mobile grid. Please preserve the mock ups separate scrolling list. However, when scrolling downwards, please make the hero tab decrease in size. Keeping only the heading and the tabs and getting rid of the heading description and the small tab above. Also keeping the logo and the sign in login at the top. 
+8. For the admin dashboard, use the same brand, colors, cards and topography, but retain a denser operational control layout. 
+
+Final additional instructions:
+Apart from what I have told you, do not adjust dish other tabs unnecessarily or other pages unnecessarily. I shall be going through them and implementing them one at a time. If you can observe. Functionality that will break using this current setup. Please inform me. 
+
+Post changes:
+Using the dashboard CSS as a style template, create a new base.css and call it base_new.css. Do not delete the old base.css. Then as we update various feel various pages and templates, we will move them over to the base_new.css. Also create a new forms_new.css and tables.css. The idea is we are creating a new format for our website that will replace the old format as we update individual web pages. Please can you follow the same change over format with JS files.
+I would like the riders to be able to upload their own profile pictures and them to be saved alongside the rider. How is the best way to go about doing this? At the moment I see that you have saved a string in the db that leads to the file. How would this work? Because essentially we'd like the write a profile picture to be saved in the database I assume? 

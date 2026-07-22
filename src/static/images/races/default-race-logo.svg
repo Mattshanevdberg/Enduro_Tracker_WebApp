@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 270" role="img" aria-labelledby="title desc">
+  <title id="title">Default race artwork</title>
+  <desc id="desc">Abstract green mountain and race route placeholder.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#e8f5ed"/>
+      <stop offset="1" stop-color="#dfe5df"/>
+    </linearGradient>
+  </defs>
+  <rect width="420" height="270" fill="url(#bg)"/>
+  <path d="M0 220 100 97l55 63 48-82 91 112 48-53 78 83v50H0Z" fill="#1f9d63" opacity=".25"/>
+  <path d="M26 228c78-64 120 21 183-45 51-53 104-31 184-101" fill="none" stroke="#147a4a" stroke-width="10" stroke-linecap="round" stroke-dasharray="2 21"/>
+  <circle cx="27" cy="228" r="10" fill="#111811"/>
+  <circle cx="393" cy="82" r="10" fill="#1f9d63"/>
+  <text x="210" y="244" fill="#394039" font-family="system-ui,sans-serif" font-size="18" font-weight="800" text-anchor="middle">RACE ARTWORK</text>
+</svg>

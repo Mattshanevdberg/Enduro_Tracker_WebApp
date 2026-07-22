@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 700" role="img" aria-labelledby="title">
+  <title id="title">Rider profile hero placeholder</title>
+  <defs><linearGradient id="g" x1="0" x2="1"><stop stop-color="#151b17"/><stop offset=".58" stop-color="#5f7064"/><stop offset="1" stop-color="#202721"/></linearGradient></defs>
+  <rect width="1600" height="700" fill="url(#g)"/>
+  <g fill="#121713" opacity=".72">
+    <g transform="translate(870 165)"><circle cx="95" cy="70" r="54"/><path d="M0 390c7-160 42-245 95-245s88 85 95 245H0Z"/></g>
+    <g transform="translate(1090 120)"><circle cx="95" cy="70" r="54"/><path d="M0 435c7-160 42-245 95-245s88 85 95 245H0Z"/></g>
+    <g transform="translate(1310 185)"><circle cx="95" cy="70" r="54"/><path d="M0 370c7-160 42-245 95-245s88 85 95 245H0Z"/></g>
+  </g>
+</svg>

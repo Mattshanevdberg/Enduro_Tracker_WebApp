@@ -20,7 +20,7 @@
       {% endif %}
 
       <section class="content-panel">
-        <form class="form-grid" method="post" action="{{ url_for('riders.rider_form', rider_id=editing_rider.id) if editing_rider else url_for('riders.rider_form') }}">
+        <form class="form-grid" method="post" enctype="multipart/form-data" action="{{ url_for('riders.rider_form', rider_id=editing_rider.id) if editing_rider else url_for('riders.rider_form') }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
           {% if editing_rider %}<input type="hidden" name="rider_id" value="{{ editing_rider.id }}"/>{% endif %}
           <label for="name">Full name *</label>
@@ -35,9 +35,48 @@
           <label for="bio">Bio</label>
           <textarea id="bio" name="bio" rows="4" placeholder="Optional">{{ form.bio or '' }}</textarea>
 
+          <label for="profile_image">Profile picture</label>
+          <div class="profile-image-control">
+            {% if editing_rider and form.profile_image_filename %}
+              <img
+                class="profile-image-preview"
+                src="{{ url_for('rider_profiles.rider_profile_image', rider_id=editing_rider.id, v=form.profile_image_filename) }}"
+                alt="Current profile picture for {{ form.name }}"
+              />
+            {% else %}
+              <img
+                class="profile-image-preview"
+                src="{{ url_for('static', filename='images/riders/default-profile.svg') }}"
+                alt="Default profile picture"
+              />
+            {% endif %}
+            <input
+              id="profile_image"
+              name="profile_image"
+              type="file"
+              accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
+            />
+            <p class="muted">
+              Upload a JPEG, PNG, or WebP image up to {{ profile_image_max_mb | int }} MB.
+              It will be resized and securely converted to WebP.
+            </p>
+            {% if editing_rider and form.profile_image_filename %}
+              <label class="inline-label" for="remove_profile_image">
+                <input id="remove_profile_image" name="remove_profile_image" type="checkbox" value="1" />
+                Remove the current profile picture
+              </label>
+            {% endif %}
+          </div>
+
           <div class="actions">
             <button class="btn" type="submit">Save</button>
-            <a class="btn" href="{{ url_for('home.dashboard_admin') }}">Back to Admin Dashboard</a>
+            {% if viewer.role == 'admin' %}
+              <a class="btn" href="{{ url_for('home.dashboard_admin') }}">Back to Admin Dashboard</a>
+            {% elif editing_rider %}
+              <a class="btn" href="{{ url_for('rider_profiles.rider_profile', rider_id=editing_rider.id) }}">Back to My Profile</a>
+            {% else %}
+              <a class="btn" href="{{ url_for('home.dashboard', tab='riders') }}">Back to Riders</a>
+            {% endif %}
           </div>
         </form>
       </section>

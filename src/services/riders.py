@@ -7,12 +7,14 @@ list_riders
     Return rider profiles in stable name order.
 get_rider
     Load one rider profile by primary key.
+get_rider_for_update
+    Lock one rider profile while a write transaction coordinates media state.
 rider_account_has_profile
     Check whether a rider account already owns a linked profile.
 create_rider
     Validate and stage a new profile, linking rider accounts when required.
 update_rider
-    Validate and stage changes to an existing profile.
+    Validate and stage text changes to an existing profile.
 
 The service reuses shared authorization and UTC helpers, coordinates Rider/User
 models, and remains independent of Flask requests, templates, and responses.
@@ -67,6 +69,30 @@ def get_rider(session, rider_id: int) -> Rider | None:
       Matching Rider row, or None when it does not exist.
     """
     return session.get(Rider, rider_id)
+
+
+def get_rider_for_update(session, rider_id: int) -> Rider | None:
+    """
+    Lock and return one Rider for a coordinated profile update.
+
+    Input Args:
+      session: active SQLAlchemy session and transaction.
+      rider_id: Rider primary key.
+
+    Output:
+      Matching locked Rider row, or None when it does not exist.
+
+    Notes:
+      PostgreSQL serializes concurrent profile updates to the same Rider. This
+      prevents simultaneous image replacements from both treating the same old
+      key as current and leaving a superseded generated file orphaned.
+    """
+    return (
+        session.query(Rider)
+        .filter(Rider.id == rider_id)
+        .with_for_update()
+        .one_or_none()
+    )
 
 
 def rider_account_has_profile(user) -> bool:

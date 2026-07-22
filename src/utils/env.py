@@ -1,6 +1,15 @@
 """
 Environment-variable parsing helpers.
 
+Functions
+---------
+env_bool
+    Parse a conventional true/false environment value.
+env_positive_int
+    Parse a strictly positive integer with a safe fallback.
+required_env
+    Read a required non-blank environment value.
+
 These utilities keep repeated environment parsing out of application entrypoints
 and route modules. They intentionally return explicit defaults for missing or
 unrecognised values so each caller can choose a safe fallback.
@@ -27,6 +36,31 @@ def env_bool(name: str, default: bool = False) -> bool:
     if value in {"0", "false", "no", "off"}:
         return False
     return default
+
+
+def env_positive_int(name: str, default: int) -> int:
+    """
+    Parse an environment variable as a strictly positive integer.
+
+    Input Args:
+      name: environment variable name to read.
+      default: positive fallback used for missing, invalid, zero, or negative
+        values.
+
+    Output:
+      Parsed positive integer, or the provided fallback.
+
+    Raises:
+      ValueError when the caller supplies a non-positive default, because that
+      would make invalid runtime configuration fail open.
+    """
+    if default <= 0:
+        raise ValueError("The positive-integer environment fallback must be positive.")
+    try:
+        value = int((os.environ.get(name) or "").strip())
+    except ValueError:
+        return default
+    return value if value > 0 else default
 
 
 def required_env(name: str, purpose: str = "application configuration") -> str:

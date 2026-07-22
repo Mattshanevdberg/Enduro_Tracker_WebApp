@@ -151,7 +151,7 @@ class RaceDatabaseTestCase(unittest.TestCase):
             race = Race(
                 name="Layered Race",
                 starts_at_epoch=1_700_000_000,
-                active=True,
+                status="upcoming",
             )
             rider_one = Rider(name="Alice Rider")
             rider_two = Rider(name="Bob Rider")
@@ -234,12 +234,19 @@ class RaceLifecycleAndRouteServiceTestCase(RaceDatabaseTestCase):
                 "website": " https://example.com ",
                 "start_date": "2026-07-16",
                 "start_time": "10:30",
+                "end_date": "2026-07-16",
+                "end_time": "16:30",
                 "description": " Test ",
-                "active": "on",
+                "location": " Test Valley ",
+                "logo_image_filename": " test-race.webp ",
+                "status": "upcoming",
             }
         )
         self.assertEqual(form["name"], "New Race")
         self.assertIsInstance(form["starts_at_epoch"], int)
+        self.assertIsInstance(form["ends_at_epoch"], int)
+        self.assertEqual(form["location"], "Test Valley")
+        self.assertEqual(form["logo_image_filename"], "test-race.webp")
         self.assertEqual(parse_positive_id("42", required=True), 42)
         with self.assertRaises(ValueError):
             parse_positive_id("Professional", required=True)
@@ -252,6 +259,7 @@ class RaceLifecycleAndRouteServiceTestCase(RaceDatabaseTestCase):
             created = save_race(session, form)
             session.commit()
             self.assertEqual(created.name, "New Race")
+            self.assertEqual(created.status, "upcoming")
             category_count = session.query(Category).count()
             route_count = session.query(Route).count()
             empty_edit_data = load_race_edit_data(session, created.id, None)
@@ -523,7 +531,7 @@ class AutomaticRaceEntryServiceTestCase(RaceDatabaseTestCase):
         device_id: str,
     ) -> RaceRider:
         """Create an older race assignment used as device history."""
-        previous_race = Race(name="Previous Race", active=False)
+        previous_race = Race(name="Previous Race", status="completed")
         session.add(previous_race)
         session.flush()
         previous_route = Route(
@@ -785,7 +793,7 @@ class AutomaticRaceEntryServiceTestCase(RaceDatabaseTestCase):
         """Reject a category id owned by another race before assignment."""
         session = self.session_factory()
         try:
-            other_race = Race(name="Tampering Race", active=True)
+            other_race = Race(name="Tampering Race", status="upcoming")
             session.add(other_race)
             session.flush()
             other_route = Route(race_id=other_race.id, name="Other Course")
@@ -892,7 +900,7 @@ class AutomaticRaceEntryServiceTestCase(RaceDatabaseTestCase):
                 session.commit()
             session.rollback()
 
-            other_race = Race(name="Other Race", active=True)
+            other_race = Race(name="Other Race", status="upcoming")
             session.add(other_race)
             session.flush()
             existing_category = session.get(Category, self.category_id)
@@ -941,7 +949,7 @@ class AutomaticRaceEntryServiceTestCase(RaceDatabaseTestCase):
                 session.commit()
             session.rollback()
 
-            other_race = Race(name="Cross-scope Race", active=True)
+            other_race = Race(name="Cross-scope Race", status="upcoming")
             session.add(other_race)
             session.flush()
             session.add(
@@ -1079,7 +1087,7 @@ class RaceControllerTestCase(RaceDatabaseTestCase):
         self.assertEqual(self.client.post("/races/save", data={"name": ""}).status_code, 400)
         create_response = self.client.post(
             "/races/save",
-            data={"name": "Controller Race", "active": "on"},
+            data={"name": "Controller Race", "status": "upcoming"},
         )
         self.assertEqual(create_response.status_code, 302)
         self.assertRegex(

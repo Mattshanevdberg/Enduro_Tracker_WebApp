@@ -1,0 +1,186 @@
+/*
+Read-only public rider profile presentation.
+
+The same marked card renders as a standalone canonical page and is imported by
+dashboard.js into the modal dialog. Selectors are therefore component-scoped so
+the card keeps the same structure in both contexts without affecting forms or
+other application pages.
+*/
+
+body.rider-profile-page {
+  margin: 0;
+  min-height: 100vh;
+  color: #111411;
+  background:
+    linear-gradient(135deg, rgba(11, 22, 15, 0.96), rgba(28, 86, 57, 0.88)),
+    #111811;
+}
+
+.rider-profile-shell {
+  width: min(1040px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 32px 0 60px;
+}
+
+.rider-profile-back {
+  display: inline-flex;
+  margin-bottom: 18px;
+  color: #ffffff;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.rider-profile-back:hover,
+.rider-profile-back:focus-visible {
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+.rider-profile-card {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.82fr) minmax(0, 1.3fr);
+  min-height: 480px;
+  overflow: hidden;
+  border-radius: 24px;
+  color: #111411;
+  background: #ffffff;
+  box-shadow: 0 26px 70px rgba(6, 16, 9, 0.26);
+}
+
+.rider-profile-portrait {
+  min-height: 420px;
+  overflow: hidden;
+  background: #e7ebe7;
+}
+
+.rider-profile-portrait img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.rider-profile-details {
+  align-self: center;
+  padding: clamp(30px, 6vw, 68px);
+}
+
+.rider-profile-kicker {
+  margin: 0 0 12px;
+  color: #147a4a;
+  font-size: 0.76rem;
+  font-weight: 900;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.rider-profile-details h1 {
+  margin: 0;
+  font-size: clamp(2.2rem, 5vw, 4.4rem);
+  line-height: 0.96;
+  letter-spacing: -0.05em;
+}
+
+.rider-profile-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin: 30px 0;
+}
+
+.rider-profile-facts div {
+  padding: 15px;
+  border: 1px solid #dce1dc;
+  border-radius: 14px;
+  background: #f4f6f4;
+}
+
+.rider-profile-facts dt {
+  margin-bottom: 4px;
+  color: #667067;
+  font-size: 0.75rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.rider-profile-facts dd {
+  margin: 0;
+  font-weight: 800;
+}
+
+.rider-profile-bio h2 {
+  margin: 0 0 8px;
+  font-size: 1.1rem;
+}
+
+.rider-profile-bio p {
+  margin: 0;
+  color: #667067;
+  line-height: 1.65;
+}
+
+.rider-profile-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 30px;
+}
+
+.rider-profile-action {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 18px;
+  border-radius: 999px;
+  color: #ffffff;
+  background: #1f9d63;
+  font-weight: 900;
+  text-decoration: none;
+}
+
+.rider-profile-action:hover,
+.rider-profile-action:focus-visible {
+  background: #147a4a;
+  outline: none;
+}
+
+.rider-profile-action:focus-visible {
+  box-shadow: 0 0 0 3px #ffffff, 0 0 0 6px #147a4a;
+}
+
+.rider-profile-action.secondary {
+  color: #111411;
+  background: #edf0ed;
+}
+
+.rider-profile-dialog .rider-profile-card {
+  min-height: min(620px, calc(100dvh - 64px));
+  border-radius: 24px;
+  box-shadow: none;
+}
+
+@media (max-width: 700px) {
+  .rider-profile-card {
+    grid-template-columns: 1fr;
+  }
+
+  .rider-profile-portrait {
+    min-height: 250px;
+    max-height: 310px;
+  }
+
+  .rider-profile-details {
+    padding: 28px 22px 32px;
+  }
+
+  .rider-profile-facts {
+    grid-template-columns: 1fr;
+    margin-block: 22px;
+  }
+
+  .rider-profile-action {
+    width: 100%;
+  }
+}

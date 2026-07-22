@@ -1,0 +1,275 @@
+/*
+Admin dashboard visual layer.
+
+This page reuses the public dashboard's near-black, white, grey, and forest
+green brand direction while retaining compact tool cards and a dense operational
+table. Every selector is scoped beneath admin-dashboard classes so no other
+administration or public page is restyled by this update.
+*/
+
+body.admin-dashboard-page {
+  min-height: 100vh;
+  color: #111411;
+  background: #f1f3f1;
+}
+
+.admin-dashboard-hero {
+  color: #ffffff;
+  background:
+    linear-gradient(90deg, rgba(7, 10, 7, 0.94), rgba(7, 10, 7, 0.5)),
+    url("../images/dashboard/heroes/live.svg") center 45% / cover;
+  border-bottom: 4px solid #101310;
+}
+
+.admin-dashboard-hero-inner,
+.admin-dashboard-shell {
+  width: min(1320px, calc(100% - 40px));
+  margin: 0 auto;
+}
+
+.admin-dashboard-hero-inner {
+  min-height: 300px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: auto 1fr;
+  gap: 24px;
+  padding: 20px 0 34px;
+}
+
+.admin-dashboard-brand {
+  width: fit-content;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  color: #ffffff;
+  font-size: 1.45rem;
+  font-weight: 900;
+  letter-spacing: -0.04em;
+  text-decoration: none;
+}
+
+.admin-dashboard-brand img {
+  width: 52px;
+  height: 52px;
+}
+
+.admin-dashboard-account {
+  display: flex;
+  gap: 10px;
+  align-items: start;
+}
+
+.admin-dashboard-account form {
+  margin: 0;
+}
+
+.admin-dashboard-account a,
+.admin-dashboard-account button {
+  min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 999px;
+  color: #ffffff;
+  background: rgba(0, 0, 0, 0.25);
+  font-weight: 800;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.admin-dashboard-account a:hover,
+.admin-dashboard-account button:hover,
+.admin-dashboard-account a:focus-visible,
+.admin-dashboard-account button:focus-visible {
+  background: rgba(255, 255, 255, 0.13);
+  outline: 2px solid #ffffff;
+  outline-offset: 2px;
+}
+
+.admin-dashboard-title {
+  grid-column: 1 / -1;
+  align-self: end;
+}
+
+.admin-dashboard-title p,
+.admin-races > header p {
+  margin: 0 0 7px;
+  color: #6ed5a3;
+  font-size: 0.75rem;
+  font-weight: 900;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.admin-dashboard-title h1 {
+  margin: 0;
+  font-size: clamp(2.7rem, 6vw, 5rem);
+  line-height: 0.94;
+  letter-spacing: -0.055em;
+}
+
+.admin-dashboard-title span {
+  display: block;
+  margin-top: 12px;
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.admin-dashboard-shell {
+  padding: 28px 0 64px;
+}
+
+.admin-tool-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 32px;
+}
+
+.admin-tool-grid a {
+  min-height: 112px;
+  display: grid;
+  align-content: center;
+  gap: 5px;
+  padding: 18px;
+  border: 1px solid #dce1dc;
+  border-radius: 16px;
+  color: #111411;
+  background: #ffffff;
+  box-shadow: 0 10px 26px rgba(13, 18, 14, 0.07);
+  text-decoration: none;
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.admin-tool-grid a:hover,
+.admin-tool-grid a:focus-visible {
+  border-color: #1f9d63;
+  box-shadow: 0 15px 30px rgba(13, 18, 14, 0.13);
+  outline: none;
+  transform: translateY(-2px);
+}
+
+.admin-tool-grid strong {
+  font-size: 1.08rem;
+}
+
+.admin-tool-grid span {
+  color: #667067;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.admin-races > header {
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+  gap: 18px;
+  margin-bottom: 14px;
+}
+
+.admin-races > header p {
+  color: #147a4a;
+}
+
+.admin-races h2 {
+  margin: 0;
+  font-size: clamp(1.8rem, 3vw, 2.5rem);
+  letter-spacing: -0.04em;
+}
+
+.admin-races > header > span {
+  padding: 7px 11px;
+  border-radius: 999px;
+  color: #147a4a;
+  background: #e5f6ed;
+  font-size: 0.8rem;
+  font-weight: 900;
+}
+
+.admin-dashboard-page .table-card {
+  border-color: #dce1dc;
+  border-radius: 16px;
+  box-shadow: 0 18px 45px rgba(13, 18, 14, 0.1);
+}
+
+.admin-dashboard-page th {
+  background: #111811;
+}
+
+.admin-dashboard-page .actions .btn {
+  border-color: #c9dfd1;
+  border-radius: 999px;
+  color: #124f35;
+  background: #e5f6ed;
+}
+
+.admin-dashboard-page .actions .btn:hover,
+.admin-dashboard-page .actions .btn:focus-visible {
+  color: #ffffff;
+  background: #147a4a;
+}
+
+.admin-status {
+  display: inline-flex;
+  padding: 5px 9px;
+  border-radius: 999px;
+  color: #4f584f;
+  background: #e7ebe7;
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.admin-status-upcoming,
+.admin-status-live {
+  color: #08683b;
+  background: #ddf7e9;
+}
+
+.admin-status-live {
+  box-shadow: inset 4px 0 #19b66f;
+}
+
+.admin-status-completed {
+  color: #4a4e57;
+  background: #e7e9ed;
+}
+
+.admin-empty {
+  padding: 22px;
+  border: 1px solid #dce1dc;
+  border-radius: 16px;
+  color: #667067;
+  background: #ffffff;
+}
+
+@media (max-width: 900px) {
+  .admin-tool-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 600px) {
+  .admin-dashboard-hero-inner,
+  .admin-dashboard-shell {
+    width: min(100% - 20px, 1320px);
+  }
+
+  .admin-dashboard-hero-inner {
+    min-height: 280px;
+    grid-template-columns: 1fr;
+  }
+
+  .admin-dashboard-account {
+    flex-wrap: wrap;
+  }
+
+  .admin-dashboard-title {
+    grid-column: 1;
+  }
+
+  .admin-tool-grid {
+    grid-template-columns: 1fr;
+  }
+}

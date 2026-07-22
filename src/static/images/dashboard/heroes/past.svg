@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 700" role="img" aria-labelledby="title">
+  <title id="title">Completed race hero placeholder</title>
+  <defs><linearGradient id="g" x1="0" x2="1" y1="1" y2="0"><stop stop-color="#1b1d1a"/><stop offset=".5" stop-color="#9b5d38"/><stop offset="1" stop-color="#efad67"/></linearGradient></defs>
+  <rect width="1600" height="700" fill="url(#g)"/>
+  <circle cx="1290" cy="160" r="105" fill="#ffd18e" opacity=".65"/>
+  <path d="M0 590 310 334l190 167 190-238 260 283 180-172 470 216v110H0Z" fill="#191c19" opacity=".74"/>
+  <path d="M0 625c410-80 731-28 1012-4 241 21 398-3 588-74v153H0Z" fill="#101410" opacity=".74"/>
+</svg>

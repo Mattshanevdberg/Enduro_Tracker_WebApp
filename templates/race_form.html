@@ -36,6 +36,18 @@
       <label for="website">Event Website</label>
       <input id="website" name="website" placeholder="https://..." value="{{ race.website if race else '' }}"/>
 
+      <label for="location">Location</label>
+      <input id="location" name="location" placeholder="Town, Province" value="{{ race.location if race else '' }}"/>
+
+      <label for="logo_image_filename">Race Logo/Image Filename</label>
+      <input
+        id="logo_image_filename"
+        name="logo_image_filename"
+        placeholder="wild-coast-enduro.webp"
+        value="{{ race.logo_image_filename if race else '' }}"
+      />
+      <p class="muted">Add the file to <code>src/static/images/races/</code> and enter its filename only.</p>
+
       <div class="row">
         <div class="race-field">
           <label for="start_date">Start Date</label>
@@ -49,11 +61,31 @@
         </div>
       </div>
 
+      <div class="row">
+        <div class="race-field">
+          <label for="end_date">End Date</label>
+          <input id="end_date" name="end_date" type="date"
+                 value="{{ (race.ends_at.date() if race and race.ends_at else '') }}"/>
+        </div>
+        <div class="race-field">
+          <label for="end_time">End Time</label>
+          <input id="end_time" name="end_time" type="time"
+                 value="{{ (race.ends_at.strftime('%H:%M') if race and race.ends_at else '') }}"/>
+        </div>
+      </div>
+
       <label for="description">Description</label>
       <textarea id="description" name="description" rows="4">{{ race.description if race else '' }}</textarea>
 
       <div class="row">
-        <label><input type="checkbox" name="active" {% if race and race.active %}checked{% endif %}/> Make Active</label>
+        <div class="race-field">
+          <label for="status">Race Status</label>
+          <select id="status" name="status">
+            {% for status in ('draft', 'upcoming', 'live', 'completed') %}
+              <option value="{{ status }}" {{ 'selected' if (race.status if race else 'draft') == status else '' }}>{{ status | title }}</option>
+            {% endfor %}
+          </select>
+        </div>
         <button class="btn" type="submit">Save Changes</button>
         {% if race and race.website %}
           <a class="btn" href="{{ race.website }}" target="_blank" rel="noopener">Open Website</a>

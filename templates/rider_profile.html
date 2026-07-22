@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>{{ rider.name }} | Rider Profile | Kooksnylive</title>
+    <meta name="description" content="View {{ rider.name }}'s Kooksnylive rider profile, team, bike and biography." />
+    <link rel="canonical" href="https://kooksnylive.co.za{{ url_for('rider_profiles.rider_profile', rider_id=rider.id) }}" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/rider-profile.css') }}" />
+  </head>
+  <body class="rider-profile-page">
+    <main class="rider-profile-shell">
+      <a class="rider-profile-back" href="{{ url_for('home.dashboard', tab='riders') }}">← Back to Riders</a>
+
+      <article class="rider-profile-card" data-rider-profile-content>
+        <div class="rider-profile-portrait">
+          {% set rider_image_url = url_for('rider_profiles.rider_profile_image', rider_id=rider.id, v=rider.profile_image_filename) if rider.profile_image_filename else url_for('static', filename='images/riders/default-profile.svg') %}
+          <img
+            src="{{ rider_image_url }}"
+            alt="Portrait of {{ rider.name }}"
+          />
+        </div>
+        <div class="rider-profile-details">
+          <p class="rider-profile-kicker">Rider profile</p>
+          <h1>{{ rider.name }}</h1>
+          <dl class="rider-profile-facts">
+            <div>
+              <dt>Team</dt>
+              <dd>{{ rider.team or 'Independent rider' }}</dd>
+            </div>
+            <div>
+              <dt>Bike</dt>
+              <dd>{{ rider.bike or 'Not specified' }}</dd>
+            </div>
+          </dl>
+          <div class="rider-profile-bio">
+            <h2>Biography</h2>
+            <p>{{ rider.bio or 'No biography has been added yet.' }}</p>
+          </div>
+          <div class="rider-profile-actions">
+            {% if can_edit %}
+              <a class="rider-profile-action" href="{{ url_for('riders.rider_form', rider_id=rider.id) }}">Edit Profile</a>
+            {% endif %}
+            <a class="rider-profile-action secondary" href="{{ url_for('home.dashboard', tab='riders') }}">View All Riders</a>
+          </div>
+        </div>
+      </article>
+    </main>
+  </body>
+</html>

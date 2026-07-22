@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 700" role="img" aria-labelledby="title">
+  <title id="title">Upcoming race hero placeholder</title>
+  <defs><linearGradient id="g" x1="0" x2="1"><stop stop-color="#16231c"/><stop offset=".56" stop-color="#526a59"/><stop offset="1" stop-color="#202a23"/></linearGradient></defs>
+  <rect width="1600" height="700" fill="url(#g)"/>
+  <path d="M0 590 290 265l180 211 180-311 311 375 190-218 449 268v110H0Z" fill="#dbe8dd" opacity=".14"/>
+  <g fill="#0b100c" opacity=".64"><circle cx="1040" cy="390" r="54"/><circle cx="1230" cy="390" r="54"/><path d="m1040 390 80-122 110 122h-190Zm80-122 63-16 47 138m-132-74h102" stroke="#0b100c" stroke-width="24" fill="none"/></g>
+</svg>

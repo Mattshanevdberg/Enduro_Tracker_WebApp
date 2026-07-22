@@ -251,7 +251,16 @@ class Point(Base):
 
 class Rider(Base):
     """
-    Core athlete information.
+    Core athlete and public-profile information.
+
+    Columns:
+      id                     : PK
+      name                   : rider display name
+      bike                   : optional motorcycle description
+      bio                    : optional public biography
+      team                   : optional team or club name
+      profile_image_filename : optional application-generated key for the
+        normalized image in persistent profile-media storage
     """
 
     __tablename__ = "riders"
@@ -261,6 +270,7 @@ class Rider(Base):
     bike = Column(String(128), nullable=True)
     bio = Column(Text, nullable=True)
     team = Column(String(128), nullable=True)
+    profile_image_filename = Column(String(255), nullable=True)
 
     race_entries = relationship("RaceRider", back_populates="rider")
     user_account = relationship("User", back_populates="rider", uselist=False)
@@ -567,7 +577,19 @@ class MapTileBrowserBlock(Base):
 
 class Race(Base):
     """
-    Organized event metadata.
+    Organized event and dashboard metadata.
+
+    Columns:
+      id                  : PK
+      name                : public race name
+      description         : optional public summary
+      website             : optional official event website
+      location            : optional public location label
+      logo_image_filename : optional developer-managed image filename stored
+        beneath src/static/images/races
+      starts_at_epoch     : durable scheduled start time in UTC epoch seconds
+      ends_at_epoch       : durable scheduled end time in UTC epoch seconds
+      status              : explicit draft/upcoming/live/completed lifecycle
     """
 
     __tablename__ = "races"
@@ -576,13 +598,22 @@ class Race(Base):
     name = Column(String(128), nullable=False)
     description = Column(Text, nullable=True)
     website = Column(String(256), nullable=True)
+    location = Column(String(256), nullable=True)
+    logo_image_filename = Column(String(255), nullable=True)
     starts_at = Column(DateTime(timezone=True), nullable=True)
     # Phase A: epoch mirror (UTC seconds) for future migration away from DateTime.
     starts_at_epoch = Column(Integer, nullable=True)
     ends_at = Column(DateTime(timezone=True), nullable=True)
     # Phase A: epoch mirror (UTC seconds) for future migration away from DateTime.
     ends_at_epoch = Column(Integer, nullable=True)
-    active = Column(Boolean, nullable=False, default=True)
+    status = Column(String(16), nullable=False, default="draft", server_default="draft")
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('draft', 'upcoming', 'live', 'completed')",
+            name="ck_races_status",
+        ),
+    )
 
     routes = relationship("Route", back_populates="race")
 
