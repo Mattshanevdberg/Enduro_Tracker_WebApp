@@ -1760,10 +1760,13 @@ docker compose exec db psql -U enduro_tracker -d enduro_tracker -c '\d points'
 ```text
 src/static/css/
   base.css
+  base_new.css
   dashboard.css
   dashboard-admin.css
   forms.css
+  forms_new.css
   tables.css
+  tables_new.css
   maps.css
   rider-profile.css
   race-form.css
@@ -1795,6 +1798,22 @@ src/static/css/
 ```
 - Notes: stylesheet order matters. Shared files should define the default look, while page files should only add or override what that page genuinely needs.
 
+### Parallel `_new` visual migration foundation
+- Purpose: allow the dashboard-derived visual language to replace the legacy shared interface one reviewed page at a time without changing unmigrated templates.
+- New files: `base_new.css`, `forms_new.css`, and `tables_new.css`. Existing `base.css`, `forms.css`, and `tables.css` remain unchanged and continue serving every current template.
+- Naming decision: the requested new table layer is named `tables_new.css`, rather than overwriting the existing `tables.css`, so the changeover remains genuinely parallel and cannot restyle old pages accidentally.
+- Design direction: uses the dashboard's near-black ink, neutral page/paper surfaces, Kooksny green, large rounded cards, pill actions, strong compact headings, soft shadows, and accessible focus/reduced-motion behavior.
+- Compatibility: retains established classes including `.page-shell`, `.page-header`, `.btn`, `.content-panel`, `.form-grid`, `.filter-grid`, `.table-card`, `.wide-table`, and `.actions`. `base_new.css` also supplies compatibility aliases for existing `--color-*` variables so reviewed page-specific styles can move gradually.
+- Current usage: no template loads a `_new` stylesheet yet. Creating the foundation must not change dashboard, admin, auth, race, rider, device, RFID, map, or placeholder rendering.
+- Per-page migration order: first review the page and its page-specific CSS/JS; then replace its legacy shared links with `base_new.css`, the needed `forms_new.css`/`tables_new.css`, and any reviewed page override; test desktop/mobile/accessibility; finally record that individual template as migrated.
+- Load order example for a future form/table page:
+```html
+<link rel="stylesheet" href="{{ url_for('static', filename='css/base_new.css') }}" />
+<link rel="stylesheet" href="{{ url_for('static', filename='css/forms_new.css') }}" />
+<link rel="stylesheet" href="{{ url_for('static', filename='css/tables_new.css') }}" />
+```
+- Table responsiveness: horizontal scrolling remains the safe default. A reviewed simple table can opt into labelled mobile cards with `data-responsive-table` and `components/tables_new.js`; complex colspan/rowspan tables should remain horizontally scrollable until deliberately redesigned.
+
 ### Current base.css usage
 - Purpose: Provide the lean shared static stylesheet for Flask-rendered operational/simple pages. The public dashboard is intentionally self-contained in `dashboard.css`; the admin dashboard loads base/table styles and its scoped page stylesheet.
 - Reads: CSS custom properties defined in `:root` for navy, white, forest green, neutral surfaces, borders, text, and shadows.
@@ -1818,7 +1837,7 @@ src/static/css/
 
 ### Dashboard and shared component files
 - Purpose: Provide reusable component stylesheets that are loaded after `base.css` by pages that need them.
-- Current state: shared `forms.css`, `tables.css`, and `maps.css` remain unchanged; dashboard-only work is isolated in `dashboard.css`, `dashboard-admin.css`, and `rider-profile.css`.
+- Current state: legacy `base.css`, `forms.css`, `tables.css`, and `maps.css` remain unchanged and in active use; the new dashboard-derived foundation exists in parallel but has not been linked from a template. Dashboard-only work remains isolated in `dashboard.css`, `dashboard-admin.css`, and `rider-profile.css`.
 - `dashboard.css`: owns the two-pane viewport, shrinking hero, accessible tab/card presentation, two-by-two mobile tabs, responsive rows, and rider dialog shell.
 - `dashboard-admin.css`: gives the protected operations dashboard matching brand/card typography while retaining its compact tool grid and wide race table.
 - `rider-profile.css`: styles the same read-only rider card on its canonical page and inside the dashboard dialog.
@@ -1835,8 +1854,11 @@ src/static/css/
 ```text
 src/static/js/
   components/
+    base_new.js
     maps.js
     forms.js
+    forms_new.js
+    tables_new.js
     polling.js
   pages/
     dashboard.js
@@ -1869,9 +1891,25 @@ src/static/js/
 ```
 - Notes: Not every page needs every component file. A page should load only the shared scripts it uses, followed by its own page script. When a shared component is introduced, it must be loaded before the dependent page script.
 
+### Parallel `_new` JavaScript migration foundation
+- Purpose: mirror the CSS changeover so new shared behavior can be adopted per page without replacing scripts still used by legacy templates.
+- New files: `components/base_new.js`, `components/forms_new.js`, and `components/tables_new.js`; no current template loads them.
+- `base_new.js`: exposes `window.EnduroUI.ready`, `enhance`, `announce`, and `setBusy` for DOM readiness, progressive-enhancement markers, accessible live messages, and consistent busy states.
+- `forms_new.js`: preserves `window.EnduroForms.attachAutoSubmitSelects` for page-script compatibility and adds opt-in file-name output plus submit-once helpers. It uses only explicit `data-*` markers and initializes idempotently.
+- `tables_new.js`: exposes responsive label and horizontal-scroll-state helpers. It refuses mobile-card enhancement when body/header cell counts do not match, leaving complex tables in their complete server-rendered form.
+- Changeover rule: do not load a legacy component and its `_new` counterpart on the same page. When a behavior-heavy page is redesigned, create `pages/<page-name>_new.js`, preserve its old page script, and switch only the reviewed template to the new component/page chain.
+- Future migrated load order:
+```html
+<script defer src="{{ url_for('static', filename='js/components/base_new.js') }}"></script>
+<script defer src="{{ url_for('static', filename='js/components/forms_new.js') }}"></script>
+<script defer src="{{ url_for('static', filename='js/components/tables_new.js') }}"></script>
+<script defer src="{{ url_for('static', filename='js/pages/example-page_new.js') }}"></script>
+```
+- Progressive enhancement: all primary navigation, form fields, submissions, and table content must remain usable without these scripts, consistent with the server-rendered web interface in `Web Application System Design V4 - 20260224.pdf`.
+
 ### Current JS usage
 - Purpose: Record the current incremental JavaScript migration state.
-- Current state: `src/static/js/components/forms.js`, `src/static/js/components/maps.js`, `src/static/js/pages/dashboard.js`, `src/static/js/pages/race-form.js`, `src/static/js/pages/race-entry.js`, and `src/static/js/pages/post-race.js` exist. Templates load their required component files before their page file.
+- Current state: current templates still use only `src/static/js/components/forms.js`, `src/static/js/components/maps.js`, `src/static/js/pages/dashboard.js`, `src/static/js/pages/race-form.js`, `src/static/js/pages/race-entry.js`, and `src/static/js/pages/post-race.js`. The three `_new` shared components exist as an inactive migration foundation.
 - `pages/dashboard.js`: progressively enhances real server-rendered tab/profile links, synchronizes hero/tab/URL state, compacts the hero from the list pane's scroll position, implements keyboard tab navigation, and loads canonical rider pages into the native dialog. Navigation remains functional without JavaScript.
 - `components/forms.js`: contains shared `data-auto-submit` select handling used by the category controls in `templates/race_form.html` and `templates/post_race.html`.
 - `components/maps.js`: contains shared Leaflet map creation, selected-category route fetching, GeoJSON layer creation, map-bounds fitting, basemap switching, and Esri tile-usage reporting helpers used by the race form and post-race pages.

@@ -1,0 +1,390 @@
+/*
+Kooksnylive next-generation shared application foundation.
+
+This file is intentionally parallel to base.css. No existing template loads it
+yet. Pages move to this foundation individually so visual regressions remain
+contained and the legacy interface can coexist during the redesign.
+
+Design source:
+- dashboard.css supplies the neutral paper/page palette, near-black ink,
+  Kooksny green, large rounded surfaces, compact typography, and soft shadows.
+- Existing shared class names remain available to keep page migrations small.
+
+Loading order for migrated pages:
+1. base_new.css
+2. forms_new.css and/or tables_new.css when required
+3. existing map/page stylesheet or its future *_new replacement
+*/
+
+:root {
+  color-scheme: light;
+
+  /* Canonical next-generation colour tokens. */
+  --ui-ink: #111411;
+  --ui-ink-soft: #242a24;
+  --ui-paper: #ffffff;
+  --ui-page: #f1f3f1;
+  --ui-page-raised: #f8faf8;
+  --ui-line: #dce1dc;
+  --ui-line-strong: #c9d0c9;
+  --ui-muted: #667067;
+  --ui-green: #1f9d63;
+  --ui-green-dark: #147a4a;
+  --ui-green-soft: #e5f6ed;
+  --ui-green-pale: #f1fbf5;
+  --ui-warning: #9a6700;
+  --ui-warning-soft: #fff5d6;
+  --ui-danger: #b42318;
+  --ui-danger-dark: #8f1d16;
+  --ui-danger-soft: #fff1f0;
+  --ui-info: #1d5f91;
+  --ui-info-soft: #eaf4fb;
+
+  /* Layout, shape, elevation, focus, and motion tokens. */
+  --ui-font: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --ui-max-width: 1240px;
+  --ui-radius-sm: 10px;
+  --ui-radius-md: 16px;
+  --ui-radius-lg: 22px;
+  --ui-radius-pill: 999px;
+  --ui-shadow-sm: 0 8px 22px rgba(13, 18, 14, 0.08);
+  --ui-shadow-card: 0 18px 45px rgba(13, 18, 14, 0.1);
+  --ui-shadow-raised: 0 24px 58px rgba(13, 18, 14, 0.16);
+  --ui-focus-ring: 0 0 0 4px rgba(31, 157, 99, 0.22);
+  --ui-transition-fast: 160ms ease;
+  --ui-transition-standard: 220ms ease;
+
+  /* Compatibility aliases let existing page-specific CSS migrate gradually. */
+  --color-navy-950: var(--ui-ink);
+  --color-navy-900: var(--ui-ink-soft);
+  --color-navy-800: #344034;
+  --color-forest-700: var(--ui-green-dark);
+  --color-forest-600: var(--ui-green);
+  --color-forest-100: var(--ui-green-soft);
+  --color-white: var(--ui-paper);
+  --color-cloud: var(--ui-page-raised);
+  --color-line: var(--ui-line);
+  --color-text: var(--ui-ink);
+  --color-muted: var(--ui-muted);
+  --shadow-card: var(--ui-shadow-card);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  min-width: 320px;
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  color: var(--ui-ink);
+  background: var(--ui-page);
+  font-family: var(--ui-font);
+  font-size: 1rem;
+  line-height: 1.55;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+img,
+svg {
+  max-width: 100%;
+}
+
+a {
+  color: var(--ui-green-dark);
+  text-underline-offset: 0.16em;
+  text-decoration-thickness: 0.08em;
+}
+
+a:hover {
+  color: var(--ui-green);
+}
+
+:focus-visible {
+  outline: 3px solid var(--ui-green);
+  outline-offset: 3px;
+}
+
+::selection {
+  color: var(--ui-paper);
+  background: var(--ui-green-dark);
+}
+
+h1,
+h2,
+h3,
+p {
+  overflow-wrap: anywhere;
+}
+
+h1,
+h2,
+h3 {
+  text-wrap: balance;
+}
+
+.page-shell {
+  width: min(var(--ui-max-width), calc(100% - 48px));
+  margin: 0 auto;
+  padding: 28px 0 72px;
+}
+
+/* A compact dark hero gives operational pages the dashboard's visual anchor. */
+.page-header {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  gap: 10px;
+  margin-bottom: 26px;
+  padding: clamp(28px, 5vw, 58px);
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--ui-radius-lg);
+  color: var(--ui-paper);
+  background:
+    linear-gradient(115deg, rgba(8, 12, 9, 0.98), rgba(24, 32, 25, 0.9) 62%, rgba(20, 122, 74, 0.7)),
+    #182019;
+  box-shadow: var(--ui-shadow-card);
+}
+
+.page-header::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  width: 320px;
+  height: 320px;
+  top: -190px;
+  right: -80px;
+  border-radius: 50%;
+  background: rgba(31, 157, 99, 0.25);
+  filter: blur(2px);
+}
+
+.page-header h1 {
+  max-width: 900px;
+  margin: 0;
+  font-size: clamp(2.25rem, 6vw, 5rem);
+  font-weight: 950;
+  line-height: 0.94;
+  letter-spacing: -0.052em;
+}
+
+.page-header p {
+  max-width: 680px;
+  margin: 0;
+  color: rgba(255, 255, 255, 0.8);
+  font-size: clamp(0.98rem, 1.6vw, 1.16rem);
+}
+
+.section-title {
+  margin: 0 0 14px;
+  color: var(--ui-ink);
+  font-size: clamp(1.55rem, 3vw, 2.2rem);
+  font-weight: 900;
+  line-height: 1.05;
+  letter-spacing: -0.035em;
+}
+
+.stack {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 24px;
+}
+
+.btn {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 18px;
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius-pill);
+  color: var(--ui-paper);
+  background: var(--ui-green);
+  box-shadow: 0 10px 22px rgba(31, 157, 99, 0.2);
+  font-weight: 850;
+  line-height: 1.2;
+  text-align: center;
+  text-decoration: none;
+  cursor: pointer;
+  transition:
+    color var(--ui-transition-fast),
+    background var(--ui-transition-fast),
+    border-color var(--ui-transition-fast),
+    box-shadow var(--ui-transition-fast),
+    transform var(--ui-transition-fast);
+}
+
+.btn:hover,
+.btn:focus-visible {
+  color: var(--ui-paper);
+  background: var(--ui-green-dark);
+  box-shadow: 0 13px 28px rgba(31, 157, 99, 0.28);
+  transform: translateY(-2px);
+}
+
+.btn:focus-visible {
+  outline-color: var(--ui-ink);
+}
+
+.btn.secondary,
+.btn-secondary {
+  color: var(--ui-ink);
+  border-color: var(--ui-line);
+  background: #edf0ed;
+  box-shadow: none;
+}
+
+.btn.secondary:hover,
+.btn.secondary:focus-visible,
+.btn-secondary:hover,
+.btn-secondary:focus-visible {
+  color: var(--ui-ink);
+  border-color: var(--ui-line-strong);
+  background: #e0e5e0;
+}
+
+.btn.danger,
+.btn-danger {
+  color: var(--ui-paper);
+  background: var(--ui-danger);
+  box-shadow: 0 10px 22px rgba(180, 35, 24, 0.18);
+}
+
+.btn.danger:hover,
+.btn-danger:hover {
+  background: var(--ui-danger-dark);
+}
+
+.btn.small,
+.btn-small {
+  min-height: 36px;
+  padding: 7px 13px;
+  font-size: 0.86rem;
+}
+
+.btn[disabled],
+.btn[aria-disabled="true"] {
+  opacity: 0.56;
+  pointer-events: none;
+  transform: none;
+}
+
+.muted {
+  color: var(--ui-muted);
+  font-size: 0.92rem;
+}
+
+.empty-state {
+  margin: 0;
+  padding: 24px;
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-radius-lg);
+  color: var(--ui-muted);
+  background: var(--ui-paper);
+  box-shadow: var(--ui-shadow-card);
+}
+
+.surface-card {
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-radius-lg);
+  background: var(--ui-paper);
+  box-shadow: var(--ui-shadow-card);
+}
+
+.status-pill {
+  width: fit-content;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 10px;
+  border-radius: var(--ui-radius-pill);
+  color: var(--ui-green-dark);
+  background: var(--ui-green-soft);
+  font-size: 0.75rem;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
+.skip-link {
+  position: fixed;
+  z-index: 1000;
+  top: 12px;
+  left: 12px;
+  padding: 10px 14px;
+  border-radius: var(--ui-radius-pill);
+  color: var(--ui-paper);
+  background: var(--ui-ink);
+  transform: translateY(-160%);
+  transition: transform var(--ui-transition-fast);
+}
+
+.skip-link:focus {
+  color: var(--ui-paper);
+  transform: translateY(0);
+}
+
+@media (max-width: 720px) {
+  .page-shell {
+    width: min(100% - 24px, var(--ui-max-width));
+    padding: 12px 0 48px;
+  }
+
+  .page-header {
+    margin-bottom: 18px;
+    padding: 28px 22px;
+    border-radius: 18px;
+  }
+
+  .stack {
+    display: grid;
+  }
+
+  .stack > .btn {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

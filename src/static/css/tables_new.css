@@ -1,0 +1,247 @@
+/*
+Kooksnylive next-generation shared table components.
+
+This file is the parallel replacement for tables.css and depends on
+base_new.css. The old tables.css remains unchanged so unmigrated pages retain
+their current appearance. Existing class names are preserved where practical.
+
+Optional responsive card behavior uses data-responsive-table and is enhanced by
+js/components/tables_new.js, which adds each column heading to data-label.
+*/
+
+.table-card {
+  position: relative;
+  overflow: auto;
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-radius-lg);
+  background: var(--ui-paper);
+  box-shadow: var(--ui-shadow-card);
+  scrollbar-gutter: stable;
+}
+
+.table-card::before,
+.table-card::after {
+  content: "";
+  position: sticky;
+  z-index: 3;
+  top: 0;
+  width: 0;
+  height: 100%;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--ui-transition-fast);
+}
+
+.table-card::before {
+  left: 0;
+  box-shadow: 10px 0 18px 5px rgba(13, 18, 14, 0.12);
+}
+
+.table-card::after {
+  right: 0;
+  box-shadow: -10px 0 18px 5px rgba(13, 18, 14, 0.12);
+}
+
+.table-card.is-scrolled::before,
+.table-card.is-scrollable:not(.is-scrolled-end)::after {
+  opacity: 1;
+}
+
+table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  color: var(--ui-ink);
+  background: var(--ui-paper);
+}
+
+.wide-table {
+  min-width: 1050px;
+}
+
+caption {
+  padding: 16px 18px;
+  color: var(--ui-ink);
+  background: var(--ui-page-raised);
+  font-weight: 850;
+  text-align: left;
+}
+
+th,
+td {
+  padding: 15px 17px;
+  border-bottom: 1px solid var(--ui-line);
+  text-align: left;
+  vertical-align: middle;
+}
+
+th {
+  color: rgba(255, 255, 255, 0.82);
+  background: var(--ui-ink-soft);
+  font-size: 0.74rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+th:first-child {
+  padding-left: 20px;
+}
+
+th:last-child {
+  padding-right: 20px;
+}
+
+.table-card.is-sticky-header th {
+  position: sticky;
+  z-index: 2;
+  top: 0;
+}
+
+tbody tr {
+  transition: background var(--ui-transition-fast), box-shadow var(--ui-transition-fast);
+}
+
+tbody tr:hover,
+tbody tr:focus-within {
+  background: #f8faf8;
+  box-shadow: inset 4px 0 0 var(--ui-green);
+}
+
+tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+td a:not(.btn) {
+  color: var(--ui-green-dark);
+  font-weight: 750;
+}
+
+td .muted {
+  display: block;
+  margin-top: 3px;
+}
+
+td.actions,
+.table-actions {
+  white-space: nowrap;
+}
+
+td.actions .btn,
+.table-actions .btn {
+  min-height: 36px;
+  padding: 7px 13px;
+  color: var(--ui-ink);
+  border-color: var(--ui-line);
+  background: #edf0ed;
+  box-shadow: none;
+  font-size: 0.84rem;
+}
+
+td.actions .btn:hover,
+.table-actions .btn:hover {
+  color: var(--ui-paper);
+  border-color: var(--ui-green-dark);
+  background: var(--ui-green-dark);
+}
+
+.table-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px;
+  border-radius: var(--ui-radius-pill);
+  color: var(--ui-ink-soft);
+  background: #e7ebe7;
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.table-status.success,
+.table-status.live,
+.table-status.upcoming {
+  color: var(--ui-green-dark);
+  background: var(--ui-green-soft);
+}
+
+.table-status.warning,
+.table-status.draft {
+  color: var(--ui-warning);
+  background: var(--ui-warning-soft);
+}
+
+.table-status.danger {
+  color: var(--ui-danger-dark);
+  background: var(--ui-danger-soft);
+}
+
+.pre-wrap {
+  white-space: pre-wrap;
+}
+
+td code {
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .table-card {
+    border-radius: 18px;
+  }
+
+  th,
+  td {
+    padding: 12px 13px;
+  }
+
+  /* Opt-in stacked cards preserve default horizontal tables until a page is
+     reviewed and marked safe for label-driven responsive presentation. */
+  table[data-responsive-table].is-responsive-ready thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+
+  table[data-responsive-table].is-responsive-ready,
+  table[data-responsive-table].is-responsive-ready tbody,
+  table[data-responsive-table].is-responsive-ready tr,
+  table[data-responsive-table].is-responsive-ready td {
+    display: block;
+    width: 100%;
+  }
+
+  table[data-responsive-table].is-responsive-ready tbody tr {
+    padding: 9px 0;
+    border-bottom: 1px solid var(--ui-line);
+  }
+
+  table[data-responsive-table].is-responsive-ready tbody tr:last-child {
+    border-bottom: 0;
+  }
+
+  table[data-responsive-table].is-responsive-ready td {
+    display: grid;
+    grid-template-columns: minmax(105px, 0.8fr) minmax(0, 1.3fr);
+    gap: 14px;
+    border: 0;
+  }
+
+  table[data-responsive-table].is-responsive-ready td::before {
+    content: attr(data-label);
+    color: var(--ui-muted);
+    font-size: 0.72rem;
+    font-weight: 900;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  table[data-responsive-table].is-responsive-ready td.actions,
+  table[data-responsive-table].is-responsive-ready td.table-actions {
+    white-space: normal;
+  }
+}
