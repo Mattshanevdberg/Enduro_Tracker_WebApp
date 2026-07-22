@@ -41,7 +41,7 @@ DASHBOARD_TAB_PRESENTATION = {
         "message": "Find your next race, prepare your equipment and secure your tracker before race day.",
         "heading": "Upcoming races",
         "subheading": "Browse the next scheduled enduro and motocross events.",
-        "hero_image": "images/dashboard/heroes/upcoming.svg",
+        "hero_image": "images/dashboard/heroes/upcoming.webp",
     },
     "live": {
         "label": "Live Races",
@@ -50,7 +50,7 @@ DASHBOARD_TAB_PRESENTATION = {
         "message": "Follow rider movement, timing and race progress as the event unfolds.",
         "heading": "Live now",
         "subheading": "Select a race to open its live tracking page.",
-        "hero_image": "images/dashboard/heroes/live.svg",
+        "hero_image": "images/dashboard/heroes/live.webp",
     },
     "past": {
         "label": "Past Races",
@@ -59,7 +59,7 @@ DASHBOARD_TAB_PRESENTATION = {
         "message": "Review completed events, compare results and explore the routes riders completed.",
         "heading": "Past races",
         "subheading": "Open an event to view its race page or select Results directly.",
-        "hero_image": "images/dashboard/heroes/past.svg",
+        "hero_image": "images/dashboard/heroes/past.webp",
     },
     "riders": {
         "label": "Riders",
@@ -68,7 +68,7 @@ DASHBOARD_TAB_PRESENTATION = {
         "message": "Explore every rider profile, bike, team and biography.",
         "heading": "Rider profiles",
         "subheading": "Select a rider to view their complete public profile.",
-        "hero_image": "images/dashboard/heroes/riders.svg",
+        "hero_image": "images/dashboard/heroes/riders.webp",
     },
 }
 

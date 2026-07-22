@@ -196,6 +196,8 @@ class HomeLayerTestCase(unittest.TestCase):
         self.assertIn(b"Dashboard Rider", response.data)
         self.assertIn(b"/rider/1", response.data)
         self.assertIn(b"dashboard-panel-upcoming", response.data)
+        self.assertIn(b"images/dashboard/heroes/riders.webp", response.data)
+        self.assertNotIn(b"images/dashboard/heroes/riders.svg", response.data)
 
     def test_robots_txt_returns_same_protected_path_guidance_for_prod_and_dev(self):
         """Expose identical crawler exclusions through production and dev hosts."""

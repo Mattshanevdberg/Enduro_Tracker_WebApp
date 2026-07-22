@@ -1928,10 +1928,10 @@ src/static/js/
 ```text
 src/static/images/
   brand/logo.svg
-  dashboard/heroes/upcoming.svg
-  dashboard/heroes/live.svg
-  dashboard/heroes/past.svg
-  dashboard/heroes/riders.svg
+  dashboard/heroes/upcoming.webp
+  dashboard/heroes/live.webp
+  dashboard/heroes/past.webp
+  dashboard/heroes/riders.webp
   icons/login-rider.svg
   icons/signup-rider.svg
   icons/profile.svg
@@ -1940,7 +1940,7 @@ src/static/images/
   races/default-race-logo.svg
   riders/default-profile.svg
 ```
-- Hero/brand replacement: replace the fixed files above while retaining their filenames, or update `DASHBOARD_TAB_PRESENTATION` in `src/web/home.py` when a new filename is deliberate.
+- Hero/brand replacement: dashboard hero artwork uses WebP for efficient photographic imagery. Replace the four fixed `.webp` files above while retaining their filenames, or update `DASHBOARD_TAB_PRESENTATION` in `src/web/home.py` when a new filename is deliberate. The admin dashboard reuses `live.webp` as its background artwork.
 - Race images: add a file beneath `src/static/images/races/` and enter only its basename in Race Logo/Image Filename on the race edit page.
 - Rider default: `src/static/images/riders/default-profile.svg` remains the committed fallback when a Rider has no uploaded image.
 - Rider uploads: authenticated Rider owners and administrators submit JPEG, PNG, or WebP through the rider form. The application creates a generated WebP key and writes the processed image beneath the `profile-images` volume mounted at `/var/lib/enduro-tracker/profile-images`.

@@ -17,7 +17,7 @@ body.admin-dashboard-page {
   color: #ffffff;
   background:
     linear-gradient(90deg, rgba(7, 10, 7, 0.94), rgba(7, 10, 7, 0.5)),
-    url("../images/dashboard/heroes/live.svg") center 45% / cover;
+    url("../images/dashboard/heroes/live.webp") center 45% / cover;
   border-bottom: 4px solid #101310;
 }
 
