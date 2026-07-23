@@ -267,20 +267,29 @@ input[type="file"]::file-selector-button {
   border-top: 1px solid var(--ui-line);
 }
 
+.image-upload-control,
 .profile-image-control {
   display: grid;
   gap: 12px;
   justify-items: start;
 }
 
+.image-upload-preview,
 .profile-image-preview {
-  width: 112px;
+  width: 120px;
   aspect-ratio: 1;
   border: 4px solid var(--ui-paper);
-  border-radius: 50%;
+  border-radius: 18px;
   object-fit: cover;
   background: #e7ebe7;
   box-shadow: 0 0 0 1px var(--ui-line), var(--ui-shadow-sm);
+}
+
+.file-name-output {
+  min-height: 1.3em;
+  margin: 0;
+  color: var(--ui-muted);
+  font-size: 0.86rem;
 }
 
 .is-busy {
@@ -324,5 +333,15 @@ input[type="file"]::file-selector-button {
   .form-grid > .actions .btn,
   .filter-grid .actions .btn {
     width: 100%;
+  }
+
+  /*
+  Migrated rider/image forms use the same 88px rounded artwork proportion as
+  the compact mobile profile and event lists.
+  */
+  .image-upload-preview,
+  .profile-image-preview {
+    width: var(--ui-compact-media-size);
+    border-radius: 12px;
   }
 }

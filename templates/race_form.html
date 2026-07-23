@@ -26,38 +26,48 @@
 
   <!-- Left: Race fields -->
   <div class="race-panel">
+    {% if message %}
+      <p class="msg {{ 'ok' if success else 'err' }}" role="{{ 'status' if success else 'alert' }}">{{ message }}</p>
+    {% endif %}
+
+    {% set submitted = race_form_values or {} %}
     <form method="post" action="{{ url_for('races.save_race') }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
       {% if race %}<input type="hidden" name="race_id" value="{{ race.id }}"/>{% endif %}
 
       <label for="name">Race Name *</label>
-      <input id="name" name="name" required value="{{ race.name if race else '' }}"/>
+      <input id="name" name="name" required value="{{ submitted.get('name', race.name if race else '') }}"/>
 
       <label for="website">Event Website</label>
-      <input id="website" name="website" placeholder="https://..." value="{{ race.website if race else '' }}"/>
+      <input id="website" name="website" placeholder="https://..." value="{{ submitted.get('website', (race.website or '') if race else '') }}"/>
 
       <label for="location">Location</label>
-      <input id="location" name="location" placeholder="Town, Province" value="{{ race.location if race else '' }}"/>
+      <input id="location" name="location" placeholder="Town, Province" value="{{ submitted.get('location', (race.location or '') if race else '') }}"/>
 
       <label for="logo_image_filename">Race Logo/Image Filename</label>
       <input
         id="logo_image_filename"
         name="logo_image_filename"
         placeholder="wild-coast-enduro.webp"
-        value="{{ race.logo_image_filename if race else '' }}"
+        value="{{ submitted.get('logo_image_filename', (race.logo_image_filename or '') if race else '') }}"
+        aria-describedby="logo_image_filename_help{{ ' logo_image_filename_error' if image_error else '' }}"
+        {% if image_error %}aria-invalid="true"{% endif %}
       />
-      <p class="muted">Add the file to <code>src/static/images/races/</code> and enter its filename only.</p>
+      <p id="logo_image_filename_help" class="muted">Add the file to <code>src/static/images/races/</code> and enter its filename only. Leave blank to use the default image.</p>
+      {% if image_error %}
+        <p id="logo_image_filename_error" class="msg err race-field-error" role="alert">{{ image_error }}</p>
+      {% endif %}
 
       <div class="row">
         <div class="race-field">
           <label for="start_date">Start Date</label>
           <input id="start_date" name="start_date" type="date"
-                 value="{{ (race.starts_at.date() if race and race.starts_at else '') }}"/>
+                 value="{{ submitted.get('start_date', race.starts_at.date() if race and race.starts_at else '') }}"/>
         </div>
         <div class="race-field">
           <label for="start_time">Start Time</label>
           <input id="start_time" name="start_time" type="time"
-                 value="{{ (race.starts_at.strftime('%H:%M') if race and race.starts_at else '') }}"/>
+                 value="{{ submitted.get('start_time', race.starts_at.strftime('%H:%M') if race and race.starts_at else '') }}"/>
         </div>
       </div>
 
@@ -65,24 +75,24 @@
         <div class="race-field">
           <label for="end_date">End Date</label>
           <input id="end_date" name="end_date" type="date"
-                 value="{{ (race.ends_at.date() if race and race.ends_at else '') }}"/>
+                 value="{{ submitted.get('end_date', race.ends_at.date() if race and race.ends_at else '') }}"/>
         </div>
         <div class="race-field">
           <label for="end_time">End Time</label>
           <input id="end_time" name="end_time" type="time"
-                 value="{{ (race.ends_at.strftime('%H:%M') if race and race.ends_at else '') }}"/>
+                 value="{{ submitted.get('end_time', race.ends_at.strftime('%H:%M') if race and race.ends_at else '') }}"/>
         </div>
       </div>
 
       <label for="description">Description</label>
-      <textarea id="description" name="description" rows="4">{{ race.description if race else '' }}</textarea>
+      <textarea id="description" name="description" rows="4">{{ submitted.get('description', (race.description or '') if race else '') }}</textarea>
 
       <div class="row">
         <div class="race-field">
           <label for="status">Race Status</label>
           <select id="status" name="status">
             {% for status in ('draft', 'upcoming', 'live', 'completed') %}
-              <option value="{{ status }}" {{ 'selected' if (race.status if race else 'draft') == status else '' }}>{{ status | title }}</option>
+              <option value="{{ status }}" {{ 'selected' if submitted.get('status', race.status if race else 'draft') == status else '' }}>{{ status | title }}</option>
             {% endfor %}
           </select>
         </div>

@@ -95,7 +95,7 @@ from src.services.races import (
     RaceValidationError,
     load_post_race_data,
     load_race_edit_data,
-    save_race as save_race_record,
+    save_race_with_image_feedback,
 )
 from src.utils.gpx import build_geojson_for_device
 from src.utils.races import (
@@ -106,6 +106,68 @@ from src.utils.races import (
 from src.utils.race_entry import normalize_race_entry_form
 
 bp_races = Blueprint("races", __name__, url_prefix="/races")
+
+
+def _empty_race_form_page_data() -> dict:
+    """
+    Build the empty management payload used by the new-race form.
+
+    Output:
+      Template context matching load_race_edit_data without a persisted Race.
+
+    Notes:
+      Keeping one web-layer source for the blank context lets validation errors
+      redisplay the same form structure without adding placeholder domain logic
+      to the race service.
+    """
+    return {
+        "race": None,
+        "routes": [],
+        "category_records": [],
+        "categories": [],
+        "selected_category": None,
+        "route": None,
+        "riders": [],
+        "devices": [],
+        "race_riders": [],
+        "last_device_by_rider": {},
+    }
+
+
+def _render_race_form(
+    page_data: dict,
+    *,
+    form_values=None,
+    message: str | None = None,
+    success: bool | None = None,
+    image_error: str | None = None,
+    status: int = 200,
+):
+    """
+    Render the race form with optional submitted values and inline feedback.
+
+    Input Args:
+      page_data: race/route/category/assignment template context.
+      form_values: optional submitted field mapping to preserve after feedback.
+      message: optional page-level save or validation message.
+      success: whether the page-level message represents a successful save.
+      image_error: optional image-field-specific validation message.
+      status: HTTP status code for the rendered response.
+
+    Output:
+      Rendered race_form.html response and requested status code.
+    """
+    return (
+        render_template(
+            "race_form.html",
+            **page_data,
+            race_form_values=form_values,
+            message=message,
+            success=success,
+            image_error=image_error,
+        ),
+        status,
+    )
 
 
 def _post_race_map_bootstrap_config(race_id: int) -> dict:
@@ -143,21 +205,7 @@ def new_race():
     Output:
       Rendered race_form.html response with empty route/assignment state.
     """
-    return render_template(
-        "race_form.html",
-        race=None,
-        routes=[],
-        category_records=[],
-        categories=[],
-        selected_category=None,
-        route=None,
-        riders=[],
-        devices=[],
-        race_riders=[],
-        last_device_by_rider={},
-        message=None,
-        success=None,
-    )
+    return _render_race_form(_empty_race_form_page_data())
 
 
 @bp_races.route("/<int:race_id>/post", methods=["GET"])
@@ -594,22 +642,56 @@ def confirm_finish_time(race_id: int, race_rider_id: int):
 @admin_required
 def save_race():
     """
-    Create or update a race from the admin form.
+    Create or update a race and redisplay actionable inline validation.
 
     Output:
-      Redirect to the race edit page or mapped 400/404/500 response.
+      Redirect after a fully valid save, the populated form after a partial
+      image-field save, or a mapped inline 400/404/500 response.
     """
     form = normalize_race_form(request.form)
     session = SessionLocal()
     try:
         try:
-            race = save_race_record(session, form)
+            result = save_race_with_image_feedback(session, form)
         except RaceValidationError as error:
-            return Response(str(error), status=400)
+            session.rollback()
+            race_id = form.get("race_id")
+            if race_id is None:
+                page_data = _empty_race_form_page_data()
+            else:
+                try:
+                    page_data = load_race_edit_data(session, int(race_id), None)
+                except (TypeError, ValueError, RaceNotFoundError):
+                    return Response("Race not found.", status=404)
+            return _render_race_form(
+                page_data,
+                form_values=request.form,
+                message=str(error),
+                success=False,
+                status=400,
+            )
         except RaceNotFoundError:
             return Response("Race not found.", status=404)
         session.commit()
-        return redirect(url_for("races.edit_race", race_id=race.id))
+
+        if result.image_error:
+            # The optional image was rejected, but the service has committed all
+            # other valid fields and retained the previous durable image value.
+            # Redisplay the rejected text so the administrator can correct only
+            # that field without re-entering the race metadata.
+            page_data = load_race_edit_data(session, result.race.id, None)
+            return _render_race_form(
+                page_data,
+                form_values=request.form,
+                message=(
+                    "Race changes were saved, but the image filename was not "
+                    "changed. Correct the highlighted image field and save again."
+                ),
+                success=True,
+                image_error=result.image_error,
+            )
+
+        return redirect(url_for("races.edit_race", race_id=result.race.id))
     except SQLAlchemyError as error:
         session.rollback()
         return Response(f"DB error: {error}", status=500)
@@ -645,12 +727,7 @@ def edit_race(race_id: int):
             return Response("Race not found.", status=404)
         except RaceValidationError as error:
             return Response(str(error), status=400)
-        return render_template(
-            "race_form.html",
-            **page_data,
-            message=None,
-            success=None,
-        )
+        return _render_race_form(page_data)
     finally:
         session.close()
 

@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <!-- A clear title that explains what the website provides. -->
     <title>Kooksnylive | Live Enduro and Motocross Race Tracking</title>
-      <!-- Google may use this description beneath the search result title. -->
+    <!-- Google may use this description beneath the search result title. -->
     <meta
       name="description"
       content="Follow live enduro and motocross races, rider locations, race routes, results and rider profiles with Kooksnylive."
@@ -12,20 +12,52 @@
     <!-- Tell search engines that the main domain is the preferred address. -->
     <link rel="canonical" href="https://kooksnylive.co.za/" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/base_new.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/landing.css') }}" />
   </head>
-  <body>
-    <main class="page-shell">
-      <header class="page-header">
-        <h1>Kooksnylive</h1>
-        <p>Live race tracking, rider profiles, and official race information.</p>
+  <body class="landing-page">
+    <main class="landing-shell">
+      <header class="landing-brand">
+        <!-- The heading supplies the brand name, so the adjacent logo is decorative. -->
+        <img
+          class="landing-logo"
+          src="{{ url_for('static', filename='images/brand/logo.svg') }}"
+          alt=""
+        />
+        <h1 class="landing-name">Kooksnylive</h1>
+        <p class="landing-description">
+          <span>Live Realtime Hard Enduro Rider Tracking</span>
+          <span>Bringing Enduro to the Fans</span>
+        </p>
       </header>
 
-      <div class="stack">
-        <a class="btn" href="{{ url_for('home.dashboard') }}">View Races</a>
-        <a class="btn" href="{{ url_for('auth.signup') }}">Sign Up</a>
-        <a class="btn" href="{{ url_for('auth.login') }}">Login</a>
-      </div>
+      <!-- These remain ordinary links so every primary action works without JavaScript. -->
+      <nav class="landing-actions" aria-label="Primary">
+        <a class="landing-action" href="{{ url_for('home.dashboard') }}">
+          <img
+            class="landing-action-image"
+            src="{{ url_for('static', filename='images/icons/view_races_white.svg') }}"
+            alt=""
+          />
+          <span class="landing-action-label">View Races</span>
+        </a>
+        <a class="landing-action" href="{{ url_for('auth.signup') }}">
+          <img
+            class="landing-action-image"
+            src="{{ url_for('static', filename='images/icons/signup-rider.svg') }}"
+            alt=""
+          />
+          <span class="landing-action-label">Sign Up</span>
+        </a>
+        <a class="landing-action" href="{{ url_for('auth.login') }}">
+          <img
+            class="landing-action-image"
+            src="{{ url_for('static', filename='images/icons/login-rider.svg') }}"
+            alt=""
+          />
+          <span class="landing-action-label">Login</span>
+        </a>
+      </nav>
     </main>
   </body>
 </html>

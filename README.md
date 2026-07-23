@@ -746,7 +746,7 @@ Module notes:
 - File: `media.py`
 
 ### normalize_static_image_filename / validate_static_image_filename
-- Description: trim optional developer-managed image basenames and reject directory paths, overlong names, or unsupported extensions.
+- Description: trim optional developer-managed image basenames, normalize the legacy/default literal `None` to an empty value, and reject directory paths, overlong names, or unsupported extensions.
 - Called from: race form normalization/validation.
 - Why this layer: Race artwork remains a developer-managed static asset, while Rider uploads use the separate profile-image pipeline below.
 
@@ -1117,6 +1117,11 @@ Module notes:
 - Called from: raised by `save_race`/page services and mapped by `web/races.py`.
 - Why this layer: they represent application outcomes without Flask response dependencies.
 
+### RaceSaveResult
+- Description: carries the staged Race plus optional rejected image-field text and validation feedback when the remaining valid race fields can still be saved.
+- Called from: returned by `save_race_with_image_feedback`.
+- Why this layer: it describes a partial application outcome without introducing Flask/template concerns into the service.
+
 ### get_race
 - Description: loads one Race by primary key.
 - Called from: race save and page-data services.
@@ -1129,8 +1134,13 @@ Module notes:
 
 ### save_race
 - Description: validates name, lifecycle, end-after-start ordering, and the static image basename, then stages race name/website/description/location/logo/start/end/status changes.
-- Called from: `save_race` in `web/races.py`.
+- Called from: race services and focused tests.
 - Why this layer: it coordinates validation and model mutation without Flask responses.
+
+### save_race_with_image_feedback
+- Description: saves all valid race metadata while retaining the existing/default image when the optional submitted image basename is invalid, then returns field-specific feedback for redisplay.
+- Called from: `save_race` in `web/races.py`.
+- Why this layer: deciding that optional artwork must not discard otherwise valid race changes is an application rule rather than an HTTP concern.
 
 ### load_post_race_data
 - Description: composes race, category, route GeoJSON, rider, and timing data for the post-race page.
@@ -1802,9 +1812,9 @@ src/static/css/
 - Purpose: allow the dashboard-derived visual language to replace the legacy shared interface one reviewed page at a time without changing unmigrated templates.
 - New files: `base_new.css`, `forms_new.css`, and `tables_new.css`. Existing `base.css`, `forms.css`, and `tables.css` remain unchanged and continue serving every current template.
 - Naming decision: the requested new table layer is named `tables_new.css`, rather than overwriting the existing `tables.css`, so the changeover remains genuinely parallel and cannot restyle old pages accidentally.
-- Design direction: uses the dashboard's near-black ink, neutral page/paper surfaces, Kooksny green, large rounded cards, pill actions, strong compact headings, soft shadows, and accessible focus/reduced-motion behavior.
-- Compatibility: retains established classes including `.page-shell`, `.page-header`, `.btn`, `.content-panel`, `.form-grid`, `.filter-grid`, `.table-card`, `.wide-table`, and `.actions`. `base_new.css` also supplies compatibility aliases for existing `--color-*` variables so reviewed page-specific styles can move gradually.
-- Current usage: no template loads a `_new` stylesheet yet. Creating the foundation must not change dashboard, admin, auth, race, rider, device, RFID, map, or placeholder rendering.
+- Design direction: uses the dashboard's near-black ink, neutral page/paper surfaces, Kooksny green, large rounded cards, pill/artwork actions, strong compact headings, native mobile disclosure navigation, flat mobile result rows, soft shadows, and accessible focus/reduced-motion behavior.
+- Compatibility: retains established classes including `.page-shell`, `.page-header`, `.btn`, `.content-panel`, `.form-grid`, `.filter-grid`, `.table-card`, `.wide-table`, and `.actions`. New opt-in patterns include `.art-action`, `.mobile-section-navigation`, `.image-upload-preview`, and `.compact-list`; `base_new.css` also supplies compatibility aliases for existing `--color-*` variables so reviewed page-specific styles can move gradually.
+- Current usage: `templates/landing.html` loads `base_new.css` followed by its isolated `landing.css`; `templates/login.html` loads `base_new.css`, `forms_new.css`, and its isolated `login.css` in that order. All other templates retain their reviewed legacy or page-scoped styles until migrated individually.
 - Per-page migration order: first review the page and its page-specific CSS/JS; then replace its legacy shared links with `base_new.css`, the needed `forms_new.css`/`tables_new.css`, and any reviewed page override; test desktop/mobile/accessibility; finally record that individual template as migrated.
 - Load order example for a future form/table page:
 ```html
@@ -1812,7 +1822,11 @@ src/static/css/
 <link rel="stylesheet" href="{{ url_for('static', filename='css/forms_new.css') }}" />
 <link rel="stylesheet" href="{{ url_for('static', filename='css/tables_new.css') }}" />
 ```
-- Table responsiveness: horizontal scrolling remains the safe default. A reviewed simple table can opt into labelled mobile cards with `data-responsive-table` and `components/tables_new.js`; complex colspan/rowspan tables should remain horizontally scrollable until deliberately redesigned.
+- Artwork actions: use `.art-action` with `.art-action-image` and `.art-action-label`; add `.compact-on-mobile` only after confirming the surrounding 42px action column remains usable and the text label may become visually hidden on mobile.
+- Mobile section navigation: use a native `<details class="mobile-section-navigation" data-ui-disclosure>` with a `.mobile-section-navigation-toggle`, `.mobile-section-navigation-menu`, and links marked `data-ui-disclosure-option`. The server-rendered links remain functional without JavaScript; `base_new.js` adds close-after-selection and Escape behavior. An in-place selector may add `data-ui-disclosure-restore-focus`, while ordinary navigation links retain their default focus/scroll behavior.
+- Image previews: a migrated image-upload form may pair `.image-upload-preview` with an input whose `data-image-preview-target` names the image id. `forms_new.js` updates only the local preview and revokes temporary object URLs; the server continues to validate and save the upload.
+- Compact lists: non-tabular event/profile collections use `.compact-list` and `.compact-list-row`, with `.compact-list-media`, `.compact-list-content`, `.compact-list-primary-link`, metadata/summary, and an optional `.compact-list-action`. The primary link stretches across the row while the action retains the higher stacking level supplied by `.art-action`.
+- Table responsiveness: horizontal scrolling remains the safe default. A reviewed simple table can opt into labelled mobile rows with `data-responsive-table` and `components/tables_new.js`; `data-responsive-table="compact"` selects the flatter separator-led variant. Complex colspan/rowspan tables should remain horizontally scrollable until deliberately redesigned.
 
 ### Current base.css usage
 - Purpose: Provide the lean shared static stylesheet for Flask-rendered operational/simple pages. The public dashboard is intentionally self-contained in `dashboard.css`; the admin dashboard loads base/table styles and its scoped page stylesheet.
@@ -1820,10 +1834,8 @@ src/static/css/
 - Writes: Browser presentation only; no application data is changed.
 - Styles: theme variables, page shell, page header, primary buttons, section titles, muted text, empty state, and mobile layout adjustments.
 - Called from:
-  - `templates/landing.html`: linked through `url_for('static', filename='css/base.css')`.
   - `templates/dashboard_admin.html`: linked through `url_for('static', filename='css/base.css')`.
   - `templates/placeholder.html`: linked through `url_for('static', filename='css/base.css')`.
-  - `templates/login.html`: linked through `url_for('static', filename='css/base.css')`.
   - `templates/signup.html`: linked through `url_for('static', filename='css/base.css')`.
   - `templates/forgot_password.html`: linked through `url_for('static', filename='css/base.css')`.
   - `templates/reset_password.html`: linked through `url_for('static', filename='css/base.css')`.
@@ -1837,8 +1849,10 @@ src/static/css/
 
 ### Dashboard and shared component files
 - Purpose: Provide reusable component stylesheets that are loaded after `base.css` by pages that need them.
-- Current state: legacy `base.css`, `forms.css`, `tables.css`, and `maps.css` remain unchanged and in active use; the new dashboard-derived foundation exists in parallel but has not been linked from a template. Dashboard-only work remains isolated in `dashboard.css`, `dashboard-admin.css`, and `rider-profile.css`.
-- `dashboard.css`: owns the two-pane viewport, shrinking hero, accessible tab/card presentation, two-by-two mobile tabs, responsive rows, and rider dialog shell.
+- Current state: legacy `base.css`, `forms.css`, `tables.css`, and `maps.css` remain unchanged for unmigrated pages. The landing page now uses `base_new.css` plus `landing.css`, and Login uses `base_new.css`, `forms_new.css`, plus `login.css`; neither needs a `_new` JavaScript component. The live dashboard remains self-contained in `dashboard.css`.
+- `landing.css`: owns the public landing page's plain-black viewport, upper-centred responsive logo/name lockup, visible two-line description, and three-column artwork navigation. The semantic links and text labels remain functional without JavaScript.
+- `login.css`: owns the black login shell, dashboard-style linked brand, centred white form card, dark-on-white icon treatment, four-column desktop actions, and two-by-two mobile actions.
+- `dashboard.css`: owns the two-pane viewport, shrinking hero, accessible desktop tabs/cards, mobile hero accordion, compact responsive rows, artwork actions, and rider dialog shell.
 - `dashboard-admin.css`: gives the protected operations dashboard matching brand/card typography while retaining its compact tool grid and wide race table.
 - `rider-profile.css`: styles the same read-only rider card on its canonical page and inside the dashboard dialog.
 - `forms.css`: contains reusable content panels, form grids, filter grids, field rows, inputs, checkboxes, file inputs, focus states, status messages, and form action layout.
@@ -1894,9 +1908,9 @@ src/static/js/
 ### Parallel `_new` JavaScript migration foundation
 - Purpose: mirror the CSS changeover so new shared behavior can be adopted per page without replacing scripts still used by legacy templates.
 - New files: `components/base_new.js`, `components/forms_new.js`, and `components/tables_new.js`; no current template loads them.
-- `base_new.js`: exposes `window.EnduroUI.ready`, `enhance`, `announce`, and `setBusy` for DOM readiness, progressive-enhancement markers, accessible live messages, and consistent busy states.
-- `forms_new.js`: preserves `window.EnduroForms.attachAutoSubmitSelects` for page-script compatibility and adds opt-in file-name output plus submit-once helpers. It uses only explicit `data-*` markers and initializes idempotently.
-- `tables_new.js`: exposes responsive label and horizontal-scroll-state helpers. It refuses mobile-card enhancement when body/header cell counts do not match, leaving complex tables in their complete server-rendered form.
+- `base_new.js`: exposes `window.EnduroUI.ready`, `enhance`, `announce`, `setBusy`, and `attachDisclosures` for DOM readiness, progressive-enhancement markers, accessible live messages, consistent busy states, and native disclosure close/focus behavior.
+- `forms_new.js`: preserves `window.EnduroForms.attachAutoSubmitSelects` for page-script compatibility and adds opt-in file-name output, local image preview, and submit-once helpers. It uses only explicit `data-*` markers, revokes replaced preview object URLs, and initializes idempotently.
+- `tables_new.js`: exposes responsive label and horizontal-scroll-state helpers. It recognizes `data-responsive-table="compact"` for the flat mobile mode and refuses responsive enhancement when body/header cell counts do not match, leaving complex tables in their complete server-rendered form.
 - Changeover rule: do not load a legacy component and its `_new` counterpart on the same page. When a behavior-heavy page is redesigned, create `pages/<page-name>_new.js`, preserve its old page script, and switch only the reviewed template to the new component/page chain.
 - Future migrated load order:
 ```html
@@ -1910,7 +1924,7 @@ src/static/js/
 ### Current JS usage
 - Purpose: Record the current incremental JavaScript migration state.
 - Current state: current templates still use only `src/static/js/components/forms.js`, `src/static/js/components/maps.js`, `src/static/js/pages/dashboard.js`, `src/static/js/pages/race-form.js`, `src/static/js/pages/race-entry.js`, and `src/static/js/pages/post-race.js`. The three `_new` shared components exist as an inactive migration foundation.
-- `pages/dashboard.js`: progressively enhances real server-rendered tab/profile links, synchronizes hero/tab/URL state, compacts the hero from the list pane's scroll position, implements keyboard tab navigation, and loads canonical rider pages into the native dialog. Navigation remains functional without JavaScript.
+- `pages/dashboard.js`: progressively enhances real server-rendered desktop tab/mobile disclosure/profile links, synchronizes hero/tab/URL state, closes the mobile accordion after selection, compacts the hero from the list pane's scroll position, implements keyboard navigation, and loads canonical rider pages into the native dialog. Navigation remains functional without JavaScript.
 - `components/forms.js`: contains shared `data-auto-submit` select handling used by the category controls in `templates/race_form.html` and `templates/post_race.html`.
 - `components/maps.js`: contains shared Leaflet map creation, selected-category route fetching, GeoJSON layer creation, map-bounds fitting, basemap switching, and Esri tile-usage reporting helpers used by the race form and post-race pages.
 - `components/maps.js`: retains the OpenStreetMap base-layer helper and adds Esri satellite attach/remove helpers. The race form uses the existing OSM default. The post-race page creates an empty map, fits its selected route or rider track first, then attaches the backend-approved basemap so it requests only tiles near the visible course. After fitting the selected route it limits panning and minimum zoom to bounds padded by 25% on every side. It will use the retained OSM layer whenever `/api/map/config-status` does not allow satellite imagery. When Esri is attached, `createEsriTileUsageReporter` counts newly observed Esri tile resources and posts batched `tiles_delta` values to `/api/map/tile-usage`.
@@ -2014,6 +2028,12 @@ src/static/images/
 - Parent directory: `src/web`
 - File: `races.py`
 - Layer responsibility: all routes below parse Flask inputs, enforce access decorators, call the focused race services, own commit/rollback, and map outcomes to templates, redirects, JSON, or HTTP errors.
+
+### _empty_race_form_page_data / _render_race_form
+- Purpose: Build the blank race-management context and consistently render submitted values plus page/field feedback.
+- Reads/Writes: No durable data.
+- Called from: `new_race`, `save_race`, and `edit_race`.
+- Notes: these remain web-layer helpers because they shape template response context rather than applying race domain rules.
 
 ### _post_race_map_bootstrap_config
 - Purpose: Build safe browser bootstrap configuration for the post-race map.
@@ -2132,9 +2152,9 @@ src/static/images/
 - Purpose: Create or update a `Race`.
 - Reads: `Race` (when updating).
 - Writes: `Race` (insert/update).
-- Behavior: parses date/time inputs and converts them to epoch seconds using the configured timezone for naive input.
+- Behavior: parses date/time inputs and converts them to epoch seconds using the configured timezone for naive input. A blank or literal `None` image value selects the default artwork. A genuinely invalid optional image keeps the previous/default image, saves the other valid race fields, and redisplays the form with a success notice plus an inline image error; blocking validation failures redisplay submitted values with HTTP 400.
 - Access: active admin account through `admin_required`.
-- Redirects: to edit page for the saved race.
+- Redirects: to the edit page after a fully valid save; partial image-field saves render the populated edit page directly.
 - Called from:
   - `templates/race_form.html`: "Save Changes" button.
 
@@ -2679,10 +2699,10 @@ docker compose -p enduro-dev --env-file .env.dev run --rm -e TEST_EMAIL_TO=you@e
 
 ### landing.html
 - General: Public landing page.
-- Displays: Kooksnylive entry point and high-level public actions.
+- Displays: upper-centred Kooksnylive logo/name lockup with independently enlarged artwork offset 7.5 mm left on desktop and 5 mm left on mobile while the heading remains unchanged and centred, the two-line "Live Realtime Hard Enduro Rider Tracking" / "Bringing Enduro to the Fans" description, and high-level public actions on a plain-black viewport.
 - Search metadata: uses a descriptive live enduro/motocross tracking title and description, and declares `https://kooksnylive.co.za/` as the canonical landing-page URL.
-- Styles: Uses `src/static/css/base.css` for the lean shared base theme.
-- UI actions: "View Races", "Sign Up", "Login".
+- Styles: Loads `src/static/css/base_new.css` first for the dashboard-derived next-generation shared theme, then `src/static/css/landing.css` for the isolated landing composition; no legacy shared CSS or JavaScript is loaded.
+- UI actions: icon-led links with visible labels for "View Races", "Sign Up", and "Login", presented as one responsive horizontal row; View Races uses the white artwork variant for the black landing background.
 - Linked pages (buttons):
   - "View Races" → `/dashboard` (public race dashboard).
   - "Sign Up" → `/signup` (rider signup).
@@ -2692,12 +2712,23 @@ docker compose -p enduro-dev --env-file .env.dev run --rm -e TEST_EMAIL_TO=you@e
 - Routes called: `/`, `/dashboard`, `/signup`, `/login`.
 - Embedded scripts: none.
 
+### login.html
+- General: Public rider/administrator login form.
+- Displays: a dashboard-style linked Kooksnylive brand on a black page, a centred white card containing the Login heading/description, username/email identifier, password, authentication feedback, and icon-led account/public navigation.
+- Styles: Loads `src/static/css/base_new.css`, `src/static/css/forms_new.css`, and the isolated `src/static/css/login.css` in that order; no legacy shared CSS or JavaScript is loaded.
+- UI actions: icon-led "Login", "Forgot Password", "Sign Up", and "View Races" controls in one desktop row and a two-by-two mobile grid.
+- Pulls: `form`, `message`, and `success`.
+- Pushes: CSRF-protected username/email and password POST to `/login`.
+- Routes called: `/login`, `/forgot-password`, `/signup`, and `/dashboard`.
+- Embedded scripts: none; the form and navigation remain fully functional without JavaScript.
+- Manual verification: confirm the black desktop/mobile shell, top-left home link, centred white card, one-row desktop actions, two-by-two mobile actions, visible keyboard focus, generic invalid-credential feedback, retained identifier after failure, successful rider/admin redirects, and working password-reset/signup/View Races links.
+
 ### dashboard.html
 - General: Public, server-rendered race/rider dashboard based on the supplied hero-and-list mockup.
-- Displays: separate upcoming, live, past/completed, and all-riders tab panels; race location/logo/date/status; rider portrait/team/bike/bio; responsive account controls; and a compacting hero above the independently scrolling list.
+- Displays: separate upcoming, live, past/completed, and all-riders panels; race location/logo/date range/status; rider portrait/team/bike/short biography; enlarged responsive account artwork; and a compacting hero above the independently scrolling list.
 - Search metadata: declares the base `/dashboard` canonical URL so `?tab=` variants do not compete in the index.
-- Styles: Uses page-scoped `src/static/css/dashboard.css` plus the reusable profile card in `src/static/css/rider-profile.css`; shared `base.css` and table styles are deliberately not applied.
-- UI actions: tab navigation, race-card links, "Get Device", "Results", rider popup links, login/signup, role-aware profile/admin navigation, and CSRF-protected logout.
+- Styles: Uses page-scoped `src/static/css/dashboard.css` plus the reusable profile card in `src/static/css/rider-profile.css`; desktop retains the full cards/tablist while widths up to 720px use a flat separated list and native hero accordion. Shared `base.css` and table styles are deliberately not applied.
+- UI actions: desktop tab navigation, mobile accordion navigation, race-row links, artwork-led "Get Device" and "Results" controls, rider popup links, login/signup, role-aware profile/admin navigation, and CSRF-protected logout.
 - Linked pages (buttons):
   - Brand → `/`.
   - "Login" → `/login`.
@@ -2709,8 +2740,8 @@ docker compose -p enduro-dev --env-file .env.dev run --rm -e TEST_EMAIL_TO=you@e
 - Pulls: `race_sections`, `riders`, `tab_presentation`, and `selected_tab`.
 - Pushes: only the authenticated logout POST; tabs use GET `?tab=` URLs and JavaScript history enhancement.
 - Routes called: `/dashboard?tab=...`, `/`, `/login`, `/signup`, `/logout`, `/rider/<id>`, `/races/<id>/post`, `/races/<id>/enter`, `/races/<id>/results`.
-- Script: `src/static/js/pages/dashboard.js` enhances tabs, hero compaction, keyboard navigation, URL state, and rider dialogs while retaining functional real links.
-- Notes: draft races are never rendered publicly; no admin mutation controls are shown here.
+- Script: `src/static/js/pages/dashboard.js` enhances tabs, synchronizes and closes the mobile accordion, manages hero compaction/keyboard navigation/URL state, and loads rider dialogs while retaining functional real links.
+- Notes: draft races are never rendered publicly; no admin mutation controls are shown here. Mobile suppresses the duplicate panel heading/description, keeps the count above the list, removes unused vertical hero space in normal/compact accordion states, and uses `get_devices.svg`/`results.svg` as compact independently labelled actions.
 
 ### dashboard_admin.html
 - General: Dense protected admin operational dashboard in the public dashboard's brand language.
@@ -2742,13 +2773,14 @@ docker compose -p enduro-dev --env-file .env.dev run --rm -e TEST_EMAIL_TO=you@e
 1. Apply `alembic upgrade head`, sign in as an administrator, and confirm `/dashboard-admin` shows every race with a Draft, Upcoming, Live, or Completed badge.
 2. Edit one race and save its location, start/end date-time, lifecycle status, and a basename that exists beneath `src/static/images/races/`; confirm the values return on the edit form.
 3. Set representative races to each lifecycle value. Confirm `/dashboard` places Upcoming, Live, and Completed under the correct tabs and never displays Draft.
-4. Confirm upcoming cards open the existing authenticated Get Device/entry flow, live cards show a green LIVE marker, completed cards expose Results, and every card title opens its public race page.
+4. Confirm upcoming cards show `get_devices.svg` and open the existing authenticated entry flow; confirm live cards show a green LIVE marker, completed cards show `results.svg`, and every card title opens its public race page without intercepting either independent artwork action.
 5. Scroll the lower list on desktop and confirm only that pane scrolls while the hero compacts to retain the logo/account controls, selected heading, and tabs; return to the top and confirm the full copy expands again.
-6. At approximately 390px width, confirm the hero is shorter than the original mockup, all four tabs are visible in a two-by-two grid, and race/rider rows stack without horizontal scrolling.
-7. Open the Riders tab and confirm every Rider appears. Select both the rider name and View Rider button; each should open the read-only dialog, while opening the link without JavaScript should render `/rider/<id>` as a standalone page.
-8. Sign in as a linked rider and confirm My Profile opens their dialog and exposes Edit Profile. Confirm another rider's public profile has no rider-owned edit access. An unlinked admin should see Admin Dashboard rather than a broken profile link.
-9. As a linked rider, upload a JPEG/PNG/WebP profile picture from the edit form and confirm it appears in the form preview, dashboard list, modal, and standalone profile. Replace it and confirm the new image appears; remove it and confirm the committed default artwork returns. Repeat as an administrator for another Rider, and confirm a rider cannot edit another profile.
-10. Verify `/rider` redirects to `/dashboard?tab=riders`, the dashboard/profile canonical links use `kooksnylive.co.za`, draft race pages emit `noindex,nofollow`, `/dashboard-admin` emits `noindex,nofollow`, and `/sitemap.xml` lists current public rider details.
+6. At approximately 390px width, confirm the normal and compact-on-scroll heroes contain no large empty gap between the account controls and hero copy. Confirm the hamburger remains beside the current heading, the accordion exposes all four sections without overlap, and each option closes the menu and updates the hero/URL/list.
+7. On mobile, confirm the duplicate panel heading/description is absent; the item count remains above flat separated rows; race rows show an 88px image, lifecycle pill, name, date range, and location; Get Device and Results retain small labels beneath their right-side artwork without increasing row height; rider rows show an 88px portrait, team pill, name, bike, and at most two biography lines; and no row introduces horizontal scrolling.
+8. Open the Riders section and confirm every Rider appears. On mobile, selecting anywhere on a rider row should open the read-only dialog. On desktop, both the rider name and View Rider button should open it; opening the underlying link without JavaScript should still render `/rider/<id>` as a standalone page.
+9. Sign in as a linked rider and confirm My Profile opens their dialog and exposes Edit Profile. Confirm another rider's public profile has no rider-owned edit access. An unlinked admin should see Admin Dashboard rather than a broken profile link.
+10. As a linked rider, upload a JPEG/PNG/WebP profile picture from the edit form and confirm it appears in the form preview, dashboard list, modal, and standalone profile. Replace it and confirm the new image appears; remove it and confirm the committed default artwork returns. Repeat as an administrator for another Rider, and confirm a rider cannot edit another profile.
+11. Verify `/rider` redirects to `/dashboard?tab=riders`, the dashboard/profile canonical links use `kooksnylive.co.za`, draft race pages emit `noindex,nofollow`, `/dashboard-admin` emits `noindex,nofollow`, and `/sitemap.xml` lists current public rider details.
 
 ### placeholder.html
 - General: Shared placeholder page for planned UX routes.
@@ -2823,13 +2855,13 @@ docker compose -p enduro-dev --env-file .env.dev run --rm -e TEST_EMAIL_TO=you@e
 
 ### race_form.html
 - General: Create/edit a race, independently create/rename/delete-unused named routes, create/rename/reorder/archive/reassign/delete-unused categories, upload shared-route GPX, and manage category riders using stable `category_id` values.
-- Displays: Race name, website, location, static logo/image filename, start/end time, description, explicit lifecycle status, route/category administration, active category selector, selected route map preview, and rider/device tables.
+- Displays: Race name, website, location, static logo/image filename, start/end time, description, explicit lifecycle status, inline save/validation feedback, route/category administration, active category selector, selected route map preview, and rider/device tables.
 - Styles: Uses `src/static/css/base.css` for the lean shared base theme, `src/static/css/forms.css` for form controls and row actions, `src/static/css/tables.css` for the rider assignment table, `src/static/css/maps.css` for the Leaflet route preview container, and `src/static/css/race-form.css` for race-form-only layout.
 - UI actions: "Save Changes", "Add Route", "Rename Route", guarded "Delete if unused", "Add Category", "Save Category", category dropdown, GPX upload/removal, and rider entry management.
 - Linked pages (buttons/links):
   - "Back" → `/dashboard-admin`.
   - "Open Website" → external race website URL (if set).
-- Pulls: `race`, `routes`, `category_records`, active `categories`, `selected_category`, `route`, `geojson`, `riders`, `devices`, `race_riders`, `last_device_by_rider`.
+- Pulls: `race`, optional submitted `race_form_values`, `message`, `success`, `image_error`, `routes`, `category_records`, active `categories`, `selected_category`, `route`, `geojson`, `riders`, `devices`, `race_riders`, and `last_device_by_rider`.
 - Pushes: POST save race, create/rename routes, create/edit categories, upload/remove GPX, and add/edit/remove riders.
 - Routes called: `/races/save`, `/races/<id>/edit?category_id=...`, `/races/<id>/routes/add`, `/races/<id>/routes/<route_id>/rename`, `/races/<id>/routes/<route_id>/delete`, `/races/<id>/categories/add`, `/races/<id>/categories/<category_id>/edit`, `/races/<id>/categories/<category_id>/delete`, plus GPX and rider management routes carrying `category_id`.
 - Embedded scripts:
@@ -2837,6 +2869,7 @@ docker compose -p enduro-dev --env-file .env.dev run --rm -e TEST_EMAIL_TO=you@e
   - GPX upload validation: native required-field validation blocks an empty file submission with a browser popup; JavaScript supplies the GPX-specific popup text.
   - Shared form/map scripts: auto-submit the category selector and fetch/render the route GeoJSON through `components/forms.js` and `components/maps.js`.
   - Rider add helper: auto-fills device based on `last_device_by_rider` mapping.
+- Manual verification: edit a race whose image is blank/default and confirm it saves without an extension error. Then submit an unsupported image extension and confirm all other valid race changes persist, the prior image remains unchanged, and the rejected filename appears beside an inline error for correction.
 
 ### race_entry.html
 - General: Staged rider/admin race-entry page backed by automatic device assignment; self-entry and admin-on-behalf entry use separate authorization boundaries.

@@ -35,3 +35,39 @@ The following files are intentional structural exceptions and should not be rest
 - `src/api/ingest.py`
 - `src/auth/routes.py`
 - `src/main.py`
+
+## Frontend Layering and Template Separation Rule
+
+When creating or modifying frontend functionality, preserve these ownership boundaries:
+
+- `templates/*`: semantic HTML/Jinja structure, server-rendered content, URLs, form fields, and declarative `class`/`data-*` hooks only.
+- `src/static/css/*`: all presentation, layout, responsive behavior, states, animation, and visual tokens.
+- `src/static/js/components/*`: reusable browser behavior shared by at least two pages.
+- `src/static/js/pages/*`: page-specific selectors, initialization, interactions, endpoint construction, and workflow behavior.
+
+Apply these rules:
+
+1. Do not add `<style>` blocks, `style` attributes, executable inline scripts, or inline event handlers such as `onclick`, `onchange`, or `onsubmit` to templates. Use external CSS and `addEventListener`.
+2. Templates may contain non-executable `<script type="application/json">` data blocks. Otherwise, expose server-rendered values to external JavaScript through safe `data-*` attributes or JSON; never put Jinja syntax inside external JavaScript.
+3. Put theme tokens, typography, page shells, and baseline controls in `base.css`/`base_new.css`; reusable forms in `forms.css`/`forms_new.css`; reusable tables and compact lists in `tables.css`/`tables_new.css`; reusable maps in `maps.css`; and page-only presentation in the appropriate page stylesheet.
+4. Load shared CSS first and page-specific overrides last. Load only the stylesheets required by the page.
+5. Load JavaScript with `defer`, shared components first, and the page script last. Do not create a shared component until a second page needs the same stable behavior.
+6. During the redesign, migrate one reviewed page at a time. Do not overwrite or delete legacy CSS/JavaScript, and do not load a legacy asset together with its `_new` counterpart on the same page.
+7. Keep primary navigation, links, forms, submissions, and server-rendered content functional without JavaScript. JavaScript may enhance behavior but must not be the only way to access essential functionality.
+8. Before adding a new rule or helper, check whether an existing shared or page-specific asset owns that concern. Avoid duplicated styles, duplicated event wiring, and unrelated cross-page changes.
+9. After migrating a page, test desktop, mobile, keyboard/accessibility, no-JavaScript fallbacks, and affected workflows. Update `README.md` with the page’s asset ownership, load order, and migration status.
+
+External library `<link>` and `<script>` declarations may remain in templates when required. Any other exception requires explicit user approval and documentation in `README.md`.
+
+## Change Approval Workflow
+
+For every request that would modify code, configuration, templates, assets, documentation, data, or external state, use this staged process:
+
+1. **Clarify:** Inspect the existing implementation using read-only actions and ask the user any questions required to define the change. Do not modify files yet.
+2. **Receive feedback:** Wait for the user’s answers and incorporate their decisions.
+3. **Explain:** Provide a concise implementation outline covering the files and behavior affected, structural approach, compatibility concerns, and planned testing. Do not implement yet.
+4. **Final review:** Give the user an opportunity to provide final notes or revisions.
+5. **Approval:** Wait for an explicit go-ahead. The original request, answers to questions, or approval of the general idea do not count as implementation approval.
+6. **Implement:** Only after explicit approval, make the agreed changes, test the resulting behavior, update required documentation, and provide manual verification steps.
+
+If the user changes the requirements before approval, revise the questions or implementation outline and wait for approval again. Do not skip a stage unless the user explicitly instructs the agent to do so.

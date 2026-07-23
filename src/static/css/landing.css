@@ -1,0 +1,185 @@
+/*
+Kooksnylive public landing-page presentation.
+
+This page-specific layer loads after base_new.css. It owns only the landing
+composition: the plain-black viewport, centred brand lockup, two-line public
+description, and responsive artwork navigation. Shared tokens, resets, focus
+defaults, and reduced-motion behavior remain owned by base_new.css.
+
+Loading order:
+1. base_new.css
+2. landing.css
+*/
+
+/*
+The landing page is intentionally a clean black canvas. Qualifying the body
+class keeps the override isolated from every other page using base_new.css.
+*/
+.landing-page {
+  min-height: 100vh;
+  min-height: 100dvh;
+  color: var(--ui-paper);
+  background: #000000;
+}
+
+/*
+The content begins in the upper portion of the viewport instead of being
+vertically centred. Responsive side padding protects the artwork at the 320px
+minimum width required by the shared foundation.
+*/
+.landing-shell {
+  width: min(100% - 32px, 760px);
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin: 0 auto;
+  padding: clamp(30px, 7vh, 76px) 0 48px;
+}
+
+.landing-brand {
+  --landing-brand-width: clamp(220px, 30vw, 420px);
+
+  width: 100%;
+  display: grid;
+  justify-items: center;
+  text-align: center;
+}
+
+/*
+The heading retains the approved responsive brand width and type scale. The
+logo keeps its independently enlarged artwork width and uses a desktop-first
+left offset; the mobile media query reduces that offset without resizing or
+repositioning the Kooksnylive heading.
+*/
+.landing-logo {
+  width: calc(var(--landing-brand-width) * 1.3);
+  height: auto;
+  display: block;
+  transform: translateX(-7.5mm);
+}
+
+.landing-name {
+  width: var(--landing-brand-width);
+  margin: clamp(8px, 1.6vh, 16px) 0 0;
+  color: var(--ui-paper);
+  font-size: clamp(2.25rem, 4.6vw, 4.35rem);
+  font-weight: 950;
+  line-height: 0.92;
+  letter-spacing: -0.045em;
+  white-space: nowrap;
+}
+
+.landing-description {
+  display: grid;
+  gap: 2px;
+  margin: clamp(18px, 2.8vh, 28px) 0 0;
+  color: rgba(255, 255, 255, 0.78);
+  font-size: clamp(0.92rem, 1.6vw, 1.08rem);
+  font-weight: 650;
+  line-height: 1.35;
+  text-wrap: balance;
+}
+
+.landing-description span {
+  display: block;
+}
+
+/*
+Three equal columns preserve the approved order and keep the row horizontal on
+mobile. Each link contains real text, while its image remains decorative, so
+screen readers and no-image browsing receive the same clear action names.
+*/
+.landing-actions {
+  width: min(100%, 620px);
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: clamp(8px, 3vw, 32px);
+  margin-top: clamp(28px, 5vh, 52px);
+}
+
+.landing-action {
+  min-width: 0;
+  min-height: 112px;
+  display: grid;
+  justify-items: center;
+  align-content: start;
+  gap: 7px;
+  padding: 9px 5px 11px;
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius-md);
+  color: var(--ui-paper);
+  background: transparent;
+  font-weight: 900;
+  line-height: 1.15;
+  text-align: center;
+  text-decoration: none;
+  transition:
+    color var(--ui-transition-fast),
+    background var(--ui-transition-fast),
+    border-color var(--ui-transition-fast),
+    transform var(--ui-transition-fast);
+}
+
+.landing-action:hover,
+.landing-action:focus-visible {
+  color: var(--ui-paper);
+  border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(31, 157, 99, 0.14);
+  transform: translateY(-2px);
+}
+
+.landing-action:focus-visible {
+  outline-color: var(--ui-green);
+}
+
+.landing-action-image {
+  width: 100%;
+  height: clamp(64px, 8vw, 104px);
+  display: block;
+  object-fit: contain;
+}
+
+.landing-action-label {
+  font-size: clamp(0.74rem, 1.8vw, 0.92rem);
+  overflow-wrap: normal;
+}
+
+@media (max-width: 480px) {
+  .landing-shell {
+    width: min(100% - 20px, 760px);
+    padding-top: clamp(24px, 5vh, 42px);
+  }
+
+  .landing-brand {
+    --landing-brand-width: clamp(200px, 64vw, 250px);
+  }
+
+  .landing-logo {
+    transform: translateX(-5mm);
+  }
+
+  .landing-name {
+    font-size: clamp(2.05rem, 10.5vw, 2.55rem);
+  }
+
+  .landing-description {
+    font-size: clamp(0.78rem, 3.8vw, 0.92rem);
+  }
+
+  .landing-actions {
+    gap: 4px;
+    margin-top: clamp(24px, 4vh, 36px);
+  }
+
+  .landing-action {
+    min-height: 92px;
+    gap: 5px;
+    padding-inline: 2px;
+  }
+
+  .landing-action-image {
+    height: clamp(58px, 18vw, 74px);
+  }
+}

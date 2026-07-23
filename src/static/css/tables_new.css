@@ -186,6 +186,113 @@ td code {
   white-space: nowrap;
 }
 
+/*
+Compact lists cover event/profile collections that are list-shaped rather than
+tabular. They reuse the dashboard's full-row primary link, independent artwork
+action, status pill, concise metadata, and 88px mobile media treatment while
+retaining a conventional card surface on larger screens.
+*/
+.compact-list {
+  overflow: hidden;
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-radius-lg);
+  background: var(--ui-paper);
+  box-shadow: var(--ui-shadow-card);
+}
+
+.compact-list-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 132px minmax(0, 1fr) auto;
+  gap: 24px;
+  min-height: 156px;
+  padding: 22px;
+  transition: background var(--ui-transition-fast), transform var(--ui-transition-fast);
+}
+
+.compact-list-row + .compact-list-row {
+  border-top: 1px solid var(--ui-line);
+}
+
+.compact-list-row:hover,
+.compact-list-row:focus-within {
+  z-index: 1;
+  background: var(--ui-page-raised);
+}
+
+.compact-list-media {
+  width: 100%;
+  height: 112px;
+  align-self: center;
+  overflow: hidden;
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-radius-md);
+  background: #e7ebe7;
+}
+
+.compact-list-media img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.compact-list-content {
+  min-width: 0;
+  align-self: center;
+}
+
+.compact-list-title {
+  margin: 0;
+  color: var(--ui-ink);
+  font-size: 1.2rem;
+  font-weight: 900;
+  line-height: 1.18;
+  letter-spacing: -0.02em;
+}
+
+.compact-list-primary-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.compact-list-primary-link::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+}
+
+.compact-list-primary-link:focus-visible {
+  outline: none;
+}
+
+.compact-list-primary-link:focus-visible::after {
+  outline: 3px solid var(--ui-green);
+  outline-offset: -3px;
+}
+
+.compact-list-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-top: 8px;
+  color: var(--ui-muted);
+  font-size: 0.84rem;
+}
+
+.compact-list-summary {
+  margin: 8px 0 0;
+  color: var(--ui-muted);
+  line-height: 1.45;
+}
+
+.compact-list-action {
+  position: relative;
+  z-index: 2;
+  align-self: center;
+}
+
 @media (max-width: 720px) {
   .table-card {
     border-radius: 18px;
@@ -243,5 +350,98 @@ td code {
   table[data-responsive-table].is-responsive-ready td.actions,
   table[data-responsive-table].is-responsive-ready td.table-actions {
     white-space: normal;
+  }
+
+  /*
+  Setting data-responsive-table="compact" opts a reviewed simple table into
+  flatter separator-led rows. The labelled cell structure remains intact, so
+  content and actions are still understandable without relying on position.
+  */
+  .table-card.has-compact-table {
+    border-inline: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  table[data-responsive-table].is-responsive-ready.is-compact-table {
+    background: transparent;
+  }
+
+  table[data-responsive-table].is-responsive-ready.is-compact-table tbody tr {
+    padding: 8px 0;
+    background: transparent;
+  }
+
+  table[data-responsive-table].is-responsive-ready.is-compact-table td {
+    grid-template-columns: 88px minmax(0, 1fr);
+    gap: 12px;
+    padding: 7px 2px;
+  }
+
+  .compact-list {
+    overflow: visible;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .compact-list-row {
+    grid-template-columns: var(--ui-compact-media-size) minmax(0, 1fr) auto;
+    gap: 12px;
+    min-height: 120px;
+    padding: 16px 2px;
+    background: transparent;
+    transform: none;
+  }
+
+  .compact-list-row.no-action {
+    grid-template-columns: var(--ui-compact-media-size) minmax(0, 1fr);
+  }
+
+  .compact-list-row:hover,
+  .compact-list-row:focus-within {
+    background: rgba(255, 255, 255, 0.52);
+    transform: none;
+  }
+
+  .compact-list-media {
+    width: var(--ui-compact-media-size);
+    height: var(--ui-compact-media-size);
+    align-self: start;
+    border-radius: 9px;
+  }
+
+  .compact-list-content {
+    align-self: start;
+  }
+
+  .compact-list-title {
+    font-size: 1rem;
+    line-height: 1.16;
+  }
+
+  .compact-list-meta {
+    display: grid;
+    gap: 5px;
+    margin-top: 7px;
+    font-size: 0.77rem;
+    line-height: 1.25;
+  }
+
+  .compact-list-summary {
+    display: -webkit-box;
+    margin-top: 6px;
+    overflow: hidden;
+    font-size: 0.77rem;
+    line-height: 1.35;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .compact-list-action {
+    width: var(--ui-compact-action-size);
+    align-self: center;
   }
 }

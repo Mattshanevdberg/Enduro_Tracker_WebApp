@@ -7,6 +7,9 @@ get_race
     Load one Race by primary key.
 save_race
     Validate and stage race creation or editing.
+save_race_with_image_feedback
+    Save valid race fields while preserving the prior image after an invalid
+    optional image filename submission.
 load_post_race_data
     Build race/category/route/rider data for the post-race page.
 load_race_edit_data
@@ -15,6 +18,8 @@ load_race_edit_data
 Specialized route, rider-entry, and timing services are composed here so the
 Flask controller can remain focused on HTTP parsing and responses.
 """
+
+from dataclasses import dataclass
 
 from src.db.models import Race
 from src.services.race_riders import load_race_rider_management_data
@@ -36,6 +41,23 @@ class RaceValidationError(ValueError):
 
 class RaceNotFoundError(LookupError):
     """Report that a requested Race row does not exist."""
+
+
+@dataclass(frozen=True)
+class RaceSaveResult:
+    """
+    Describe a staged race save and any non-blocking image-field error.
+
+    Attributes:
+      race: new or updated Race row staged in the supplied session.
+      image_error: optional validation message when the submitted image was
+        rejected and the previous image value was retained.
+      submitted_image_filename: rejected filename retained for form feedback.
+    """
+
+    race: Race
+    image_error: str | None = None
+    submitted_image_filename: str | None = None
 
 
 def get_race(session, race_id: int) -> Race | None:
@@ -127,6 +149,56 @@ def save_race(session, form: dict) -> Race:
     race.status = form["status"]
     session.flush()
     return race
+
+
+def save_race_with_image_feedback(session, form: dict) -> RaceSaveResult:
+    """
+    Save a race while treating an invalid optional image as a field warning.
+
+    Input Args:
+      session: active SQLAlchemy session.
+      form: normalized values from src.utils.races.normalize_race_form.
+
+    Output:
+      RaceSaveResult containing the staged Race and optional image warning.
+      The caller must commit.
+
+    Raises:
+      RaceValidationError for blocking race-field validation errors.
+      RaceNotFoundError when an edit target does not exist.
+
+    Notes:
+      Race metadata such as name, dates, location, description, and lifecycle
+      status should not be lost because an optional developer-managed image
+      filename is malformed. When that one field is invalid, this function
+      retains the existing image for edits (or None for a new race), saves the
+      remaining valid fields, and returns the image error for inline display.
+    """
+    submitted_image_filename = form.get("logo_image_filename")
+    image_error = validate_static_image_filename(submitted_image_filename)
+    if image_error is None:
+        return RaceSaveResult(race=save_race(session, form))
+
+    fallback_image_filename = None
+    race_id = form.get("race_id")
+    if race_id is not None:
+        try:
+            parsed_race_id = int(race_id)
+        except (TypeError, ValueError) as error:
+            raise RaceValidationError("Race id is invalid.") from error
+        existing_race = get_race(session, parsed_race_id)
+        if existing_race is None:
+            raise RaceNotFoundError("Race not found.")
+        fallback_image_filename = existing_race.logo_image_filename
+
+    safe_form = dict(form)
+    safe_form["logo_image_filename"] = fallback_image_filename
+    race = save_race(session, safe_form)
+    return RaceSaveResult(
+        race=race,
+        image_error=image_error,
+        submitted_image_filename=submitted_image_filename,
+    )
 
 
 def load_post_race_data(

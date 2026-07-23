@@ -129,6 +129,10 @@ Depends on:
   margin: 0.8rem 0;
 }
 
+.race-field-error {
+  margin: 0.45rem 0 0.85rem;
+}
+
 .race-form-page .map-preview {
   margin-top: 1rem;
 }

@@ -28,9 +28,18 @@ def normalize_static_image_filename(value) -> str | None:
       value: raw filename submitted by an administration form.
 
     Output:
-      Trimmed filename or None when the value is blank.
+      Trimmed filename or None when the value is blank or the legacy/default
+      text value "None".
+
+    Notes:
+      Older race records and form rendering could expose Python's None value as
+      the literal text "None". Treating that sentinel as empty prevents an
+      unchanged optional image field from blocking otherwise valid race edits.
     """
-    return (value or "").strip() or None
+    normalized = (value or "").strip()
+    if not normalized or normalized.casefold() == "none":
+        return None
+    return normalized
 
 
 def validate_static_image_filename(value: str | None) -> str | None:

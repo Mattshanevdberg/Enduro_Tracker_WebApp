@@ -4,6 +4,7 @@ Public dashboard interaction controller.
 Responsibilities:
 - enhance server-rendered tab links without removing no-JavaScript navigation;
 - synchronize hero copy/art, ARIA state, URL state, and visible tab panel;
+- coordinate the native mobile navigation accordion and close it after selection;
 - compact the hero as the independent list pane scrolls;
 - load public rider pages into an accessible dialog while preserving each link
   as a complete standalone-page fallback.
@@ -21,16 +22,35 @@ Responsibilities:
   const title = app.querySelector('[data-dashboard-title]');
   const message = app.querySelector('[data-dashboard-message]');
   const tabs = [...app.querySelectorAll('[data-dashboard-tab]')];
+  const mobileMenu = app.querySelector('[data-dashboard-mobile-menu]');
+  const mobileMenuToggle = app.querySelector('[data-dashboard-mobile-menu-toggle]');
+  const mobileTitle = app.querySelector('[data-dashboard-mobile-title]');
+  const mobileTabs = [...app.querySelectorAll('[data-dashboard-mobile-tab]')];
   const panels = [...app.querySelectorAll('[data-dashboard-panel]')];
   const compactThreshold = 56;
+
+  /**
+   * Close the mobile navigation and synchronize its enhanced visual state.
+   *
+   * @param {boolean} restoreFocus whether focus should return to the menu summary.
+   */
+  function closeMobileMenu(restoreFocus = false) {
+    if (!mobileMenu) return;
+    mobileMenu.open = false;
+    app.classList.remove('is-mobile-menu-open');
+    if (restoreFocus) {
+      window.requestAnimationFrame(() => mobileMenuToggle?.focus());
+    }
+  }
 
   /**
    * Select one server-rendered dashboard panel and synchronize its hero.
    *
    * @param {string} tabKey supported dashboard tab key.
    * @param {boolean} updateHistory whether to add the selection to browser history.
+   * @param {boolean} restoreMenuFocus whether a mobile selection returns focus to its summary.
    */
-  function selectTab(tabKey, updateHistory = true) {
+  function selectTab(tabKey, updateHistory = true, restoreMenuFocus = false) {
     const selectedTab = tabs.find((tab) => tab.dataset.dashboardTab === tabKey) || tabs[0];
     if (!selectedTab) return;
 
@@ -38,6 +58,12 @@ Responsibilities:
       const selected = tab === selectedTab;
       tab.setAttribute('aria-selected', String(selected));
       tab.tabIndex = selected ? 0 : -1;
+    });
+
+    mobileTabs.forEach((tab) => {
+      const selected = tab.dataset.dashboardMobileTab === selectedTab.dataset.dashboardTab;
+      if (selected) tab.setAttribute('aria-current', 'page');
+      else tab.setAttribute('aria-current', 'false');
     });
 
     panels.forEach((panel) => {
@@ -53,11 +79,13 @@ Responsibilities:
 
     eyebrow.textContent = selectedTab.dataset.eyebrow || '';
     title.textContent = selectedTab.dataset.title || '';
+    if (mobileTitle) mobileTitle.textContent = selectedTab.dataset.title || '';
     message.textContent = selectedTab.dataset.message || '';
     heroImage.src = selectedTab.dataset.heroImage;
     app.dataset.selectedTab = selectedTab.dataset.dashboardTab;
     app.classList.remove('is-compact');
     content.scrollTo({ top: 0, behavior: 'auto' });
+    closeMobileMenu(restoreMenuFocus);
 
     if (updateHistory) {
       window.history.pushState(
@@ -86,6 +114,26 @@ Responsibilities:
       selectTab(tabs[nextIndex].dataset.dashboardTab);
     });
   });
+
+  mobileTabs.forEach((tab) => {
+    tab.addEventListener('click', (event) => {
+      event.preventDefault();
+      selectTab(tab.dataset.dashboardMobileTab, true, true);
+    });
+  });
+
+  if (mobileMenu) {
+    mobileMenu.addEventListener('toggle', () => {
+      const open = mobileMenu.open;
+      app.classList.toggle('is-mobile-menu-open', open);
+    });
+
+    mobileMenu.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape' || !mobileMenu.open) return;
+      event.preventDefault();
+      closeMobileMenu(true);
+    });
+  }
 
   content.addEventListener('scroll', () => {
     if (content.scrollTop > compactThreshold) app.classList.add('is-compact');

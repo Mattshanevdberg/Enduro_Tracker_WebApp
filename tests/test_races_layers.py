@@ -75,6 +75,7 @@ from src.services.races import (
     load_post_race_data,
     load_race_edit_data,
     save_race,
+    save_race_with_image_feedback,
 )
 from src.utils.races import (
     normalize_race_form,
@@ -247,6 +248,11 @@ class RaceLifecycleAndRouteServiceTestCase(RaceDatabaseTestCase):
         self.assertIsInstance(form["ends_at_epoch"], int)
         self.assertEqual(form["location"], "Test Valley")
         self.assertEqual(form["logo_image_filename"], "test-race.webp")
+        self.assertIsNone(
+            normalize_race_form(
+                {"name": "Default Image Race", "logo_image_filename": "None"}
+            )["logo_image_filename"]
+        )
         self.assertEqual(parse_positive_id("42", required=True), 42)
         with self.assertRaises(ValueError):
             parse_positive_id("Professional", required=True)
@@ -296,6 +302,45 @@ class RaceLifecycleAndRouteServiceTestCase(RaceDatabaseTestCase):
             self.assertEqual([route.name for route in edit_data["routes"]], ["Main Course"])
             self.assertEqual([r.name for r in edit_data["riders"]], ["Bob Rider"])
             self.assertEqual(edit_data["last_device_by_rider"][edit_data["race_riders"][0].rider_id], "pi001")
+        finally:
+            session.close()
+
+    def test_invalid_optional_image_preserves_image_and_saves_other_race_fields(self):
+        """Save valid race changes while returning inline feedback for one bad image."""
+        session = self.session_factory()
+        try:
+            race = session.get(Race, self.race_id)
+            race.logo_image_filename = "existing-race.webp"
+            session.commit()
+
+            result = save_race_with_image_feedback(
+                session,
+                normalize_race_form(
+                    {
+                        "race_id": str(self.race_id),
+                        "name": "Updated Layered Race",
+                        "location": "Updated Valley",
+                        "logo_image_filename": "unsupported-race.gif",
+                        "status": "live",
+                    }
+                ),
+            )
+            session.commit()
+
+            self.assertEqual(result.race.id, self.race_id)
+            self.assertIn("must use AVIF", result.image_error)
+            self.assertEqual(
+                result.submitted_image_filename,
+                "unsupported-race.gif",
+            )
+            refreshed = session.get(Race, self.race_id)
+            self.assertEqual(refreshed.name, "Updated Layered Race")
+            self.assertEqual(refreshed.location, "Updated Valley")
+            self.assertEqual(refreshed.status, "live")
+            self.assertEqual(
+                refreshed.logo_image_filename,
+                "existing-race.webp",
+            )
         finally:
             session.close()
 
@@ -1096,6 +1141,51 @@ class RaceControllerTestCase(RaceDatabaseTestCase):
         )
 
         created_race_id = int(create_response.headers["Location"].split("/")[2])
+        none_image_response = self.client.post(
+            "/races/save",
+            data={
+                "race_id": str(created_race_id),
+                "name": "Controller Race With Default Image",
+                "location": "Default Image Valley",
+                "logo_image_filename": "None",
+                "status": "upcoming",
+            },
+        )
+        self.assertEqual(none_image_response.status_code, 302)
+        default_image_form = self.client.get(f"/races/{created_race_id}/edit")
+        self.assertEqual(default_image_form.status_code, 200)
+        self.assertNotIn('value="None"', default_image_form.get_data(as_text=True))
+
+        invalid_image_response = self.client.post(
+            "/races/save",
+            data={
+                "race_id": str(created_race_id),
+                "name": "Controller Race With Saved Metadata",
+                "location": "Saved Metadata Valley",
+                "logo_image_filename": "unsupported-race.gif",
+                "status": "live",
+            },
+        )
+        self.assertEqual(invalid_image_response.status_code, 200)
+        invalid_image_html = invalid_image_response.get_data(as_text=True)
+        self.assertIn("Race changes were saved", invalid_image_html)
+        self.assertIn("Image filename must use AVIF", invalid_image_html)
+        self.assertIn('value="unsupported-race.gif"', invalid_image_html)
+        self.assertIn('aria-invalid="true"', invalid_image_html)
+
+        verification_session = self.session_factory()
+        try:
+            updated_race = verification_session.get(Race, created_race_id)
+            self.assertEqual(
+                updated_race.name,
+                "Controller Race With Saved Metadata",
+            )
+            self.assertEqual(updated_race.location, "Saved Metadata Valley")
+            self.assertEqual(updated_race.status, "live")
+            self.assertIsNone(updated_race.logo_image_filename)
+        finally:
+            verification_session.close()
+
         route_response = self.client.post(
             f"/races/{created_race_id}/routes/add",
             data={"route_name": "Main Course"},

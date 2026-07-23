@@ -3,8 +3,9 @@ Public race and rider dashboard.
 
 This stylesheet is intentionally page-scoped and does not depend on base.css.
 It implements the supplied split-screen mockup, compact-on-list-scroll hero,
-four dashboard tab panels, race/rider cards, responsive two-by-two mobile tabs,
-and accessible focus/dialog states without changing any unrelated page.
+four dashboard tab panels, desktop race/rider cards, a mobile hero accordion,
+compact mobile result rows, and accessible focus/dialog states without changing
+any unrelated page.
 */
 
 :root {
@@ -169,9 +170,14 @@ a {
   transform: translateY(-2px);
 }
 
+/*
+Account artwork is deliberately twice the original size. The desktop height
+matches the Get Device artwork, while object-fit preserves both landscape rider
+illustrations and square profile artwork without stretching either format.
+*/
 .dashboard-account-art {
-  width: 42px;
-  height: 27px;
+  width: 84px;
+  height: 54px;
   display: block;
   object-fit: contain;
 }
@@ -182,6 +188,18 @@ a {
   padding: 10px 0 24px;
   overflow: hidden;
   transition: padding 240ms ease;
+}
+
+.dashboard-hero-title {
+  min-width: 0;
+}
+
+/*
+The native details element gives mobile visitors a functional accordion even
+before JavaScript enhances tab switching. Desktop retains the original tablist.
+*/
+.dashboard-mobile-navigation {
+  display: none;
 }
 
 .dashboard-eyebrow {
@@ -445,6 +463,12 @@ a {
   line-height: 1.58;
 }
 
+.dashboard-status-mobile,
+.dashboard-mobile-race-meta,
+.dashboard-rider-team {
+  display: none;
+}
+
 .dashboard-badge {
   width: fit-content;
   display: inline-flex;
@@ -546,6 +570,54 @@ a {
   font-weight: 950;
   letter-spacing: 0.12em;
   text-transform: uppercase;
+}
+
+/*
+Upcoming and completed-race links use their supplied artwork as the primary
+button treatment. The visible desktop labels and generous clickable areas
+mirror the hero account controls while empty image alt values prevent duplicate
+screen-reader output.
+*/
+.dashboard-art-action {
+  position: relative;
+  z-index: 2;
+  min-width: 140px;
+  min-height: 78px;
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 2px;
+  padding: 5px 10px 7px;
+  border-radius: 16px;
+  color: var(--dashboard-ink);
+  background: transparent;
+  text-align: center;
+  text-decoration: none;
+  font-size: 0.82rem;
+  font-weight: 900;
+  transition: color 160ms ease, background 160ms ease, transform 160ms ease;
+}
+
+.dashboard-art-action:hover,
+.dashboard-art-action:focus-visible {
+  color: var(--dashboard-green-dark);
+  background: var(--dashboard-green-soft);
+  outline: none;
+  transform: translateY(-2px);
+}
+
+.dashboard-device-art {
+  width: 96px;
+  height: 54px;
+  display: block;
+  object-fit: contain;
+}
+
+.dashboard-results-art {
+  width: 54px;
+  height: 54px;
+  display: block;
+  object-fit: contain;
 }
 
 .dashboard-action {
@@ -685,14 +757,27 @@ a {
 
 @media (max-width: 720px) {
   .dashboard-app {
-    grid-template-rows: 430px minmax(0, 1fr);
+    grid-template-rows: 310px minmax(0, 1fr);
+  }
+
+  .dashboard-app.is-mobile-menu-open,
+  .dashboard-app:has(.dashboard-mobile-navigation[open]) {
+    grid-template-rows: 500px minmax(0, 1fr);
   }
 
   .dashboard-app.is-compact {
-    grid-template-rows: 258px minmax(0, 1fr);
+    grid-template-rows: 170px minmax(0, 1fr);
+  }
+
+  .dashboard-app.is-compact.is-mobile-menu-open,
+  .dashboard-app.is-compact:has(.dashboard-mobile-navigation[open]) {
+    grid-template-rows: 350px minmax(0, 1fr);
   }
 
   .dashboard-hero-inner {
+    grid-template-rows: auto auto;
+    align-content: start;
+    row-gap: 12px;
     padding-bottom: 14px;
   }
 
@@ -713,20 +798,145 @@ a {
   .dashboard-account-link {
     min-width: 58px;
     min-height: 48px;
-    padding-inline: 4px;
+    gap: 0;
+    padding: 0 4px 2px;
     font-size: 0.72rem;
+    line-height: 1;
   }
 
   .dashboard-account-art {
-    width: 34px;
-    height: 22px;
+    width: 68px;
+    height: 44px;
   }
 
-  .dashboard-hero-copy h1 {
-    font-size: clamp(2.35rem, 12vw, 4rem);
+  /*
+  The enlarged account artwork occupies more of the top row. Reducing the
+  hero-copy bottom padding uses its existing gap above the tabs and prevents
+  the eyebrow from colliding with the account labels.
+  */
+  .dashboard-hero-copy {
+    align-self: start;
+    padding-bottom: 14px;
   }
 
-  .dashboard-app.is-compact .dashboard-hero-copy h1 {
+  .dashboard-hero-title > h1 {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .dashboard-mobile-navigation {
+    width: 100%;
+    display: block;
+  }
+
+  .dashboard-mobile-navigation-toggle {
+    width: fit-content;
+    max-width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: #ffffff;
+    cursor: pointer;
+    list-style: none;
+    font-size: clamp(2.35rem, 11vw, 4rem);
+    line-height: 0.94;
+    font-weight: 950;
+    letter-spacing: -0.055em;
+    transition: font-size 240ms ease;
+  }
+
+  .dashboard-mobile-navigation-toggle::-webkit-details-marker {
+    display: none;
+  }
+
+  .dashboard-mobile-navigation-toggle::marker {
+    content: "";
+  }
+
+  .dashboard-mobile-navigation-toggle:focus-visible {
+    outline: 3px solid #ffffff;
+    outline-offset: 5px;
+    border-radius: 10px;
+  }
+
+  .dashboard-mobile-menu-icon {
+    width: 38px;
+    height: 38px;
+    flex: 0 0 38px;
+    display: grid;
+    align-content: center;
+    justify-items: center;
+    gap: 5px;
+    border: 1px solid rgba(255, 255, 255, 0.28);
+    border-radius: 11px;
+    background: rgba(5, 9, 6, 0.54);
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.2);
+  }
+
+  .dashboard-mobile-menu-icon span {
+    width: 20px;
+    height: 2px;
+    border-radius: 999px;
+    background: #ffffff;
+    transition: opacity 160ms ease, transform 160ms ease;
+  }
+
+  .dashboard-mobile-navigation[open] .dashboard-mobile-menu-icon span:first-child {
+    transform: translateY(7px) rotate(45deg);
+  }
+
+  .dashboard-mobile-navigation[open] .dashboard-mobile-menu-icon span:nth-child(2) {
+    opacity: 0;
+  }
+
+  .dashboard-mobile-navigation[open] .dashboard-mobile-menu-icon span:last-child {
+    transform: translateY(-7px) rotate(-45deg);
+  }
+
+  .dashboard-mobile-navigation-list {
+    width: min(100%, 340px);
+    display: grid;
+    gap: 4px;
+    margin-top: 12px;
+    padding: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 17px;
+    background: rgba(7, 11, 8, 0.9);
+    box-shadow: 0 18px 42px rgba(0, 0, 0, 0.32);
+    backdrop-filter: blur(14px);
+  }
+
+  .dashboard-mobile-navigation-item {
+    min-height: 40px;
+    display: flex;
+    align-items: center;
+    padding: 0 13px;
+    border-radius: 12px;
+    color: rgba(255, 255, 255, 0.8);
+    text-decoration: none;
+    font-size: 0.9rem;
+    font-weight: 850;
+  }
+
+  .dashboard-mobile-navigation-item:hover,
+  .dashboard-mobile-navigation-item:focus-visible {
+    color: #ffffff;
+    background: rgba(255, 255, 255, 0.09);
+    outline: none;
+  }
+
+  .dashboard-mobile-navigation-item[aria-current="page"] {
+    color: #ffffff;
+    background: var(--dashboard-green);
+  }
+
+  .dashboard-app.is-compact .dashboard-mobile-navigation-toggle {
     font-size: clamp(1.8rem, 8vw, 2.5rem);
   }
 
@@ -735,19 +945,28 @@ a {
   }
 
   .dashboard-tabs {
-    width: 100%;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    border-radius: 20px;
-  }
-
-  .dashboard-tab {
-    min-width: 0;
-    padding-inline: 8px;
-    font-size: 0.86rem;
+    display: none;
   }
 
   .dashboard-content-inner {
-    padding-top: 26px;
+    padding-top: 8px;
+    padding-bottom: 48px;
+  }
+
+  /*
+  The hero already names and describes the selected panel on mobile. Only the
+  item count remains above the list, preventing duplicated headings and copy.
+  */
+  .dashboard-section-head {
+    min-height: 42px;
+    justify-content: flex-end;
+    align-items: center;
+    margin: 0;
+    padding: 6px 2px;
+  }
+
+  .dashboard-section-head > div {
+    display: none;
   }
 
   .dashboard-list {
@@ -757,27 +976,109 @@ a {
     box-shadow: none;
   }
 
+  /*
+  Mobile race results follow the supplied compact listing reference: fixed
+  artwork, concise metadata, a separated flat row, and a small independent
+  action at the right edge. The stretched title link still covers the row.
+  */
   .dashboard-row,
   .dashboard-rider-row {
-    grid-template-columns: 1fr;
-    gap: 18px;
-    margin-bottom: 16px;
-    padding: 20px;
-    border: 1px solid var(--dashboard-line);
-    border-radius: 16px;
-    background: #ffffff;
-    box-shadow: var(--dashboard-shadow);
+    grid-template-columns: 88px minmax(0, 1fr) 48px;
+    gap: 12px;
+    min-height: 120px;
+    margin: 0;
+    padding: 16px 2px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    transform: none;
   }
 
   .dashboard-row + .dashboard-row {
     border-top: 1px solid var(--dashboard-line);
   }
 
+  .dashboard-row:hover,
+  .dashboard-row:focus-within {
+    background: rgba(255, 255, 255, 0.52);
+    box-shadow: none;
+    transform: none;
+  }
+
   .dashboard-media,
   .dashboard-rider-media {
-    width: 100%;
-    height: 160px;
-    border-radius: 14px;
+    width: 88px;
+    height: 88px;
+    align-self: start;
+    border-radius: 9px;
+  }
+
+  .dashboard-details {
+    align-self: start;
+    padding-top: 1px;
+  }
+
+  .dashboard-badge {
+    margin-bottom: 6px;
+    padding: 5px 9px;
+    font-size: 0.68rem;
+    letter-spacing: 0.02em;
+  }
+
+  .dashboard-status-desktop {
+    display: none;
+  }
+
+  .dashboard-status-mobile {
+    display: inline;
+  }
+
+  .dashboard-details h3 {
+    font-size: 1rem;
+    line-height: 1.16;
+    letter-spacing: -0.015em;
+  }
+
+  .dashboard-race-row .dashboard-details > p,
+  .dashboard-race-row .dashboard-location {
+    display: none;
+  }
+
+  .dashboard-mobile-race-meta {
+    display: grid;
+    gap: 5px;
+    margin-top: 7px;
+    color: var(--dashboard-muted);
+    font-size: 0.77rem;
+    line-height: 1.25;
+  }
+
+  .dashboard-mobile-race-date,
+  .dashboard-mobile-race-location {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+  }
+
+  .dashboard-mobile-race-date::before {
+    content: "";
+    width: 11px;
+    height: 10px;
+    flex: 0 0 11px;
+    border: 1.5px solid currentColor;
+    border-radius: 1px;
+    box-shadow: inset 0 3px 0 -1px var(--dashboard-page);
+  }
+
+  .dashboard-mobile-race-location::before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    flex: 0 0 7px;
+    border: 2px solid var(--dashboard-green);
+    border-radius: 50% 50% 50% 0;
+    transform: rotate(-45deg);
   }
 
   .dashboard-rider-media img {
@@ -785,22 +1086,110 @@ a {
   }
 
   .dashboard-side {
-    grid-template-columns: 1fr auto;
-    justify-items: stretch;
-    align-items: end;
-    text-align: left;
+    width: 48px;
+    align-self: center;
+    display: grid;
+    place-items: center;
+  }
+
+  .dashboard-race-row-live .dashboard-details {
+    grid-column: 2 / -1;
+  }
+
+  .dashboard-race-row-live .dashboard-side {
+    display: none;
   }
 
   .dashboard-date {
-    justify-items: start;
+    display: none;
+  }
+
+  .dashboard-art-action {
+    width: 48px;
+    min-width: 48px;
+    min-height: 52px;
+    gap: 1px;
+    padding: 3px 2px 4px;
+    border-radius: 11px;
+    font-size: 0.58rem;
+    line-height: 1;
+  }
+
+  .dashboard-device-art {
+    width: 36px;
+    height: 25px;
+  }
+
+  .dashboard-results-art {
+    width: 24px;
+    height: 28px;
+  }
+
+  .dashboard-art-action-label {
+    position: static;
+    width: auto;
+    height: auto;
+    padding: 0;
+    overflow: visible;
+    clip: auto;
+    white-space: nowrap;
+    border: 0;
+    font-weight: 900;
+  }
+
+  /*
+  Rider rows share the flat list structure but need no separate action column:
+  the stretched rider-name link opens the existing accessible profile dialog.
+  */
+  .dashboard-rider-row {
+    grid-template-columns: 88px minmax(0, 1fr);
+  }
+
+  .dashboard-rider-team {
+    width: fit-content;
+    max-width: 100%;
+    display: block;
+    margin-bottom: 6px;
+    padding: 5px 9px;
+    overflow: hidden;
+    border-radius: 999px;
+    color: #394039;
+    background: #e7ebe7;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.68rem;
+    font-weight: 850;
+  }
+
+  .dashboard-rider-meta {
+    display: block;
+    margin-top: 6px;
+    font-size: 0.77rem;
+    line-height: 1.25;
+  }
+
+  .dashboard-rider-team-meta {
+    display: none;
+  }
+
+  .dashboard-rider-row .dashboard-details > p {
+    display: -webkit-box;
+    margin-top: 6px;
+    overflow: hidden;
+    color: var(--dashboard-muted);
+    font-size: 0.77rem;
+    line-height: 1.35;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
   }
 
   .dashboard-rider-action {
-    justify-self: stretch;
+    display: none;
   }
 
-  .dashboard-rider-action .dashboard-action {
-    width: 100%;
+  .dashboard-empty {
+    border-radius: 12px;
+    box-shadow: none;
   }
 }
 
@@ -820,20 +1209,12 @@ a {
   }
 
   .dashboard-section-head {
-    display: block;
+    display: flex;
   }
 
   .dashboard-count {
-    display: inline-block;
-    margin-top: 12px;
-  }
-
-  .dashboard-side {
-    grid-template-columns: 1fr;
-  }
-
-  .dashboard-action {
-    width: 100%;
+    display: inline-flex;
+    margin-top: 0;
   }
 }
 
@@ -847,6 +1228,8 @@ a {
   .dashboard-hero-copy p,
   .dashboard-row,
   .dashboard-action,
+  .dashboard-art-action,
+  .dashboard-mobile-menu-icon span,
   .dashboard-account-link {
     scroll-behavior: auto;
     transition: none;

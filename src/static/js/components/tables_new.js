@@ -3,8 +3,10 @@ Kooksnylive next-generation shared table helpers.
 
 This file has no legacy counterpart, so it remains fully opt-in. It supports the
 scroll affordances in tables_new.css and can convert reviewed tables marked with
-data-responsive-table into labelled mobile cards. Tables remain ordinary,
-server-rendered HTML when JavaScript is unavailable.
+data-responsive-table into labelled mobile rows. An explicit
+data-responsive-table="compact" value selects the flatter dashboard-derived
+variant. Tables remain ordinary, server-rendered HTML when JavaScript is
+unavailable.
 
 Depends on:
 - components/base_new.js only for its optional DOM-ready helper.
@@ -37,6 +39,10 @@ window.EnduroTables = (function initialiseEnduroTablesNew() {
 
       table.dataset.responsiveBound = 'true';
       table.classList.add('is-responsive-ready');
+      if (table.dataset.responsiveTable === 'compact') {
+        table.classList.add('is-compact-table');
+        table.closest('.table-card')?.classList.add('has-compact-table');
+      }
     });
   }
 

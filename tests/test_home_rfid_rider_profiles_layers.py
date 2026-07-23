@@ -133,6 +133,75 @@ class HomeLayerTestCase(unittest.TestCase):
             self.assertEqual(admin_template, "dashboard_admin.html")
             self.assertEqual(len(admin_context["races"]), 4)
 
+    def test_landing_and_login_use_only_the_reviewed_new_css_layers(self):
+        """Keep the first two migrated pages isolated from legacy CSS and unused JS."""
+        repository_root = Path(__file__).resolve().parents[1]
+        landing_template = (repository_root / "templates" / "landing.html").read_text(
+            encoding="utf-8"
+        )
+        landing_styles = (
+            repository_root / "src" / "static" / "css" / "landing.css"
+        ).read_text(encoding="utf-8")
+        login_template = (repository_root / "templates" / "login.html").read_text(
+            encoding="utf-8"
+        )
+        login_styles = (
+            repository_root / "src" / "static" / "css" / "login.css"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("css/base_new.css", landing_template)
+        self.assertIn("css/landing.css", landing_template)
+        self.assertLess(
+            landing_template.index("css/base_new.css"),
+            landing_template.index("css/landing.css"),
+        )
+        self.assertNotIn("css/base.css", landing_template)
+        self.assertNotIn("base_new.js", landing_template)
+        self.assertIn("images/brand/logo.svg", landing_template)
+        self.assertIn("images/icons/view_races_white.svg", landing_template)
+        self.assertIn("images/icons/signup-rider.svg", landing_template)
+        self.assertIn("images/icons/login-rider.svg", landing_template)
+        self.assertIn("Live Realtime Hard Enduro Rider Tracking", landing_template)
+        self.assertIn("Bringing Enduro to the Fans", landing_template)
+        self.assertIn(
+            "width: calc(var(--landing-brand-width) * 1.3);",
+            landing_styles,
+        )
+        self.assertIn("transform: translateX(-7.5mm);", landing_styles)
+        self.assertIn("@media (max-width: 480px)", landing_styles)
+        self.assertIn("transform: translateX(-5mm);", landing_styles)
+
+        self.assertIn("css/base_new.css", login_template)
+        self.assertIn("css/forms_new.css", login_template)
+        self.assertIn("css/login.css", login_template)
+        self.assertLess(
+            login_template.index("css/base_new.css"),
+            login_template.index("css/forms_new.css"),
+        )
+        self.assertLess(
+            login_template.index("css/forms_new.css"),
+            login_template.index("css/login.css"),
+        )
+        self.assertNotIn("css/base.css", login_template)
+        self.assertNotIn("css/forms.css", login_template)
+        self.assertNotIn("base_new.js", login_template)
+        self.assertNotIn("forms_new.js", login_template)
+        self.assertIn("images/brand/logo.svg", login_template)
+        self.assertIn("images/icons/login-rider.svg", login_template)
+        self.assertIn("images/icons/forgot_password.svg", login_template)
+        self.assertIn("images/icons/signup-rider.svg", login_template)
+        self.assertIn("images/icons/view_races.svg", login_template)
+        self.assertIn("View Races", login_template)
+        self.assertNotIn("Back to Dashboard", login_template)
+        self.assertIn(
+            "grid-template-columns: repeat(4, minmax(0, 1fr));",
+            login_styles,
+        )
+        self.assertIn(
+            "grid-template-columns: repeat(2, minmax(0, 1fr));",
+            login_styles,
+        )
+
     def test_public_dashboard_template_renders_rider_tab_and_real_links(self):
         """Render the full dashboard template with its required URL endpoints."""
         repository_root = Path(__file__).resolve().parents[1]
@@ -197,6 +266,12 @@ class HomeLayerTestCase(unittest.TestCase):
         self.assertIn(b"/rider/1", response.data)
         self.assertIn(b"dashboard-panel-upcoming", response.data)
         self.assertIn(b"images/dashboard/heroes/riders.webp", response.data)
+        self.assertIn(b"data-dashboard-mobile-menu", response.data)
+        self.assertEqual(response.data.count(b"data-dashboard-mobile-tab="), 4)
+        self.assertIn(b'class="dashboard-art-action dashboard-device-action"', response.data)
+        self.assertIn(b"images/icons/get_devices.svg", response.data)
+        self.assertIn(b'class="dashboard-art-action dashboard-results-action"', response.data)
+        self.assertIn(b"images/icons/results.svg", response.data)
         self.assertNotIn(b"images/dashboard/heroes/riders.svg", response.data)
 
     def test_robots_txt_returns_same_protected_path_guidance_for_prod_and_dev(self):

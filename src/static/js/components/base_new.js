@@ -10,6 +10,8 @@ step or framework dependency.
 Migration rule:
 - Do not load a legacy component and its *_new counterpart on the same page.
 - Load base_new.js before forms_new.js, tables_new.js, and page-specific scripts.
+- Use data-ui-disclosure only on native details elements whose links and content
+  remain complete without JavaScript.
 */
 
 window.EnduroUI = (function initialiseEnduroUI() {
@@ -75,10 +77,59 @@ window.EnduroUI = (function initialiseEnduroUI() {
     element.setAttribute('aria-busy', isBusy ? 'true' : 'false');
   }
 
-  ready(() => enhance(document));
+  /**
+   * Enhance opt-in native disclosure navigation without replacing its fallback.
+   *
+   * Options marked data-ui-disclosure-option close their containing details
+   * after selection. In-place selectors may additionally request summary focus
+   * with data-ui-disclosure-restore-focus; ordinary links retain their normal
+   * navigation/focus behavior. Escape always closes and restores summary focus.
+   * Binding markers keep repeated page initialisation idempotent.
+   *
+   * @param {Document|Element} root document or migrated-page subtree.
+   */
+  function attachDisclosures(root) {
+    const scope = root || document;
+    scope.querySelectorAll('details[data-ui-disclosure]').forEach(disclosure => {
+      if (disclosure.dataset.uiDisclosureBound === 'true') return;
+
+      const summary = disclosure.querySelector(':scope > summary');
+      if (!summary) return;
+
+      const synchronizeState = () => {
+        disclosure.classList.toggle('is-open', disclosure.open);
+      };
+
+      disclosure.dataset.uiDisclosureBound = 'true';
+      disclosure.addEventListener('toggle', synchronizeState);
+      disclosure.addEventListener('click', event => {
+        const option = event.target.closest('[data-ui-disclosure-option]');
+        if (!option) return;
+        window.requestAnimationFrame(() => {
+          disclosure.open = false;
+          if (option.hasAttribute('data-ui-disclosure-restore-focus')) {
+            summary.focus({ preventScroll: true });
+          }
+        });
+      });
+      disclosure.addEventListener('keydown', event => {
+        if (event.key !== 'Escape' || !disclosure.open) return;
+        event.preventDefault();
+        disclosure.open = false;
+        summary.focus();
+      });
+      synchronizeState();
+    });
+  }
+
+  ready(() => {
+    enhance(document);
+    attachDisclosures(document);
+  });
 
   return {
     announce,
+    attachDisclosures,
     enhance,
     ready,
     setBusy,

@@ -70,7 +70,38 @@
               <span class="dashboard-eyebrow-dot"></span>
               <span data-dashboard-eyebrow>{{ selected_copy.eyebrow }}</span>
             </div>
-            <h1 data-dashboard-title>{{ selected_copy.title }}</h1>
+            <div class="dashboard-hero-title">
+              <h1 data-dashboard-title>{{ selected_copy.title }}</h1>
+              <details class="dashboard-mobile-navigation" data-dashboard-mobile-menu>
+                <summary
+                  class="dashboard-mobile-navigation-toggle"
+                  aria-label="Choose dashboard section"
+                  aria-controls="dashboard-mobile-navigation-list"
+                  data-dashboard-mobile-menu-toggle
+                >
+                  <span class="dashboard-mobile-menu-icon" aria-hidden="true">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                  </span>
+                  <span aria-hidden="true" data-dashboard-mobile-title>{{ selected_copy.title }}</span>
+                </summary>
+                <nav
+                  id="dashboard-mobile-navigation-list"
+                  class="dashboard-mobile-navigation-list"
+                  aria-label="Dashboard sections"
+                >
+                  {% for tab_key, tab_copy in tab_presentation.items() %}
+                    <a
+                      class="dashboard-mobile-navigation-item"
+                      href="{{ url_for('home.dashboard', tab=tab_key) }}"
+                      aria-current="{{ 'page' if tab_key == selected_tab else 'false' }}"
+                      data-dashboard-mobile-tab="{{ tab_key }}"
+                    >{{ tab_copy.label }}</a>
+                  {% endfor %}
+                </nav>
+              </details>
+            </div>
             <p data-dashboard-message>{{ selected_copy.message }}</p>
           </div>
 
@@ -120,7 +151,7 @@
               {% if races %}
                 <div class="dashboard-list">
                   {% for race in races %}
-                    <article class="dashboard-row dashboard-race-row">
+                    <article class="dashboard-row dashboard-race-row dashboard-race-row-{{ tab_key }}">
                       <div class="dashboard-media dashboard-race-media">
                         <img
                           src="{{ url_for('static', filename='images/races/' + (race.logo_image_filename or 'default-race-logo.svg')) }}"
@@ -129,13 +160,36 @@
                       </div>
                       <div class="dashboard-details">
                         <span class="dashboard-badge {{ 'live' if tab_key == 'live' else '' }}">
-                          {{ 'Live race' if tab_key == 'live' else ('Completed' if tab_key == 'past' else 'Entries open') }}
+                          <span class="dashboard-status-desktop">
+                            {{ 'Live race' if tab_key == 'live' else ('Completed' if tab_key == 'past' else 'Entries open') }}
+                          </span>
+                          <span class="dashboard-status-mobile">
+                            {{ 'Live' if tab_key == 'live' else ('Completed' if tab_key == 'past' else 'Upcoming') }}
+                          </span>
                         </span>
                         <h3>
                           <a class="dashboard-row-link" href="{{ url_for('races.post_race', race_id=race.id) }}">{{ race.name }}</a>
                         </h3>
                         <p>{{ race.description or 'Race details will be added soon.' }}</p>
                         {% if race.location %}<div class="dashboard-location">{{ race.location }}</div>{% endif %}
+                        <div class="dashboard-mobile-race-meta">
+                          <time class="dashboard-mobile-race-date">
+                            {% if race.starts_at and race.ends_at %}
+                              {% if race.starts_at.date() == race.ends_at.date() %}
+                                {{ race.starts_at.day }} {{ race.starts_at.strftime('%b %Y') }}
+                              {% elif race.starts_at.year == race.ends_at.year %}
+                                {{ race.starts_at.day }} {{ race.starts_at.strftime('%b') }} – {{ race.ends_at.day }} {{ race.ends_at.strftime('%b %Y') }}
+                              {% else %}
+                                {{ race.starts_at.day }} {{ race.starts_at.strftime('%b %Y') }} – {{ race.ends_at.day }} {{ race.ends_at.strftime('%b %Y') }}
+                              {% endif %}
+                            {% elif race.starts_at %}
+                              {{ race.starts_at.day }} {{ race.starts_at.strftime('%b %Y') }}
+                            {% else %}
+                              Date TBA
+                            {% endif %}
+                          </time>
+                          <span class="dashboard-mobile-race-location">{{ race.location or 'Location TBA' }}</span>
+                        </div>
                       </div>
                       <div class="dashboard-side">
                         <div class="dashboard-date">
@@ -148,9 +202,23 @@
                           {% if tab_key == 'live' %}<span class="dashboard-live-indicator">Live</span>{% endif %}
                         </div>
                         {% if tab_key == 'upcoming' %}
-                          <a class="dashboard-action" href="{{ url_for('races.enter_race', race_id=race.id) }}">Get Device</a>
+                          <a class="dashboard-art-action dashboard-device-action" href="{{ url_for('races.enter_race', race_id=race.id) }}">
+                            <img
+                              class="dashboard-device-art"
+                              src="{{ url_for('static', filename='images/icons/get_devices.svg') }}"
+                              alt=""
+                            />
+                            <span class="dashboard-art-action-label">Get Device</span>
+                          </a>
                         {% elif tab_key == 'past' %}
-                          <a class="dashboard-action secondary" href="{{ url_for('races.race_results', race_id=race.id) }}">Results</a>
+                          <a class="dashboard-art-action dashboard-results-action" href="{{ url_for('races.race_results', race_id=race.id) }}">
+                            <img
+                              class="dashboard-results-art"
+                              src="{{ url_for('static', filename='images/icons/results.svg') }}"
+                              alt=""
+                            />
+                            <span class="dashboard-art-action-label">Results</span>
+                          </a>
                         {% endif %}
                       </div>
                     </article>
@@ -192,6 +260,7 @@
                       />
                     </div>
                     <div class="dashboard-details">
+                      <span class="dashboard-rider-team">{{ rider.team or 'Independent rider' }}</span>
                       <h3>
                         <a
                           class="dashboard-row-link"
@@ -200,8 +269,8 @@
                         >{{ rider.name }}</a>
                       </h3>
                       <div class="dashboard-rider-meta">
-                        <span><strong>Team:</strong> {{ rider.team or 'Independent rider' }}</span>
-                        <span><strong>Bike:</strong> {{ rider.bike or 'Not specified' }}</span>
+                        <span class="dashboard-rider-team-meta"><strong>Team:</strong> {{ rider.team or 'Independent rider' }}</span>
+                        <span class="dashboard-rider-bike-meta"><strong>Bike:</strong> {{ rider.bike or 'Not specified' }}</span>
                       </div>
                       <p>{{ rider.bio or 'No biography has been added yet.' }}</p>
                     </div>

@@ -4,22 +4,30 @@
     <meta charset="utf-8" />
     <title>Kooksnylive — Login</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}" />
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/forms.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/base_new.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/forms_new.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/login.css') }}" />
   </head>
-  <body>
-    <main class="page-shell">
-      <header class="page-header">
-        <h1>Login</h1>
-        <p>Log in with your username or email address.</p>
-      </header>
+  <body class="login-page">
+    <header class="login-topbar">
+      <a class="login-brand" href="{{ url_for('home.home_page') }}" aria-label="Kooksnylive home">
+        <img src="{{ url_for('static', filename='images/brand/logo.svg') }}" alt="" />
+        <span>Kooksnylive</span>
+      </a>
+    </header>
 
-      {% if message %}
-        <div class="msg {{ 'ok' if success else 'err' }}">{{ message }}</div>
-      {% endif %}
+    <main class="login-shell">
+      <section class="content-panel login-card" aria-labelledby="login-title">
+        <header class="login-card-header">
+          <h1 id="login-title">Login</h1>
+          <p>Log in with your username or email address.</p>
+        </header>
 
-      <section class="content-panel">
-        <form class="form-grid" method="post" action="{{ url_for('auth.login') }}">
+        {% if message %}
+          <div class="msg {{ 'ok' if success else 'err' }}">{{ message }}</div>
+        {% endif %}
+
+        <form class="form-grid login-form" method="post" action="{{ url_for('auth.login') }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
 
           <label for="identifier">Username or email *</label>
@@ -40,11 +48,40 @@
             required
           />
 
-          <div class="actions">
-            <button class="btn" type="submit">Login</button>
-            <a class="btn" href="{{ url_for('auth.forgot_password') }}">Forgot Password</a>
-            <a class="btn" href="{{ url_for('auth.signup') }}">Sign Up</a>
-            <a class="btn" href="{{ url_for('home.dashboard') }}">Back to Dashboard</a>
+          <!-- The submit remains a real button; companion actions remain real links. -->
+          <div class="actions login-actions">
+            <button class="login-action" type="submit">
+              <img
+                class="login-action-image login-action-image-dark"
+                src="{{ url_for('static', filename='images/icons/login-rider.svg') }}"
+                alt=""
+              />
+              <span class="login-action-label">Login</span>
+            </button>
+            <a class="login-action" href="{{ url_for('auth.forgot_password') }}">
+              <img
+                class="login-action-image"
+                src="{{ url_for('static', filename='images/icons/forgot_password.svg') }}"
+                alt=""
+              />
+              <span class="login-action-label">Forgot Password</span>
+            </a>
+            <a class="login-action" href="{{ url_for('auth.signup') }}">
+              <img
+                class="login-action-image login-action-image-dark"
+                src="{{ url_for('static', filename='images/icons/signup-rider.svg') }}"
+                alt=""
+              />
+              <span class="login-action-label">Sign Up</span>
+            </a>
+            <a class="login-action" href="{{ url_for('home.dashboard') }}">
+              <img
+                class="login-action-image login-action-image-dark"
+                src="{{ url_for('static', filename='images/icons/view_races.svg') }}"
+                alt=""
+              />
+              <span class="login-action-label">View Races</span>
+            </a>
           </div>
         </form>
       </section>

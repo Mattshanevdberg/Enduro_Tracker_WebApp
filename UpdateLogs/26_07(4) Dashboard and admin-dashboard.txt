@@ -298,3 +298,51 @@ Apart from what I have told you, do not adjust dish other tabs unnecessarily or 
 Post changes:
 Using the dashboard CSS as a style template, create a new base.css and call it base_new.css. Do not delete the old base.css. Then as we update various feel various pages and templates, we will move them over to the base_new.css. Also create a new forms_new.css and tables.css. The idea is we are creating a new format for our website that will replace the old format as we update individual web pages. Please can you follow the same change over format with JS files.
 I would like the riders to be able to upload their own profile pictures and them to be saved alongside the rider. How is the best way to go about doing this? At the moment I see that you have saved a string in the db that leads to the file. How would this work? Because essentially we'd like the write a profile picture to be saved in the database I assume? 
+
+We need an adjustment on the mobile site. I want the navigation tabs to be in a collapsable drop down menu on the left next to the heading of the tab. I also want the events and rider profiles to be displayed more like the image provided. Please ask me any questions you have regarding this change. Then I will provide answers. Then explain what you will have to do. I will then give my final notes and a go ahead if I am happy. Then you can make the adjustment.
+
+1. Yes. This design should only. Apply to the mobile site. 
+2. Drop down trigger should be inside the. Large upcoming races header in the Hero. 
+3. The dropdown trigger should be a compact menu icon. Maybe a hamburger icon? And the section current section heading should be visible because it is part of the hero. 
+4. Yes, it should contain all four options and close after selection is made. 
+5. Let's use accordion. 
+6. Yes. 
+7. Make it a small icon on the right. So make the artwork smaller so that it does not make the compact considerably taller.
+8. Nothing. You can remove that position.
+9. Status Bill can read upcoming, live or completed. 
+10. Yes to both questions. 
+11. I agree with your suggestion. The final should, the final line should be a shortened biography.
+12. Yes. 
+13. I am not sure what you are asking. 
+14. Yes. 
+
+OK next agent instruction is. I essentially want that when I want to make a new change or a new adjustment please. First ask me any questions you have regarding the change. Then I provide answers and then explain what you are going to do. And then I give my final notes and then I go ahead. If I'm happy with the changes, then you can make the adjustment. So that is the process for making changes. Please make that into an agent dot MD instruction. 
+
+Some small adjustments to the mobile site, so I've uploaded two images. Essentially the hero banner in the mobile site is too large. So you'll see I've put orange crosses and that area needs to disappear so that the hero banner is smaller on the mobile site. The second adjustment is on upcoming races. The below the icon on the right. Forget devices. Put a small amount of writing that says get devices. 
+
+1.Yes. 
+2. Yes, it should retain all of those
+3. Should read exactly get device and results. Currently on the desktop site they already have the label below. And yes, it must fit beneath the icons without increasing row height. 
+
+Now we need to do some debugging. When I try save an editted race (route: https://dev.kooksnylive.co.za/races/save). I get the following writing on a blank page: "Image filename must use AVIF, JPEG, JPG, PNG, SVG, or WebP." and my changes are not saved.
+The output from the server log: 
+server-1        | 172.19.0.8 - - [23/Jul/2026 10:42:10] "POST /races/save HTTP/1.1" 400 -
+Then additionally (not sure if this is related), but no matter where I am on the site I get the following output over and over again:
+db-1            | 2026-07-23 10:42:12.828 UTC [33] ERROR:  dead heap-only tuple (4, 4) is not linked to from any HOT chain
+db-1            | 2026-07-23 10:42:12.828 UTC [33] STATEMENT:  SELECT track_cache.race_rider_id AS track_cache_race_rider_id, track_cache.geojson AS track_cache_geojson, track_cache.etag AS track_cache_etag, track_cache.updated_at AS track_cache_updated_at, track_cache.updated_at_epoch AS track_cache_updated_at_epoch 
+db-1            |       FROM track_cache 
+db-1            |       WHERE track_cache.race_rider_id = $1::INTEGER
+gpx-worker-1    | [gpx_worker] unexpected error: (psycopg.errors.InternalError_) dead heap-only tuple (4, 4) is not linked to from any HOT chain
+gpx-worker-1    | [SQL: SELECT track_cache.race_rider_id AS track_cache_race_rider_id, track_cache.geojson AS track_cache_geojson, track_cache.etag AS track_cache_etag, track_cache.updated_at AS track_cache_updated_at, track_cache.updated_at_epoch AS track_cache_updated_at_epoch 
+gpx-worker-1    | FROM track_cache 
+gpx-worker-1    | WHERE track_cache.race_rider_id = %(pk_1)s::INTEGER]
+gpx-worker-1    | [parameters: {'pk_1': 4}]
+gpx-worker-1    | (Background on this error at: https://sqlalche.me/e/20/2j85)
+
+
+Please can you make the Admin Dashboard use the base_new.css and table_new.css. I would like to see what this would look like.
+
+Please can you make the login page use the base_new and forms_new.css. Please also make the landing page use the base_new.css. 
+
+Please can you update the landing page. The background should be fully black. Put the logo big in the upper centre. Put the kooksnylive below the logo and make the words take up the same width as the logo. make the login, signup and view races buttons use the login, signup and view_races icons.These icons must be below the logo and name. Then is there anyway to not have the description visible but still have it work for the crawlers/SEO tools? 
+
