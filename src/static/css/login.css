@@ -1,194 +1,32 @@
 /*
-Kooksnylive login-page presentation.
+Kooksnylive login-page action ordering.
 
-This page-specific layer loads after base_new.css and forms_new.css. It owns
-the black authentication shell, dashboard-style top-left brand, centred form
-card, and icon-led action layout. Shared form fields, validation messages,
-focus tokens, and reduced-motion behavior remain in the shared `_new` layers.
+This page-specific layer loads after auth.css. The shared authentication shell,
+card, form, artwork, and responsive sizing live in auth.css; this file owns
+only Login's four-column desktop group and alternate two-by-two mobile group.
 
 Loading order:
 1. base_new.css
 2. forms_new.css
-3. login.css
-*/
-
-.login-page {
-  min-height: 100vh;
-  min-height: 100dvh;
-  color: var(--ui-paper);
-  background: #000000;
-}
-
-/*
-The brand follows the public dashboard's compact logo/name treatment and
-remains an ordinary link to the public landing page without JavaScript.
-*/
-.login-topbar {
-  width: 100%;
-  padding: clamp(18px, 3vw, 30px);
-}
-
-.login-brand {
-  width: fit-content;
-  display: inline-flex;
-  align-items: center;
-  gap: 12px;
-  color: var(--ui-paper);
-  font-size: clamp(1.15rem, 2vw, 1.75rem);
-  font-weight: 900;
-  letter-spacing: -0.045em;
-  text-decoration: none;
-}
-
-.login-brand:hover,
-.login-brand:focus-visible {
-  color: var(--ui-paper);
-}
-
-.login-brand img {
-  width: 54px;
-  height: 54px;
-  flex: 0 0 auto;
-  display: block;
-}
-
-/*
-The card is centred horizontally beneath the brand. Its white surface keeps
-the existing shared input and validation-message contrast intact against the
-new black page background.
-*/
-.login-shell {
-  width: min(100% - 32px, 760px);
-  display: grid;
-  margin: 0 auto;
-  padding: clamp(26px, 5vh, 58px) 0 64px;
-}
-
-.login-card {
-  width: 100%;
-  margin: 0;
-}
-
-.login-card-header {
-  display: grid;
-  gap: 7px;
-  margin-bottom: 26px;
-}
-
-.login-card-header h1 {
-  margin: 0;
-  color: var(--ui-ink);
-  font-size: clamp(2.25rem, 5vw, 3.75rem);
-  font-weight: 950;
-  line-height: 0.96;
-  letter-spacing: -0.05em;
-}
-
-.login-card-header p {
-  margin: 0;
-  color: var(--ui-muted);
-  font-size: clamp(0.94rem, 1.8vw, 1.08rem);
-}
-
-.login-card .msg {
-  margin-bottom: 24px;
-}
-
-/*
-All four actions use equal columns on desktop. The white line-art SVGs are
-converted to black by the page layer so they remain visible on the white card;
-the supplied Forgot Password artwork is already dark and remains unchanged.
+3. auth.css
+4. login.css
 */
 .form-grid > .login-actions {
-  display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-  align-items: stretch;
 }
 
-.login-action {
-  min-width: 0;
-  min-height: 118px;
-  display: grid;
-  justify-items: center;
-  align-content: start;
-  gap: 7px;
-  padding: 9px 5px 11px;
-  border: 1px solid transparent;
-  border-radius: var(--ui-radius-md);
-  color: var(--ui-ink);
-  background: transparent;
-  font: inherit;
-  font-weight: 900;
-  line-height: 1.15;
-  text-align: center;
-  text-decoration: none;
-  cursor: pointer;
-  transition:
-    color var(--ui-transition-fast),
-    background var(--ui-transition-fast),
-    border-color var(--ui-transition-fast),
-    transform var(--ui-transition-fast);
-}
-
-.login-action:hover,
-.login-action:focus-visible {
-  color: var(--ui-green-dark);
-  border-color: rgba(31, 157, 99, 0.28);
-  background: var(--ui-green-soft);
-  transform: translateY(-2px);
-}
-
-.login-action-image {
-  width: 100%;
-  height: clamp(66px, 7vw, 82px);
-  display: block;
-  object-fit: contain;
-}
-
-.login-action-image-dark {
-  filter: brightness(0);
-}
-
-.login-action-label {
-  font-size: clamp(0.76rem, 1.5vw, 0.9rem);
-  overflow-wrap: normal;
+.form-grid > .login-actions-mobile {
+  display: none;
 }
 
 @media (max-width: 720px) {
-  .login-topbar {
-    padding: 16px;
+  .form-grid > .login-actions-desktop {
+    display: none;
   }
 
-  .login-brand {
-    gap: 8px;
-    font-size: 1.05rem;
-  }
-
-  .login-brand img {
-    width: 46px;
-    height: 46px;
-  }
-
-  .login-shell {
-    width: min(100% - 20px, 760px);
-    padding: 18px 0 42px;
-  }
-
-  .login-card-header {
-    margin-bottom: 22px;
-  }
-
-  .form-grid > .login-actions {
+  .form-grid > .login-actions-mobile {
+    display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
-  }
-
-  .login-action {
-    min-height: 108px;
-  }
-
-  .login-action-image {
-    height: clamp(62px, 19vw, 78px);
   }
 }

@@ -141,92 +141,141 @@
               data-dashboard-panel="{{ tab_key }}"
             >
               <header class="dashboard-section-head">
-                <div>
+                <div class="dashboard-section-copy">
                   <h2>{{ tab_copy.heading }}</h2>
                   <p>{{ tab_copy.subheading }}</p>
                 </div>
-                <span class="dashboard-count">{{ races | length }} {{ 'event' if races | length == 1 else 'events' }}</span>
+                <form
+                  class="dashboard-search"
+                  role="search"
+                  aria-label="Search {{ tab_copy.heading | lower }}"
+                  hidden
+                  data-dashboard-search
+                  data-search-singular="event"
+                  data-search-plural="events"
+                >
+                  <label class="dashboard-search-label" for="dashboard-search-{{ tab_key }}">
+                    Search {{ tab_copy.heading | lower }}
+                  </label>
+                  <div class="dashboard-search-control">
+                    <input
+                      id="dashboard-search-{{ tab_key }}"
+                      class="dashboard-search-input"
+                      type="search"
+                      placeholder="Search events"
+                      autocomplete="off"
+                      enterkeyhint="search"
+                      aria-controls="dashboard-results-{{ tab_key }}"
+                      data-dashboard-search-input
+                    />
+                    <button
+                      class="dashboard-search-clear"
+                      type="button"
+                      aria-label="Clear event search"
+                      hidden
+                      data-dashboard-search-clear
+                    >×</button>
+                  </div>
+                </form>
+                <output
+                  class="dashboard-count"
+                  aria-live="polite"
+                  data-dashboard-count
+                  data-total-count="{{ races | length }}"
+                >{{ races | length }} {{ 'event' if races | length == 1 else 'events' }}</output>
               </header>
 
-              {% if races %}
-                <div class="dashboard-list">
-                  {% for race in races %}
-                    <article class="dashboard-row dashboard-race-row dashboard-race-row-{{ tab_key }}">
-                      <div class="dashboard-media dashboard-race-media">
-                        <img
-                          src="{{ url_for('static', filename='images/races/' + (race.logo_image_filename or 'default-race-logo.svg')) }}"
-                          alt="{{ race.name }} logo"
-                        />
-                      </div>
-                      <div class="dashboard-details">
-                        <span class="dashboard-badge {{ 'live' if tab_key == 'live' else '' }}">
-                          <span class="dashboard-status-desktop">
-                            {{ 'Live race' if tab_key == 'live' else ('Completed' if tab_key == 'past' else 'Entries open') }}
+              <div id="dashboard-results-{{ tab_key }}">
+                {% if races %}
+                  <div class="dashboard-list" data-dashboard-list>
+                    {% for race in races %}
+                      {% set race_start_search = race.starts_at.strftime('%Y-%m-%d %d %B %Y %d %b %Y') if race.starts_at else 'Date TBA' %}
+                      {% set race_end_search = race.ends_at.strftime('%Y-%m-%d %d %B %Y %d %b %Y') if race.ends_at else '' %}
+                      <article
+                        class="dashboard-row dashboard-race-row dashboard-race-row-{{ tab_key }}"
+                        data-dashboard-search-row
+                        data-search-name="{{ race.name }}"
+                        data-search-secondary="{{ race.location or 'Location TBA' }} {{ race_start_search }} {{ race_end_search }}"
+                      >
+                        <div class="dashboard-media dashboard-race-media">
+                          <img
+                            src="{{ url_for('static', filename='images/races/' + (race.logo_image_filename or 'default-race-logo.svg')) }}"
+                            alt="{{ race.name }} logo"
+                          />
+                        </div>
+                        <div class="dashboard-details">
+                          <span class="dashboard-badge {{ 'live' if tab_key == 'live' else '' }}">
+                            <span class="dashboard-status-desktop">
+                              {{ 'Live race' if tab_key == 'live' else ('Completed' if tab_key == 'past' else 'Entries open') }}
+                            </span>
+                            <span class="dashboard-status-mobile">
+                              {{ 'Live' if tab_key == 'live' else ('Completed' if tab_key == 'past' else 'Upcoming') }}
+                            </span>
                           </span>
-                          <span class="dashboard-status-mobile">
-                            {{ 'Live' if tab_key == 'live' else ('Completed' if tab_key == 'past' else 'Upcoming') }}
-                          </span>
-                        </span>
-                        <h3>
-                          <a class="dashboard-row-link" href="{{ url_for('races.post_race', race_id=race.id) }}">{{ race.name }}</a>
-                        </h3>
-                        <p>{{ race.description or 'Race details will be added soon.' }}</p>
-                        {% if race.location %}<div class="dashboard-location">{{ race.location }}</div>{% endif %}
-                        <div class="dashboard-mobile-race-meta">
-                          <time class="dashboard-mobile-race-date">
-                            {% if race.starts_at and race.ends_at %}
-                              {% if race.starts_at.date() == race.ends_at.date() %}
+                          <h3>
+                            <a class="dashboard-row-link" href="{{ url_for('races.post_race', race_id=race.id) }}">{{ race.name }}</a>
+                          </h3>
+                          <p>{{ race.description or 'Race details will be added soon.' }}</p>
+                          {% if race.location %}<div class="dashboard-location">{{ race.location }}</div>{% endif %}
+                          <div class="dashboard-mobile-race-meta">
+                            <time class="dashboard-mobile-race-date">
+                              {% if race.starts_at and race.ends_at %}
+                                {% if race.starts_at.date() == race.ends_at.date() %}
+                                  {{ race.starts_at.day }} {{ race.starts_at.strftime('%b %Y') }}
+                                {% elif race.starts_at.year == race.ends_at.year %}
+                                  {{ race.starts_at.day }} {{ race.starts_at.strftime('%b') }} – {{ race.ends_at.day }} {{ race.ends_at.strftime('%b %Y') }}
+                                {% else %}
+                                  {{ race.starts_at.day }} {{ race.starts_at.strftime('%b %Y') }} – {{ race.ends_at.day }} {{ race.ends_at.strftime('%b %Y') }}
+                                {% endif %}
+                              {% elif race.starts_at %}
                                 {{ race.starts_at.day }} {{ race.starts_at.strftime('%b %Y') }}
-                              {% elif race.starts_at.year == race.ends_at.year %}
-                                {{ race.starts_at.day }} {{ race.starts_at.strftime('%b') }} – {{ race.ends_at.day }} {{ race.ends_at.strftime('%b %Y') }}
                               {% else %}
-                                {{ race.starts_at.day }} {{ race.starts_at.strftime('%b %Y') }} – {{ race.ends_at.day }} {{ race.ends_at.strftime('%b %Y') }}
+                                Date TBA
                               {% endif %}
-                            {% elif race.starts_at %}
-                              {{ race.starts_at.day }} {{ race.starts_at.strftime('%b %Y') }}
+                            </time>
+                            <span class="dashboard-mobile-race-location">{{ race.location or 'Location TBA' }}</span>
+                          </div>
+                        </div>
+                        <div class="dashboard-side">
+                          <div class="dashboard-date">
+                            {% if race.starts_at %}
+                              <span class="dashboard-day">{{ race.starts_at.strftime('%d') }}</span>
+                              <span class="dashboard-month">{{ race.starts_at.strftime('%b') }}</span>
                             {% else %}
-                              Date TBA
+                              <span class="dashboard-day small">TBA</span>
                             {% endif %}
-                          </time>
-                          <span class="dashboard-mobile-race-location">{{ race.location or 'Location TBA' }}</span>
-                        </div>
-                      </div>
-                      <div class="dashboard-side">
-                        <div class="dashboard-date">
-                          {% if race.starts_at %}
-                            <span class="dashboard-day">{{ race.starts_at.strftime('%d') }}</span>
-                            <span class="dashboard-month">{{ race.starts_at.strftime('%b') }}</span>
-                          {% else %}
-                            <span class="dashboard-day small">TBA</span>
+                            {% if tab_key == 'live' %}<span class="dashboard-live-indicator">Live</span>{% endif %}
+                          </div>
+                          {% if tab_key == 'upcoming' %}
+                            <a class="dashboard-art-action dashboard-device-action" href="{{ url_for('races.enter_race', race_id=race.id) }}">
+                              <img
+                                class="dashboard-device-art"
+                                src="{{ url_for('static', filename='images/icons/get_devices.svg') }}"
+                                alt=""
+                              />
+                              <span class="dashboard-art-action-label">Get Device</span>
+                            </a>
+                          {% elif tab_key == 'past' %}
+                            <a class="dashboard-art-action dashboard-results-action" href="{{ url_for('races.race_results', race_id=race.id) }}">
+                              <img
+                                class="dashboard-results-art"
+                                src="{{ url_for('static', filename='images/icons/results.svg') }}"
+                                alt=""
+                              />
+                              <span class="dashboard-art-action-label">Results</span>
+                            </a>
                           {% endif %}
-                          {% if tab_key == 'live' %}<span class="dashboard-live-indicator">Live</span>{% endif %}
                         </div>
-                        {% if tab_key == 'upcoming' %}
-                          <a class="dashboard-art-action dashboard-device-action" href="{{ url_for('races.enter_race', race_id=race.id) }}">
-                            <img
-                              class="dashboard-device-art"
-                              src="{{ url_for('static', filename='images/icons/get_devices.svg') }}"
-                              alt=""
-                            />
-                            <span class="dashboard-art-action-label">Get Device</span>
-                          </a>
-                        {% elif tab_key == 'past' %}
-                          <a class="dashboard-art-action dashboard-results-action" href="{{ url_for('races.race_results', race_id=race.id) }}">
-                            <img
-                              class="dashboard-results-art"
-                              src="{{ url_for('static', filename='images/icons/results.svg') }}"
-                              alt=""
-                            />
-                            <span class="dashboard-art-action-label">Results</span>
-                          </a>
-                        {% endif %}
-                      </div>
-                    </article>
-                  {% endfor %}
-                </div>
-              {% else %}
-                <p class="dashboard-empty">No {{ tab_copy.heading | lower }} are available yet.</p>
-              {% endif %}
+                      </article>
+                    {% endfor %}
+                  </div>
+                  <p class="dashboard-empty dashboard-search-empty" hidden data-dashboard-search-empty>
+                    No matching events found.
+                  </p>
+                {% else %}
+                  <p class="dashboard-empty">No {{ tab_copy.heading | lower }} are available yet.</p>
+                {% endif %}
+              </div>
             </section>
           {% endfor %}
 
@@ -241,52 +290,92 @@
             data-dashboard-panel="riders"
           >
             <header class="dashboard-section-head">
-              <div>
+              <div class="dashboard-section-copy">
                 <h2>{{ rider_copy.heading }}</h2>
                 <p>{{ rider_copy.subheading }}</p>
               </div>
-              <span class="dashboard-count">{{ riders | length }} {{ 'rider' if riders | length == 1 else 'riders' }}</span>
+              <form
+                class="dashboard-search"
+                role="search"
+                aria-label="Search rider profiles"
+                hidden
+                data-dashboard-search
+                data-search-singular="rider"
+                data-search-plural="riders"
+              >
+                <label class="dashboard-search-label" for="dashboard-search-riders">
+                  Search rider profiles
+                </label>
+                <div class="dashboard-search-control">
+                  <input
+                    id="dashboard-search-riders"
+                    class="dashboard-search-input"
+                    type="search"
+                    placeholder="Search riders"
+                    autocomplete="off"
+                    enterkeyhint="search"
+                    aria-controls="dashboard-results-riders"
+                    data-dashboard-search-input
+                  />
+                  <button
+                    class="dashboard-search-clear"
+                    type="button"
+                    aria-label="Clear rider search"
+                    hidden
+                    data-dashboard-search-clear
+                  >×</button>
+                </div>
+              </form>
+              <output
+                class="dashboard-count"
+                aria-live="polite"
+                data-dashboard-count
+                data-total-count="{{ riders | length }}"
+              >{{ riders | length }} {{ 'rider' if riders | length == 1 else 'riders' }}</output>
             </header>
 
-            {% if riders %}
-              <div class="dashboard-list">
-                {% for rider in riders %}
-                  {% set rider_image_url = url_for('rider_profiles.rider_profile_image', rider_id=rider.id, v=rider.profile_image_filename) if rider.profile_image_filename else url_for('static', filename='images/riders/default-profile.svg') %}
-                  <article class="dashboard-row dashboard-rider-row">
-                    <div class="dashboard-media dashboard-rider-media">
-                      <img
-                        src="{{ rider_image_url }}"
-                        alt="Portrait of {{ rider.name }}"
-                      />
-                    </div>
-                    <div class="dashboard-details">
-                      <span class="dashboard-rider-team">{{ rider.team or 'Independent rider' }}</span>
-                      <h3>
-                        <a
-                          class="dashboard-row-link"
-                          href="{{ url_for('rider_profiles.rider_profile', rider_id=rider.id) }}"
-                          data-rider-profile-link
-                        >{{ rider.name }}</a>
-                      </h3>
-                      <div class="dashboard-rider-meta">
-                        <span class="dashboard-rider-team-meta"><strong>Team:</strong> {{ rider.team or 'Independent rider' }}</span>
-                        <span class="dashboard-rider-bike-meta"><strong>Bike:</strong> {{ rider.bike or 'Not specified' }}</span>
+            <div id="dashboard-results-riders">
+              {% if riders %}
+                <div class="dashboard-list" data-dashboard-list>
+                  {% for rider in riders %}
+                    {% set rider_image_url = url_for('rider_profiles.rider_profile_image', rider_id=rider.id, v=rider.profile_image_filename) if rider.profile_image_filename else url_for('static', filename='images/riders/default-profile.svg') %}
+                    <article
+                      class="dashboard-row dashboard-rider-row"
+                      data-dashboard-search-row
+                      data-search-name="{{ rider.name }}"
+                      data-search-secondary="{{ rider.team or 'Independent rider' }} {{ rider.bike or 'Not specified' }}"
+                    >
+                      <div class="dashboard-media dashboard-rider-media">
+                        <img
+                          src="{{ rider_image_url }}"
+                          alt="Portrait of {{ rider.name }}"
+                        />
                       </div>
-                      <p>{{ rider.bio or 'No biography has been added yet.' }}</p>
-                    </div>
-                    <div class="dashboard-rider-action">
-                      <a
-                        class="dashboard-action"
-                        href="{{ url_for('rider_profiles.rider_profile', rider_id=rider.id) }}"
-                        data-rider-profile-link
-                      >View Rider</a>
-                    </div>
-                  </article>
-                {% endfor %}
-              </div>
-            {% else %}
-              <p class="dashboard-empty">No rider profiles are available yet.</p>
-            {% endif %}
+                      <div class="dashboard-details">
+                        <span class="dashboard-rider-team">{{ rider.team or 'Independent rider' }}</span>
+                        <h3>
+                          <a
+                            class="dashboard-row-link"
+                            href="{{ url_for('rider_profiles.rider_profile', rider_id=rider.id) }}"
+                            data-rider-profile-link
+                          >{{ rider.name }}</a>
+                        </h3>
+                        <div class="dashboard-rider-meta">
+                          <span class="dashboard-rider-team-meta"><strong>Team:</strong> {{ rider.team or 'Independent rider' }}</span>
+                          <span class="dashboard-rider-bike-meta"><strong>Bike:</strong> {{ rider.bike or 'Not specified' }}</span>
+                        </div>
+                        <p>{{ rider.bio or 'No biography has been added yet.' }}</p>
+                      </div>
+                    </article>
+                  {% endfor %}
+                </div>
+                <p class="dashboard-empty dashboard-search-empty" hidden data-dashboard-search-empty>
+                  No matching riders found.
+                </p>
+              {% else %}
+                <p class="dashboard-empty">No rider profiles are available yet.</p>
+              {% endif %}
+            </div>
           </section>
         </div>
       </section>

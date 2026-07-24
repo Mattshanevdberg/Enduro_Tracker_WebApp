@@ -1,0 +1,206 @@
+/*
+Kooksnylive shared authentication-page presentation.
+
+This reusable layer loads after base_new.css and forms_new.css. It owns the
+black authentication shell, dashboard-style top-left brand, centred white
+form card, and icon-led form/navigation actions shared by Login, Sign Up, and
+Forgot Password. Page-specific action ordering remains in the page stylesheet.
+
+Loading order:
+1. base_new.css
+2. forms_new.css
+3. auth.css
+4. an optional page stylesheet
+*/
+
+.auth-page {
+  min-height: 100vh;
+  min-height: 100dvh;
+  color: var(--ui-paper);
+  background: #000000;
+}
+
+/*
+The brand follows the public dashboard's compact logo/name treatment and
+remains an ordinary link to the public landing page without JavaScript.
+*/
+.auth-topbar {
+  width: 100%;
+  padding: clamp(18px, 3vw, 30px);
+}
+
+.auth-brand {
+  width: fit-content;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--ui-paper);
+  font-size: clamp(1.15rem, 2vw, 1.75rem);
+  font-weight: 900;
+  letter-spacing: -0.045em;
+  text-decoration: none;
+}
+
+.auth-brand:hover,
+.auth-brand:focus-visible {
+  color: var(--ui-paper);
+}
+
+.auth-brand img {
+  width: 54px;
+  height: 54px;
+  flex: 0 0 auto;
+  display: block;
+}
+
+/*
+The card is centred horizontally beneath the brand. Its white surface keeps
+the shared inputs and validation-message contrast intact against the black
+page background.
+*/
+.auth-shell {
+  width: min(100% - 32px, 760px);
+  display: grid;
+  margin: 0 auto;
+  padding: clamp(26px, 5vh, 58px) 0 64px;
+}
+
+.auth-card {
+  width: 100%;
+  margin: 0;
+}
+
+.auth-card-header {
+  display: grid;
+  gap: 7px;
+  margin-bottom: 26px;
+}
+
+.auth-card-header h1 {
+  margin: 0;
+  color: var(--ui-ink);
+  font-size: clamp(2.25rem, 5vw, 3.75rem);
+  font-weight: 950;
+  line-height: 0.96;
+  letter-spacing: -0.05em;
+}
+
+.auth-card-header p {
+  margin: 0;
+  color: var(--ui-muted);
+  font-size: clamp(0.94rem, 1.8vw, 1.08rem);
+}
+
+.auth-card .msg {
+  margin-bottom: 24px;
+}
+
+/*
+The shared action pattern supports links and real submit buttons. White
+line-art SVGs opt into the dark filter so they remain visible on the white
+card; artwork supplied in dark ink does not need that modifier.
+*/
+.form-grid > .auth-actions {
+  display: grid;
+  gap: 10px;
+  align-items: stretch;
+}
+
+.form-grid > .auth-actions-two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.auth-action {
+  min-width: 0;
+  min-height: 118px;
+  display: grid;
+  justify-items: center;
+  align-content: start;
+  gap: 7px;
+  padding: 9px 5px 11px;
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius-md);
+  color: var(--ui-ink);
+  background: transparent;
+  font: inherit;
+  font-weight: 900;
+  line-height: 1.15;
+  text-align: center;
+  text-decoration: none;
+  cursor: pointer;
+  transition:
+    color var(--ui-transition-fast),
+    background var(--ui-transition-fast),
+    border-color var(--ui-transition-fast),
+    transform var(--ui-transition-fast);
+}
+
+.auth-action:hover,
+.auth-action:focus-visible {
+  color: var(--ui-green-dark);
+  border-color: rgba(31, 157, 99, 0.28);
+  background: var(--ui-green-soft);
+  transform: translateY(-2px);
+}
+
+.auth-action-image {
+  width: 100%;
+  height: clamp(66px, 7vw, 82px);
+  display: block;
+  object-fit: contain;
+}
+
+.auth-action-image-dark {
+  filter: brightness(0);
+}
+
+.auth-action-label {
+  font-size: clamp(0.76rem, 1.5vw, 0.9rem);
+  overflow-wrap: normal;
+}
+
+/*
+Long-form authentication pages place explanatory help beside their controls
+on desktop and let it span the single mobile column at the shared breakpoint.
+*/
+.form-grid > .auth-form-help {
+  grid-column: 2;
+  margin: 0;
+}
+
+@media (max-width: 720px) {
+  .auth-topbar {
+    padding: 16px;
+  }
+
+  .auth-brand {
+    gap: 8px;
+    font-size: 1.05rem;
+  }
+
+  .auth-brand img {
+    width: 46px;
+    height: 46px;
+  }
+
+  .auth-shell {
+    width: min(100% - 20px, 760px);
+    padding: 18px 0 42px;
+  }
+
+  .auth-card-header {
+    margin-bottom: 22px;
+  }
+
+  .auth-action {
+    min-height: 108px;
+  }
+
+  .auth-action-image {
+    height: clamp(62px, 19vw, 78px);
+  }
+
+  .form-grid > .auth-form-help {
+    grid-column: 1;
+  }
+}

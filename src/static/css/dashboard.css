@@ -4,8 +4,8 @@ Public race and rider dashboard.
 This stylesheet is intentionally page-scoped and does not depend on base.css.
 It implements the supplied split-screen mockup, compact-on-list-scroll hero,
 four dashboard tab panels, desktop race/rider cards, a mobile hero accordion,
-compact mobile result rows, and accessible focus/dialog states without changing
-any unrelated page.
+ranked per-tab search, compact mobile result rows, and accessible focus/dialog
+states without changing any unrelated page.
 */
 
 :root {
@@ -345,11 +345,16 @@ before JavaScript enhances tab switching. Desktop retains the original tablist.
 }
 
 .dashboard-section-head {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) minmax(220px, 360px) auto;
   align-items: end;
   gap: 24px;
   margin-bottom: 18px;
+}
+
+.dashboard-section-copy {
+  min-width: 0;
+  grid-column: 1;
 }
 
 .dashboard-section-head h2 {
@@ -364,8 +369,117 @@ before JavaScript enhances tab switching. Desktop retains the original tablist.
   color: var(--dashboard-muted);
 }
 
+.dashboard-search {
+  min-width: 0;
+  grid-column: 2;
+}
+
+.dashboard-search[hidden] {
+  display: none;
+}
+
+.dashboard-search-control {
+  position: relative;
+}
+
+/*
+The input retains a programmatic label while the compact visual treatment keeps
+the heading, search, and result count on one desktop line. The browser's native
+clear control is replaced with one consistent, accessible button.
+*/
+.dashboard-search-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.dashboard-search-input {
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  padding: 9px 44px 9px 14px;
+  border: 1px solid #cbd2cb;
+  border-radius: 999px;
+  color: var(--dashboard-ink);
+  background: var(--dashboard-paper);
+  box-shadow: 0 5px 18px rgba(13, 18, 14, 0.06);
+  font: inherit;
+  font-size: 0.92rem;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.dashboard-search-input::-webkit-search-cancel-button {
+  appearance: none;
+}
+
+.dashboard-search-input::-ms-clear {
+  display: none;
+}
+
+.dashboard-search-input::placeholder {
+  color: #737c74;
+}
+
+.dashboard-search-input:hover {
+  border-color: #aeb8af;
+}
+
+.dashboard-search-input:focus {
+  border-color: var(--dashboard-green);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(31, 157, 99, 0.18);
+}
+
+.dashboard-search-input:disabled {
+  color: #7b847c;
+  background: #e8ebe8;
+  cursor: not-allowed;
+}
+
+.dashboard-search-clear {
+  position: absolute;
+  top: 50%;
+  right: 5px;
+  width: 32px;
+  height: 32px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: #556057;
+  background: transparent;
+  font-size: 1.35rem;
+  line-height: 1;
+  cursor: pointer;
+  transform: translateY(-50%);
+  transition: color 160ms ease, background 160ms ease;
+}
+
+.dashboard-search-clear[hidden] {
+  display: none;
+}
+
+.dashboard-search-clear:hover {
+  color: var(--dashboard-ink);
+  background: var(--dashboard-green-soft);
+}
+
+.dashboard-search-clear:focus-visible {
+  color: var(--dashboard-green-dark);
+  background: var(--dashboard-green-soft);
+  outline: 2px solid var(--dashboard-green);
+  outline-offset: 1px;
+}
+
 .dashboard-count {
   flex: 0 0 auto;
+  grid-column: 3;
   padding: 8px 12px;
   border-radius: 999px;
   color: var(--dashboard-green-dark);
@@ -380,6 +494,11 @@ before JavaScript enhances tab switching. Desktop retains the original tablist.
   border-radius: var(--dashboard-radius);
   background: var(--dashboard-paper);
   box-shadow: var(--dashboard-shadow);
+}
+
+.dashboard-list[hidden],
+.dashboard-row[hidden] {
+  display: none;
 }
 
 .dashboard-row {
@@ -620,47 +739,8 @@ screen-reader output.
   object-fit: contain;
 }
 
-.dashboard-action {
-  position: relative;
-  z-index: 2;
-  min-width: 140px;
-  min-height: 44px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 10px 16px;
-  border-radius: 999px;
-  color: #ffffff;
-  background: var(--dashboard-green);
-  box-shadow: 0 10px 22px rgba(31, 157, 99, 0.2);
-  font-weight: 900;
-  text-decoration: none;
-  transition: background 160ms ease, transform 160ms ease, box-shadow 160ms ease;
-}
-
-.dashboard-action:hover,
-.dashboard-action:focus-visible {
-  color: #ffffff;
-  background: var(--dashboard-green-dark);
-  box-shadow: 0 12px 28px rgba(31, 157, 99, 0.28);
-  outline: none;
-  transform: translateY(-2px);
-}
-
-.dashboard-action.secondary {
-  color: var(--dashboard-ink);
-  background: #edf0ed;
-  box-shadow: none;
-}
-
-.dashboard-action.secondary:hover,
-.dashboard-action.secondary:focus-visible {
-  color: var(--dashboard-ink);
-  background: #e0e5e0;
-}
-
 .dashboard-rider-row {
-  grid-template-columns: 150px minmax(0, 1fr) 160px;
+  grid-template-columns: 150px minmax(0, 1fr);
   min-height: 176px;
 }
 
@@ -671,11 +751,6 @@ screen-reader output.
   border-radius: 50%;
 }
 
-.dashboard-rider-action {
-  align-self: center;
-  justify-self: end;
-}
-
 .dashboard-empty {
   margin: 0;
   padding: 24px;
@@ -684,6 +759,10 @@ screen-reader output.
   color: var(--dashboard-muted);
   background: #ffffff;
   box-shadow: var(--dashboard-shadow);
+}
+
+.dashboard-search-empty {
+  text-align: center;
 }
 
 .rider-profile-dialog {
@@ -752,6 +831,10 @@ screen-reader output.
 
   .dashboard-rider-media {
     width: 112px;
+  }
+
+  .dashboard-rider-row {
+    grid-template-columns: 112px minmax(0, 1fr);
   }
 }
 
@@ -954,19 +1037,36 @@ screen-reader output.
   }
 
   /*
-  The hero already names and describes the selected panel on mobile. Only the
-  item count remains above the list, preventing duplicated headings and copy.
+  The hero already names and describes the selected panel on mobile. Search and
+  count share a compact row above the list without duplicating that hero copy.
   */
   .dashboard-section-head {
+    grid-template-columns: minmax(0, 1fr) auto;
     min-height: 42px;
-    justify-content: flex-end;
     align-items: center;
-    margin: 0;
+    gap: 10px;
+    margin: 0 0 4px;
     padding: 6px 2px;
   }
 
-  .dashboard-section-head > div {
+  .dashboard-section-copy {
     display: none;
+  }
+
+  .dashboard-search {
+    width: 100%;
+    grid-column: 1;
+  }
+
+  .dashboard-search-input {
+    min-height: 38px;
+    padding: 7px 40px 7px 12px;
+    font-size: 0.86rem;
+  }
+
+  .dashboard-count {
+    grid-column: 2;
+    white-space: nowrap;
   }
 
   .dashboard-list {
@@ -993,6 +1093,10 @@ screen-reader output.
     background: transparent;
     box-shadow: none;
     transform: none;
+  }
+
+  .dashboard-rider-row {
+    grid-template-columns: 88px minmax(0, 1fr);
   }
 
   .dashboard-row + .dashboard-row {
@@ -1183,10 +1287,6 @@ screen-reader output.
     -webkit-line-clamp: 2;
   }
 
-  .dashboard-rider-action {
-    display: none;
-  }
-
   .dashboard-empty {
     border-radius: 12px;
     box-shadow: none;
@@ -1209,7 +1309,7 @@ screen-reader output.
   }
 
   .dashboard-section-head {
-    display: flex;
+    display: grid;
   }
 
   .dashboard-count {

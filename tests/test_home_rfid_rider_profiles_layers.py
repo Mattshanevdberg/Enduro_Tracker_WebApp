@@ -2,9 +2,10 @@
 Focused regression tests for home, crawler guidance, RFID, and rider-profile
 route layering.
 
-The tests cover categorized dashboard composition, crawler responses, RFID
-filter/query behavior, existing HTTP contracts, and public rider profile
-navigation. Isolated SQLite tables prevent changes to configured databases.
+The tests cover categorized dashboard composition and search metadata, crawler
+responses, RFID filter/query behavior, existing HTTP contracts, and public
+rider profile navigation. Isolated SQLite tables prevent changes to configured
+databases.
 """
 
 import unittest
@@ -76,11 +77,20 @@ class HomeLayerTestCase(unittest.TestCase):
         try:
             session.add_all(
                 [
-                    Race(name="Upcoming", starts_at_epoch=200, status="upcoming"),
+                    Race(
+                        name="Upcoming",
+                        location="Test Location",
+                        starts_at_epoch=200,
+                        status="upcoming",
+                    ),
                     Race(name="Draft", starts_at_epoch=100, status="draft"),
                     Race(name="Live", starts_at_epoch=150, status="live"),
                     Race(name="Completed", starts_at_epoch=50, status="completed"),
-                    Rider(name="Dashboard Rider", team="Test Team"),
+                    Rider(
+                        name="Dashboard Rider",
+                        team="Test Team",
+                        bike="Test Bike",
+                    ),
                 ]
             )
             session.commit()
@@ -133,8 +143,8 @@ class HomeLayerTestCase(unittest.TestCase):
             self.assertEqual(admin_template, "dashboard_admin.html")
             self.assertEqual(len(admin_context["races"]), 4)
 
-    def test_landing_and_login_use_only_the_reviewed_new_css_layers(self):
-        """Keep the first two migrated pages isolated from legacy CSS and unused JS."""
+    def test_landing_and_auth_pages_use_only_the_reviewed_new_css_layers(self):
+        """Keep migrated public/auth pages isolated from legacy CSS and unused JS."""
         repository_root = Path(__file__).resolve().parents[1]
         landing_template = (repository_root / "templates" / "landing.html").read_text(
             encoding="utf-8"
@@ -147,6 +157,18 @@ class HomeLayerTestCase(unittest.TestCase):
         )
         login_styles = (
             repository_root / "src" / "static" / "css" / "login.css"
+        ).read_text(encoding="utf-8")
+        auth_styles = (
+            repository_root / "src" / "static" / "css" / "auth.css"
+        ).read_text(encoding="utf-8")
+        signup_template = (repository_root / "templates" / "signup.html").read_text(
+            encoding="utf-8"
+        )
+        forgot_password_template = (
+            repository_root / "templates" / "forgot_password.html"
+        ).read_text(encoding="utf-8")
+        reset_password_template = (
+            repository_root / "templates" / "reset_password.html"
         ).read_text(encoding="utf-8")
 
         self.assertIn("css/base_new.css", landing_template)
@@ -173,6 +195,7 @@ class HomeLayerTestCase(unittest.TestCase):
 
         self.assertIn("css/base_new.css", login_template)
         self.assertIn("css/forms_new.css", login_template)
+        self.assertIn("css/auth.css", login_template)
         self.assertIn("css/login.css", login_template)
         self.assertLess(
             login_template.index("css/base_new.css"),
@@ -180,6 +203,10 @@ class HomeLayerTestCase(unittest.TestCase):
         )
         self.assertLess(
             login_template.index("css/forms_new.css"),
+            login_template.index("css/auth.css"),
+        )
+        self.assertLess(
+            login_template.index("css/auth.css"),
             login_template.index("css/login.css"),
         )
         self.assertNotIn("css/base.css", login_template)
@@ -192,7 +219,44 @@ class HomeLayerTestCase(unittest.TestCase):
         self.assertIn("images/icons/signup-rider.svg", login_template)
         self.assertIn("images/icons/view_races.svg", login_template)
         self.assertIn("View Races", login_template)
+        self.assertIn("Submit Details", login_template)
+        self.assertNotIn(
+            '<span class="auth-action-label">Login</span>',
+            login_template,
+        )
         self.assertNotIn("Back to Dashboard", login_template)
+        desktop_actions = login_template.split(
+            'class="actions auth-actions login-actions login-actions-desktop"',
+            1,
+        )[1].split("</div>", 1)[0]
+        mobile_actions = login_template.split(
+            'class="actions auth-actions login-actions login-actions-mobile"',
+            1,
+        )[1].split("</div>", 1)[0]
+        self.assertLess(
+            desktop_actions.index("View Races"),
+            desktop_actions.index("Sign Up"),
+        )
+        self.assertLess(
+            desktop_actions.index("Sign Up"),
+            desktop_actions.index("Forgot Password"),
+        )
+        self.assertLess(
+            desktop_actions.index("Forgot Password"),
+            desktop_actions.index("Submit Details"),
+        )
+        self.assertLess(
+            mobile_actions.index("Forgot Password"),
+            mobile_actions.index("Submit Details"),
+        )
+        self.assertLess(
+            mobile_actions.index("Submit Details"),
+            mobile_actions.index("View Races"),
+        )
+        self.assertLess(
+            mobile_actions.index("View Races"),
+            mobile_actions.index("Sign Up"),
+        )
         self.assertIn(
             "grid-template-columns: repeat(4, minmax(0, 1fr));",
             login_styles,
@@ -201,9 +265,75 @@ class HomeLayerTestCase(unittest.TestCase):
             "grid-template-columns: repeat(2, minmax(0, 1fr));",
             login_styles,
         )
+        self.assertIn(
+            "grid-template-columns: repeat(2, minmax(0, 1fr));",
+            auth_styles,
+        )
+
+        for auth_template in (
+            signup_template,
+            forgot_password_template,
+            reset_password_template,
+        ):
+            self.assertIn("css/base_new.css", auth_template)
+            self.assertIn("css/forms_new.css", auth_template)
+            self.assertIn("css/auth.css", auth_template)
+            self.assertLess(
+                auth_template.index("css/base_new.css"),
+                auth_template.index("css/forms_new.css"),
+            )
+            self.assertLess(
+                auth_template.index("css/forms_new.css"),
+                auth_template.index("css/auth.css"),
+            )
+            self.assertNotIn("css/base.css", auth_template)
+            self.assertNotIn("css/forms.css", auth_template)
+            self.assertNotIn("css/login.css", auth_template)
+            self.assertNotIn("base_new.js", auth_template)
+            self.assertNotIn("forms_new.js", auth_template)
+            self.assertIn("images/brand/logo.svg", auth_template)
+
+        self.assertIn("images/icons/view_races.svg", signup_template)
+        self.assertIn("images/icons/signup-rider.svg", signup_template)
+        signup_actions = signup_template.split(
+            'class="actions auth-actions auth-actions-two"',
+            1,
+        )[1].split("</div>", 1)[0]
+        self.assertLess(
+            signup_actions.index("View Races"),
+            signup_actions.index("Sign Up"),
+        )
+
+        self.assertIn("images/icons/login-rider.svg", forgot_password_template)
+        self.assertIn(
+            "images/icons/send_reset_link.svg",
+            forgot_password_template,
+        )
+        forgot_actions = forgot_password_template.split(
+            'class="actions auth-actions auth-actions-two"',
+            1,
+        )[1].split("</div>", 1)[0]
+        self.assertLess(
+            forgot_actions.index("Back to Login"),
+            forgot_actions.index("Send Reset Link"),
+        )
+
+        self.assertIn("images/icons/login-rider.svg", reset_password_template)
+        self.assertIn(
+            "images/icons/reset_password.svg",
+            reset_password_template,
+        )
+        reset_actions = reset_password_template.split(
+            'class="actions auth-actions auth-actions-two"',
+            1,
+        )[1].split("</div>", 1)[0]
+        self.assertLess(
+            reset_actions.index("Back to Login"),
+            reset_actions.index("Reset Password"),
+        )
 
     def test_public_dashboard_template_renders_rider_tab_and_real_links(self):
-        """Render the full dashboard template with its required URL endpoints."""
+        """Render dashboard links plus progressively enhanced search metadata."""
         repository_root = Path(__file__).resolve().parents[1]
         app = Flask(
             __name__,
@@ -273,6 +403,70 @@ class HomeLayerTestCase(unittest.TestCase):
         self.assertIn(b'class="dashboard-art-action dashboard-results-action"', response.data)
         self.assertIn(b"images/icons/results.svg", response.data)
         self.assertNotIn(b"images/dashboard/heroes/riders.svg", response.data)
+        self.assertEqual(response.data.count(b'role="search"'), 4)
+        self.assertEqual(response.data.count(b"data-dashboard-search-input"), 4)
+        self.assertEqual(response.data.count(b"data-dashboard-search-clear"), 4)
+        self.assertEqual(response.data.count(b"data-dashboard-count"), 4)
+        self.assertEqual(response.data.count(b"data-dashboard-search-row"), 4)
+        self.assertIn(b'data-search-name="Upcoming"', response.data)
+        self.assertIn(b'data-search-name="Dashboard Rider"', response.data)
+        self.assertIn(b'data-search-secondary="Test Location ', response.data)
+        self.assertIn(
+            b'data-search-secondary="Test Team Test Bike"',
+            response.data,
+        )
+        self.assertIn(b"No matching events found.", response.data)
+        self.assertIn(b"No matching riders found.", response.data)
+        self.assertNotIn(b">View Rider</a>", response.data)
+        self.assertNotIn(b"dashboard-rider-action", response.data)
+
+        dashboard_script = (
+            repository_root / "src" / "static" / "js" / "pages" / "dashboard.js"
+        ).read_text(encoding="utf-8")
+        dashboard_styles = (
+            repository_root / "src" / "static" / "css" / "dashboard.css"
+        ).read_text(encoding="utf-8")
+        self.assertIn("function normalizeSearchValue(value)", dashboard_script)
+        self.assertIn("function searchRank(row, query)", dashboard_script)
+        self.assertIn("name.startsWith(query)", dashboard_script)
+        self.assertIn("name.includes(query)", dashboard_script)
+        self.assertIn("secondary.includes(query)", dashboard_script)
+        self.assertIn(
+            "left.rank - right.rank || left.originalIndex - right.originalIndex",
+            dashboard_script,
+        )
+        self.assertIn("input.addEventListener('input', applySearch)", dashboard_script)
+        self.assertIn(
+            "clearButton.addEventListener('click'",
+            dashboard_script,
+        )
+        self.assertIn("clearButton.hidden = input.value.length === 0", dashboard_script)
+        self.assertIn(
+            "window.matchMedia('(min-width: 721px)')",
+            dashboard_script,
+        )
+        self.assertIn("function lockDesktopHeroCompact()", dashboard_script)
+        self.assertIn("compactTransitionGuardUntil", dashboard_script)
+        self.assertIn(
+            "content.addEventListener('wheel'",
+            dashboard_script,
+        )
+        self.assertIn(
+            "content.addEventListener('pointerdown'",
+            dashboard_script,
+        )
+        self.assertIn(
+            "content.addEventListener('keydown'",
+            dashboard_script,
+        )
+        self.assertIn(
+            "if (!desktopLayoutQuery.matches)",
+            dashboard_script,
+        )
+        self.assertIn(".dashboard-search-input:focus", dashboard_styles)
+        self.assertIn(".dashboard-search-clear:focus-visible", dashboard_styles)
+        self.assertIn(".dashboard-row[hidden]", dashboard_styles)
+        self.assertNotIn(".dashboard-rider-action", dashboard_styles)
 
     def test_robots_txt_returns_same_protected_path_guidance_for_prod_and_dev(self):
         """Expose identical crawler exclusions through production and dev hosts."""

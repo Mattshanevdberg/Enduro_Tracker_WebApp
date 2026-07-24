@@ -346,3 +346,5 @@ Please can you make the login page use the base_new and forms_new.css. Please al
 
 Please can you update the landing page. The background should be fully black. Put the logo big in the upper centre. Put the kooksnylive below the logo and make the words take up the same width as the logo. make the login, signup and view races buttons use the login, signup and view_races icons.These icons must be below the logo and name. Then is there anyway to not have the description visible but still have it work for the crawlers/SEO tools? 
 
+I would like a search bar functionality for each of the tabs on the dashboard page. The search bar should be located on the right of the heading in the scrollable section of the page. It'll be to the left of the number of events riders counter. It shall search the name of the race/rider, with secondary search on the location/date/rider team/rider bike. So that means that the search should prioritise the names first and then look through: Team, Bike, location, date. 
+

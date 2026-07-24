@@ -1814,7 +1814,7 @@ src/static/css/
 - Naming decision: the requested new table layer is named `tables_new.css`, rather than overwriting the existing `tables.css`, so the changeover remains genuinely parallel and cannot restyle old pages accidentally.
 - Design direction: uses the dashboard's near-black ink, neutral page/paper surfaces, Kooksny green, large rounded cards, pill/artwork actions, strong compact headings, native mobile disclosure navigation, flat mobile result rows, soft shadows, and accessible focus/reduced-motion behavior.
 - Compatibility: retains established classes including `.page-shell`, `.page-header`, `.btn`, `.content-panel`, `.form-grid`, `.filter-grid`, `.table-card`, `.wide-table`, and `.actions`. New opt-in patterns include `.art-action`, `.mobile-section-navigation`, `.image-upload-preview`, and `.compact-list`; `base_new.css` also supplies compatibility aliases for existing `--color-*` variables so reviewed page-specific styles can move gradually.
-- Current usage: `templates/landing.html` loads `base_new.css` followed by its isolated `landing.css`; `templates/login.html` loads `base_new.css`, `forms_new.css`, and its isolated `login.css` in that order. All other templates retain their reviewed legacy or page-scoped styles until migrated individually.
+- Current usage: `templates/landing.html` loads `base_new.css` followed by its isolated `landing.css`. Login, Sign Up, Forgot Password, and Reset Password load `base_new.css`, `forms_new.css`, and shared `auth.css`; Login additionally loads its order-specific `login.css` last. All other templates retain their reviewed legacy or page-scoped styles until migrated individually.
 - Per-page migration order: first review the page and its page-specific CSS/JS; then replace its legacy shared links with `base_new.css`, the needed `forms_new.css`/`tables_new.css`, and any reviewed page override; test desktop/mobile/accessibility; finally record that individual template as migrated.
 - Load order example for a future form/table page:
 ```html
@@ -1836,9 +1836,6 @@ src/static/css/
 - Called from:
   - `templates/dashboard_admin.html`: linked through `url_for('static', filename='css/base.css')`.
   - `templates/placeholder.html`: linked through `url_for('static', filename='css/base.css')`.
-  - `templates/signup.html`: linked through `url_for('static', filename='css/base.css')`.
-  - `templates/forgot_password.html`: linked through `url_for('static', filename='css/base.css')`.
-  - `templates/reset_password.html`: linked through `url_for('static', filename='css/base.css')`.
   - `templates/riders_form.html`: linked through `url_for('static', filename='css/base.css')`.
   - `templates/devices.html`: linked through `url_for('static', filename='css/base.css')`.
   - `templates/device_edit.html`: linked through `url_for('static', filename='css/base.css')`.
@@ -1849,10 +1846,11 @@ src/static/css/
 
 ### Dashboard and shared component files
 - Purpose: Provide reusable component stylesheets that are loaded after `base.css` by pages that need them.
-- Current state: legacy `base.css`, `forms.css`, `tables.css`, and `maps.css` remain unchanged for unmigrated pages. The landing page now uses `base_new.css` plus `landing.css`, and Login uses `base_new.css`, `forms_new.css`, plus `login.css`; neither needs a `_new` JavaScript component. The live dashboard remains self-contained in `dashboard.css`.
+- Current state: legacy `base.css`, `forms.css`, `tables.css`, and `maps.css` remain unchanged for unmigrated pages. The landing page uses `base_new.css` plus `landing.css`; Login, Sign Up, Forgot Password, and Reset Password use the reviewed `_new` shared layers plus `auth.css`, with Login adding `login.css`. These pages need no `_new` JavaScript component. The live dashboard remains self-contained in `dashboard.css`.
 - `landing.css`: owns the public landing page's plain-black viewport, upper-centred responsive logo/name lockup, visible two-line description, and three-column artwork navigation. The semantic links and text labels remain functional without JavaScript.
-- `login.css`: owns the black login shell, dashboard-style linked brand, centred white form card, dark-on-white icon treatment, four-column desktop actions, and two-by-two mobile actions.
-- `dashboard.css`: owns the two-pane viewport, shrinking hero, accessible desktop tabs/cards, mobile hero accordion, compact responsive rows, artwork actions, and rider dialog shell.
+- `auth.css`: owns the shared black authentication shell, dashboard-style linked brand, centred white form card, help placement, dark-on-white icon treatment, and reusable two-action layout.
+- `login.css`: owns only Login's four-column desktop action order and alternate two-by-two mobile order; all common authentication presentation remains in `auth.css`.
+- `dashboard.css`: owns the two-pane viewport, shrinking hero, accessible desktop tabs/cards, ranked per-tab search with consistent clear controls, mobile hero accordion, compact responsive rows, artwork actions, and rider dialog shell.
 - `dashboard-admin.css`: gives the protected operations dashboard matching brand/card typography while retaining its compact tool grid and wide race table.
 - `rider-profile.css`: styles the same read-only rider card on its canonical page and inside the dashboard dialog.
 - `forms.css`: contains reusable content panels, form grids, filter grids, field rows, inputs, checkboxes, file inputs, focus states, status messages, and form action layout.
@@ -1924,7 +1922,7 @@ src/static/js/
 ### Current JS usage
 - Purpose: Record the current incremental JavaScript migration state.
 - Current state: current templates still use only `src/static/js/components/forms.js`, `src/static/js/components/maps.js`, `src/static/js/pages/dashboard.js`, `src/static/js/pages/race-form.js`, `src/static/js/pages/race-entry.js`, and `src/static/js/pages/post-race.js`. The three `_new` shared components exist as an inactive migration foundation.
-- `pages/dashboard.js`: progressively enhances real server-rendered desktop tab/mobile disclosure/profile links, synchronizes hero/tab/URL state, closes the mobile accordion after selection, compacts the hero from the list pane's scroll position, implements keyboard navigation, and loads canonical rider pages into the native dialog. Navigation remains functional without JavaScript.
+- `pages/dashboard.js`: progressively enhances real server-rendered desktop tab/mobile disclosure/profile links, synchronizes hero/tab/URL state, closes the mobile accordion after selection, implements keyboard navigation, and loads canonical rider pages into the native dialog. Desktop hero compaction is intent-aware: once downward scrolling collapses it, a short list's layout-driven `scrollTop` reset cannot immediately expand it; deliberate upward wheel/trackpad, keyboard, or scrollbar-drag intent at the top expands it. Mobile retains its existing position-based compaction. The script also activates each panel's independent client-side search, ranks name-prefix/name-substring matches before location/date or team/bike matches, updates visible/total counts, exposes a consistent clear button only when text is present, and restores original server order/focus when cleared. Navigation and complete unfiltered content remain functional without JavaScript.
 - `components/forms.js`: contains shared `data-auto-submit` select handling used by the category controls in `templates/race_form.html` and `templates/post_race.html`.
 - `components/maps.js`: contains shared Leaflet map creation, selected-category route fetching, GeoJSON layer creation, map-bounds fitting, basemap switching, and Esri tile-usage reporting helpers used by the race form and post-race pages.
 - `components/maps.js`: retains the OpenStreetMap base-layer helper and adds Esri satellite attach/remove helpers. The race form uses the existing OSM default. The post-race page creates an empty map, fits its selected route or rider track first, then attaches the backend-approved basemap so it requests only tiles near the visible course. After fitting the selected route it limits panning and minimum zoom to bounds padded by 25% on every side. It will use the retained OSM layer whenever `/api/map/config-status` does not allow satellite imagery. When Esri is attached, `createEsriTileUsageReporter` counts newly observed Esri tile resources and posts batched `tiles_delta` values to `/api/map/tile-usage`.
@@ -2715,20 +2713,53 @@ docker compose -p enduro-dev --env-file .env.dev run --rm -e TEST_EMAIL_TO=you@e
 ### login.html
 - General: Public rider/administrator login form.
 - Displays: a dashboard-style linked Kooksnylive brand on a black page, a centred white card containing the Login heading/description, username/email identifier, password, authentication feedback, and icon-led account/public navigation.
-- Styles: Loads `src/static/css/base_new.css`, `src/static/css/forms_new.css`, and the isolated `src/static/css/login.css` in that order; no legacy shared CSS or JavaScript is loaded.
-- UI actions: icon-led "Login", "Forgot Password", "Sign Up", and "View Races" controls in one desktop row and a two-by-two mobile grid.
+- Styles: Loads `src/static/css/base_new.css`, `src/static/css/forms_new.css`, shared `src/static/css/auth.css`, and order-specific `src/static/css/login.css` in that order; no legacy shared CSS or JavaScript is loaded.
+- UI actions: icon-led controls ordered "View Races", "Sign Up", "Forgot Password", and "Submit Details" in one desktop row. Mobile uses "Forgot Password" / "Submit Details" on the first row and "View Races" / "Sign Up" on the second row. Separate responsive groups keep visible and keyboard focus order aligned; only one group is exposed at a time.
 - Pulls: `form`, `message`, and `success`.
 - Pushes: CSRF-protected username/email and password POST to `/login`.
 - Routes called: `/login`, `/forgot-password`, `/signup`, and `/dashboard`.
 - Embedded scripts: none; the form and navigation remain fully functional without JavaScript.
 - Manual verification: confirm the black desktop/mobile shell, top-left home link, centred white card, one-row desktop actions, two-by-two mobile actions, visible keyboard focus, generic invalid-credential feedback, retained identifier after failure, successful rider/admin redirects, and working password-reset/signup/View Races links.
 
+### signup.html
+- General: Public Rider account creation form.
+- Displays: the shared black authentication shell and linked Kooksnylive brand, a centred white card, Rider identity/login fields, password guidance, validation feedback, and two icon-led actions.
+- Styles: Loads `src/static/css/base_new.css`, `src/static/css/forms_new.css`, and shared `src/static/css/auth.css` in that order; no legacy shared CSS or JavaScript is loaded.
+- UI actions: side-by-side "View Races" link using `view_races.svg`, followed by the real "Sign Up" submit button using `signup-rider.svg`, on desktop and mobile.
+- Pulls: `form`, `message`, and `success`.
+- Pushes: CSRF-protected first name, surname, username, email, password, and password confirmation POST to `/signup`.
+- Routes called: `/`, `/dashboard`, and `/signup`.
+- Embedded scripts: none; the form and navigation remain fully functional without JavaScript.
+- Manual verification: confirm desktop/mobile layout, keyboard order, validation feedback with retained non-password fields, View Races navigation, successful account creation, and redirect to the linked Rider profile form.
+
+### forgot_password.html
+- General: Public password-reset request form.
+- Displays: the shared black authentication shell and linked Kooksnylive brand, a centred white card, recovery email field, non-disclosing response message, and two icon-led actions.
+- Styles: Loads `src/static/css/base_new.css`, `src/static/css/forms_new.css`, and shared `src/static/css/auth.css` in that order; no legacy shared CSS or JavaScript is loaded.
+- UI actions: side-by-side "Back to Login" link using `login-rider.svg`, followed by the real "Send Reset Link" submit button using `send_reset_link.svg`, on desktop and mobile.
+- Pulls: `form`, `message`, and `success`.
+- Pushes: CSRF-protected email POST to `/forgot-password`.
+- Routes called: `/`, `/login`, and `/forgot-password`.
+- Embedded scripts: none; the form and navigation remain fully functional without JavaScript.
+- Manual verification: confirm desktop/mobile layout, keyboard order, Back to Login navigation, generic success response for known and unknown emails, and reset-email delivery for a controlled test account.
+
+### reset_password.html
+- General: Public completion form for a one-use password-reset token.
+- Displays: the shared black authentication shell and linked Kooksnylive brand, a centred white card, new-password and confirmation fields, password guidance, token/validation feedback, and two icon-led actions.
+- Styles: Loads `src/static/css/base_new.css`, `src/static/css/forms_new.css`, and shared `src/static/css/auth.css` in that order; no legacy shared CSS or JavaScript is loaded.
+- UI actions: side-by-side "Back to Login" link using `login-rider.svg`, followed by the real "Reset Password" submit button using `reset_password.svg`, on desktop and mobile.
+- Pulls: reset `token`, `form`, `message`, and `success`.
+- Pushes: CSRF-protected new password and confirmation POST to `/reset-password/<token>`.
+- Routes called: `/`, `/login`, and `/reset-password/<token>`.
+- Embedded scripts: none; the form and navigation remain fully functional without JavaScript.
+- Manual verification: confirm desktop/mobile layout, keyboard order, invalid/expired token feedback, password-validation feedback, successful password replacement, redirect to Login, and rejection of token reuse.
+
 ### dashboard.html
 - General: Public, server-rendered race/rider dashboard based on the supplied hero-and-list mockup.
-- Displays: separate upcoming, live, past/completed, and all-riders panels; race location/logo/date range/status; rider portrait/team/bike/short biography; enlarged responsive account artwork; and a compacting hero above the independently scrolling list.
+- Displays: separate upcoming, live, past/completed, and all-riders panels; race location/logo/date range/status; rider portrait/team/bike/short biography; an independently retained search and live count for each panel; enlarged responsive account artwork; and a compacting hero above the independently scrolling list.
 - Search metadata: declares the base `/dashboard` canonical URL so `?tab=` variants do not compete in the index.
-- Styles: Uses page-scoped `src/static/css/dashboard.css` plus the reusable profile card in `src/static/css/rider-profile.css`; desktop retains the full cards/tablist while widths up to 720px use a flat separated list and native hero accordion. Shared `base.css` and table styles are deliberately not applied.
-- UI actions: desktop tab navigation, mobile accordion navigation, race-row links, artwork-led "Get Device" and "Results" controls, rider popup links, login/signup, role-aware profile/admin navigation, and CSRF-protected logout.
+- Styles: Uses page-scoped `src/static/css/dashboard.css` plus the reusable profile card in `src/static/css/rider-profile.css`; desktop retains the full cards/tablist and a heading/search/count line, while widths up to 720px use a compact search/count line, flat separated list, and native hero accordion. Shared `base.css`, `base_new.css`, form styles, and table styles are deliberately not applied.
+- UI actions: desktop tab navigation, mobile accordion navigation, per-tab live search with an accessible in-field clear button, race-row links, artwork-led "Get Device" and "Results" controls, full-row rider popup links, login/signup, role-aware profile/admin navigation, and CSRF-protected logout.
 - Linked pages (buttons):
   - Brand → `/`.
   - "Login" → `/login`.
@@ -2740,8 +2771,10 @@ docker compose -p enduro-dev --env-file .env.dev run --rm -e TEST_EMAIL_TO=you@e
 - Pulls: `race_sections`, `riders`, `tab_presentation`, and `selected_tab`.
 - Pushes: only the authenticated logout POST; tabs use GET `?tab=` URLs and JavaScript history enhancement.
 - Routes called: `/dashboard?tab=...`, `/`, `/login`, `/signup`, `/logout`, `/rider/<id>`, `/races/<id>/post`, `/races/<id>/enter`, `/races/<id>/results`.
-- Script: `src/static/js/pages/dashboard.js` enhances tabs, synchronizes and closes the mobile accordion, manages hero compaction/keyboard navigation/URL state, and loads rider dialogs while retaining functional real links.
-- Notes: draft races are never rendered publicly; no admin mutation controls are shown here. Mobile suppresses the duplicate panel heading/description, keeps the count above the list, removes unused vertical hero space in normal/compact accordion states, and uses `get_devices.svg`/`results.svg` as compact independently labelled actions.
+- Script: `src/static/js/pages/dashboard.js` enhances tabs, synchronizes and closes the mobile accordion, manages intent-aware desktop hero compaction plus the existing mobile compaction, handles keyboard navigation/URL state, filters and ranks panel rows, and loads rider dialogs while retaining functional real links and complete lists without JavaScript.
+- Search behavior: filtering occurs while typing and is case-, whitespace-, and accent-insensitive. Race names rank before location/start/end-date matches; rider names rank before team/bike matches. Prefix name matches rank above other name matches, original order is retained within each tier, and each tab keeps its own query until refresh. The custom `×` appears only when text is present; activating it or pressing Escape clears the text, restores the original list/count, and keeps focus in the search field. Filtered counters use `matching of total` wording.
+- Notes: draft races are never rendered publicly; no admin mutation controls are shown here. Search controls remain hidden until JavaScript activates them. The stretched rider-name link owns the complete rider row on desktop and mobile, so no duplicate "View Rider" action is rendered. Desktop short lists remain compact after a downward scroll even when the enlarged content viewport removes their scrollbar; an explicit upward action at the top or a tab change expands them. Mobile suppresses the duplicate panel heading/description, keeps the compact search and count above the list, removes unused vertical hero space in normal/compact accordion states, and uses `get_devices.svg`/`results.svg` as compact independently labelled actions.
+- Manual search verification: on desktop and mobile, type race/rider name, location, full/short month, year, ISO date, team, and bike values; confirm name-prefix/name-substring/secondary ranking and the live counter; switch tabs and confirm independent queries remain; use the visible `×` and Escape to clear, confirming original order/count and input focus return; confirm no duplicate browser clear icon or desktop "View Rider" button appears; confirm the full rider row remains clickable with visible keyboard focus; then disable JavaScript and confirm all rows and normal navigation remain available without a search control.
 
 ### dashboard_admin.html
 - General: Dense protected admin operational dashboard in the public dashboard's brand language.
@@ -2774,7 +2807,7 @@ docker compose -p enduro-dev --env-file .env.dev run --rm -e TEST_EMAIL_TO=you@e
 2. Edit one race and save its location, start/end date-time, lifecycle status, and a basename that exists beneath `src/static/images/races/`; confirm the values return on the edit form.
 3. Set representative races to each lifecycle value. Confirm `/dashboard` places Upcoming, Live, and Completed under the correct tabs and never displays Draft.
 4. Confirm upcoming cards show `get_devices.svg` and open the existing authenticated entry flow; confirm live cards show a green LIVE marker, completed cards show `results.svg`, and every card title opens its public race page without intercepting either independent artwork action.
-5. Scroll the lower list on desktop and confirm only that pane scrolls while the hero compacts to retain the logo/account controls, selected heading, and tabs; return to the top and confirm the full copy expands again.
+5. Scroll the lower list on desktop and confirm only that pane scrolls while the hero compacts to retain the logo/account controls, selected heading, and tabs. Repeat with exactly three rows in a tall viewport: confirm the hero remains compact when the new viewport removes the scrollbar, then use an upward wheel/trackpad action, Home/Page Up/Arrow Up, or drag a longer list back to the top and confirm the full copy expands. Confirm selecting another tab also resets the hero.
 6. At approximately 390px width, confirm the normal and compact-on-scroll heroes contain no large empty gap between the account controls and hero copy. Confirm the hamburger remains beside the current heading, the accordion exposes all four sections without overlap, and each option closes the menu and updates the hero/URL/list.
 7. On mobile, confirm the duplicate panel heading/description is absent; the item count remains above flat separated rows; race rows show an 88px image, lifecycle pill, name, date range, and location; Get Device and Results retain small labels beneath their right-side artwork without increasing row height; rider rows show an 88px portrait, team pill, name, bike, and at most two biography lines; and no row introduces horizontal scrolling.
 8. Open the Riders section and confirm every Rider appears. On mobile, selecting anywhere on a rider row should open the read-only dialog. On desktop, both the rider name and View Rider button should open it; opening the underlying link without JavaScript should still render `/rider/<id>` as a standalone page.

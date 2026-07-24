@@ -6,19 +6,20 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="stylesheet" href="{{ url_for('static', filename='css/base_new.css') }}" />
     <link rel="stylesheet" href="{{ url_for('static', filename='css/forms_new.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/auth.css') }}" />
     <link rel="stylesheet" href="{{ url_for('static', filename='css/login.css') }}" />
   </head>
-  <body class="login-page">
-    <header class="login-topbar">
-      <a class="login-brand" href="{{ url_for('home.home_page') }}" aria-label="Kooksnylive home">
+  <body class="auth-page">
+    <header class="auth-topbar">
+      <a class="auth-brand" href="{{ url_for('home.home_page') }}" aria-label="Kooksnylive home">
         <img src="{{ url_for('static', filename='images/brand/logo.svg') }}" alt="" />
         <span>Kooksnylive</span>
       </a>
     </header>
 
-    <main class="login-shell">
-      <section class="content-panel login-card" aria-labelledby="login-title">
-        <header class="login-card-header">
+    <main class="auth-shell">
+      <section class="content-panel auth-card" aria-labelledby="login-title">
+        <header class="auth-card-header">
           <h1 id="login-title">Login</h1>
           <p>Log in with your username or email address.</p>
         </header>
@@ -48,39 +49,78 @@
             required
           />
 
-          <!-- The submit remains a real button; companion actions remain real links. -->
-          <div class="actions login-actions">
-            <button class="login-action" type="submit">
+          <!-- Desktop order prioritises public navigation before account submission. -->
+          <div class="actions auth-actions login-actions login-actions-desktop">
+            <a class="auth-action" href="{{ url_for('home.dashboard') }}">
               <img
-                class="login-action-image login-action-image-dark"
-                src="{{ url_for('static', filename='images/icons/login-rider.svg') }}"
-                alt=""
-              />
-              <span class="login-action-label">Login</span>
-            </button>
-            <a class="login-action" href="{{ url_for('auth.forgot_password') }}">
-              <img
-                class="login-action-image"
-                src="{{ url_for('static', filename='images/icons/forgot_password.svg') }}"
-                alt=""
-              />
-              <span class="login-action-label">Forgot Password</span>
-            </a>
-            <a class="login-action" href="{{ url_for('auth.signup') }}">
-              <img
-                class="login-action-image login-action-image-dark"
-                src="{{ url_for('static', filename='images/icons/signup-rider.svg') }}"
-                alt=""
-              />
-              <span class="login-action-label">Sign Up</span>
-            </a>
-            <a class="login-action" href="{{ url_for('home.dashboard') }}">
-              <img
-                class="login-action-image login-action-image-dark"
+                class="auth-action-image auth-action-image-dark"
                 src="{{ url_for('static', filename='images/icons/view_races.svg') }}"
                 alt=""
               />
-              <span class="login-action-label">View Races</span>
+              <span class="auth-action-label">View Races</span>
+            </a>
+            <a class="auth-action" href="{{ url_for('auth.signup') }}">
+              <img
+                class="auth-action-image auth-action-image-dark"
+                src="{{ url_for('static', filename='images/icons/signup-rider.svg') }}"
+                alt=""
+              />
+              <span class="auth-action-label">Sign Up</span>
+            </a>
+            <a class="auth-action" href="{{ url_for('auth.forgot_password') }}">
+              <img
+                class="auth-action-image"
+                src="{{ url_for('static', filename='images/icons/forgot_password.svg') }}"
+                alt=""
+              />
+              <span class="auth-action-label">Forgot Password</span>
+            </a>
+            <button class="auth-action" type="submit">
+              <img
+                class="auth-action-image auth-action-image-dark"
+                src="{{ url_for('static', filename='images/icons/login-rider.svg') }}"
+                alt=""
+              />
+              <span class="auth-action-label">Submit Details</span>
+            </button>
+          </div>
+
+          <!--
+          Mobile uses a separate group so visual and keyboard focus order match
+          without JavaScript or CSS visual reordering.
+          -->
+          <div class="actions auth-actions login-actions login-actions-mobile">
+            <a class="auth-action" href="{{ url_for('auth.forgot_password') }}">
+              <img
+                class="auth-action-image"
+                src="{{ url_for('static', filename='images/icons/forgot_password.svg') }}"
+                alt=""
+              />
+              <span class="auth-action-label">Forgot Password</span>
+            </a>
+            <button class="auth-action" type="submit">
+              <img
+                class="auth-action-image auth-action-image-dark"
+                src="{{ url_for('static', filename='images/icons/login-rider.svg') }}"
+                alt=""
+              />
+              <span class="auth-action-label">Submit Details</span>
+            </button>
+            <a class="auth-action" href="{{ url_for('home.dashboard') }}">
+              <img
+                class="auth-action-image auth-action-image-dark"
+                src="{{ url_for('static', filename='images/icons/view_races.svg') }}"
+                alt=""
+              />
+              <span class="auth-action-label">View Races</span>
+            </a>
+            <a class="auth-action" href="{{ url_for('auth.signup') }}">
+              <img
+                class="auth-action-image auth-action-image-dark"
+                src="{{ url_for('static', filename='images/icons/signup-rider.svg') }}"
+                alt=""
+              />
+              <span class="auth-action-label">Sign Up</span>
             </a>
           </div>
         </form>
